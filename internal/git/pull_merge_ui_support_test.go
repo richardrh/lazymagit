@@ -1,0 +1,84 @@
+package git
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+func TestReviewedMergeExecutesAndRejectsHeadOrConfigChanges(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("topic", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := repo.ReviewMerge(ctx, MergeArgs{Target: "topic", Mode: MergeFFOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git("config", "merge.stat", "false")
+	if _, err := repo.ExecuteReviewedMerge(ctx, plan); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("config-changed execute error = %v, want ErrStalePlan", err)
+	}
+	plan, err = repo.ReviewMerge(ctx, MergeArgs{Target: "topic", Mode: MergeFFOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ExecuteReviewedMerge(ctx, plan); err != nil {
+		t.Fatalf("execute reviewed merge: %v", err)
+	}
+	if got := r.git("rev-parse", "HEAD"); got != r.git("rev-parse", "topic") {
+		t.Fatalf("HEAD = %s, want topic", got)
+	}
+}
+
+func TestReviewedMergeAbortIsDestructiveAndStaleSafe(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("conflict", "base\n")
+	base := r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("conflict", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("conflict", "main\n")
+	r.commitAll("main")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.MergeWithArgs(ctx, MergeArgs{Target: "topic", Mode: MergePlain}); err == nil {
+		t.Fatal("conflicting merge unexpectedly succeeded")
+	}
+
+	plan, err := repo.ReviewMergeAbort(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git("config", "merge.conflictStyle", "diff3")
+	if err := repo.ExecuteReviewedMergeAbort(ctx, plan); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("stale abort error = %v, want ErrStalePlan", err)
+	}
+	plan, err = repo.ReviewMergeAbort(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedMergeAbort(ctx, plan); err != nil {
+		t.Fatalf("abort reviewed merge: %v", err)
+	}
+	if got := r.git("merge-base", "--is-ancestor", base, "HEAD"); got != "" {
+		t.Fatalf("unexpected merge-base output %q", got)
+	}
+	state, err := repo.QueryOperationState(ctx)
+	if err != nil || state.InProgress() {
+		t.Fatalf("operation state after abort = %#v, %v", state, err)
+	}
+}

@@ -2,14 +2,20 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richard/lazymagit/internal/git"
+	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
 func TestVimGTimeoutRefreshesAndGGStillNavigatesFirst(t *testing.T) {
 	m := New(nil)
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}, {Path: "b", Staged: gitbackend.ChangeModified}}}})
 	m.loading = false
 	last := len(m.tree.VisibleSectionIDs()) - 1
 	_, _ = m.Update(keyMsg("G"))
@@ -99,19 +105,105 @@ func TestKeySchemeToggleAndCollisions(t *testing.T) {
 	}
 }
 
-func TestCommandPrefixWaitsAndUnmatchedSuffixIsReplayed(t *testing.T) {
+func TestStageAllAndUnstageAllDirectActionsUseInjectedCallbacks(t *testing.T) {
 	m := New(nil)
+	m.loading = false
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "tracked", Unstaged: gitbackend.ChangeModified}}}})
+	var staged, unstaged int
+	m.stageAll = func(context.Context) error { staged++; return nil }
+	m.unstageAll = func(context.Context) error { unstaged++; return nil }
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+	for key, wantName := range map[string]string{"S": "stage all tracked changes", "U": "unstage all"} {
+		m.busy = false
+		_, cmd := m.Update(keyMsg(key))
+		if cmd == nil || !m.busy {
+			t.Fatalf("%s did not start aggregate operation", key)
+		}
+		msg := cmd().(operationMsg)
+		if msg.name != wantName || msg.opErr != nil {
+			t.Fatalf("%s operation = %+v", key, msg)
+		}
+	}
+	if staged != 1 || unstaged != 1 {
+		t.Fatalf("aggregate callback calls stage=%d unstage=%d", staged, unstaged)
+	}
+}
+
+func TestRealShiftSStagesTrackedChangesAndReportsNoOp(t *testing.T) {
+	shiftS := tea.KeyPressMsg(tea.Key{Code: 's', Text: "S", Mod: tea.ModShift})
+	m := New(nil)
+	m.loading = false
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{
+		{Path: "tracked", Unstaged: gitbackend.ChangeModified},
+		{Path: "new", Unstaged: gitbackend.ChangeUntracked},
+	}}})
+	called := 0
+	m.stageAll = func(context.Context) error { called++; return nil }
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+
+	_, cmd := m.Update(shiftS)
+	if cmd == nil || !m.busy {
+		t.Fatal("physical Shift-S did not start stage-modified operation")
+	}
+	msg := cmd().(operationMsg)
+	if msg.name != "stage all tracked changes" || msg.opErr != nil || called != 1 {
+		t.Fatalf("Shift-S operation = %+v, calls=%d", msg, called)
+	}
+
+	noOp := New(nil)
+	noOp.loading = false
+	noOp.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "new", Unstaged: gitbackend.ChangeUntracked}}}})
+	noOp.stageAll = func(context.Context) error { return errNoTrackedUnstagedChanges }
+	noOp.snapshotLoader = func(context.Context) (snapshot, error) { return noOp.snapshot, nil }
+	_, cmd = noOp.Update(shiftS)
+	if cmd == nil {
+		t.Fatal("stage-modified no-op did not refresh repository state")
+	}
+	_, _ = noOp.Update(cmd())
+	if noOp.isError || noOp.message != "No tracked unstaged changes to stage" {
+		t.Fatalf("stage-modified no-op error=%v message=%q", noOp.isError, noOp.message)
+	}
+}
+
+func TestExecutableNilCallbackReportsInternalError(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "tracked", Unstaged: gitbackend.ChangeModified}}}})
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 's', Text: "S", Mod: tea.ModShift}))
+	if cmd != nil || m.busy || !m.isError || !strings.Contains(m.message, "internal error") || !strings.Contains(m.message, "stage all tracked changes") {
+		t.Fatalf("nil callback cmd=%v busy=%v error=%v message=%q", cmd != nil, m.busy, m.isError, m.message)
+	}
+}
+
+func TestUnhandledProcessKeyClosesPaneAndPassesThroughShiftS(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.mode = modeProcess
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "tracked", Unstaged: gitbackend.ChangeModified}}}})
+	m.stageAll = func(context.Context) error { return nil }
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 's', Text: "S", Mod: tea.ModShift}))
+	if cmd == nil || m.mode != modeStatus || !m.busy {
+		t.Fatalf("process pass-through cmd=%v mode=%d busy=%v", cmd != nil, m.mode, m.busy)
+	}
+}
+
+func TestCommandPrefixWaitsAndUnknownSuffixStaysInTransient(t *testing.T) {
+	m := New(nil)
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}, {Path: "b", Staged: gitbackend.ChangeModified}}}})
 	_, cmd := m.Update(keyMsg("c"))
 	if cmd != nil || m.resolver.PendingPrefix() != "c" {
 		t.Fatal("commit prefix should wait for its suffix without a timer")
 	}
 	before := m.tree.Cursor()
 	_, _ = m.Update(keyMsg("j"))
-	if m.resolver.PendingPrefix() != "" {
-		t.Fatal("unmatched suffix did not cancel command prefix")
+	if m.resolver.PendingPrefix() != "c" {
+		t.Fatal("unknown suffix closed command transient")
 	}
-	if m.tree.Cursor() == before {
-		t.Fatal("unmatched j suffix was not replayed as navigation")
+	if m.tree.Cursor() != before || !strings.Contains(m.message, "not implemented") {
+		t.Fatal("unknown suffix was replayed as navigation")
 	}
 }
 
@@ -132,6 +224,372 @@ func TestStaleDiffRequestCannotReplaceNewerSnapshotDetail(t *testing.T) {
 	}
 }
 
+func TestCommitDetailIsAsyncAndStaleRevisionCannotWin(t *testing.T) {
+	m := New(nil)
+	m.showCommit = func(_ context.Context, id string) (string, error) {
+		return "commit " + id + "\nAuthor: Test\n file.txt | 1 +\n\ndiff --git a/file.txt b/file.txt\n+line", nil
+	}
+	m.install(snapshot{recent: []gitbackend.Commit{{ID: "one", Subject: "first"}, {ID: "two", Subject: "second"}}})
+	// Initial recent folding is intentional; open it before selecting a commit.
+	m.tree.ToggleFold("status/recent")
+	m.tree.SetCursor("status/recent/commit/one")
+	cmd := m.loadDetailCmd()
+	if cmd == nil || m.detail != "Loading commit/revision…" {
+		t.Fatalf("commit detail was not asynchronous: cmd=%v detail=%q", cmd != nil, m.detail)
+	}
+	_, _ = m.Update(cmd())
+	for _, want := range []string{"commit one", "Author: Test", "file.txt | 1 +", "diff --git", "+line"} {
+		if !strings.Contains(m.detail, want) {
+			t.Errorf("revision detail omitted %q: %q", want, m.detail)
+		}
+	}
+	oldRequest := m.detailRequest
+	m.tree.SetCursor("status/recent/commit/two")
+	_ = m.loadDetailCmd()
+	_, _ = m.Update(diffMsg{id: "status/recent/commit/one", request: oldRequest, text: "stale revision", revision: true})
+	if strings.Contains(m.detail, "stale revision") {
+		t.Fatal("stale revision result replaced current detail")
+	}
+	_, _ = m.Update(diffMsg{id: m.tree.Cursor(), request: m.detailRequest, err: errors.New("bad"), revision: true})
+	if !strings.Contains(m.detail, "commit/revision") || strings.Contains(m.detail, "diff") {
+		t.Fatalf("revision error wording = %q", m.detail)
+	}
+}
+
+func TestInitialMagitFoldsAndLaterUserFoldIsPreserved(t *testing.T) {
+	m := New(nil)
+	s := snapshot{
+		status:   gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "u", Unstaged: gitbackend.ChangeUntracked}, {Path: "m", Unstaged: gitbackend.ChangeModified}, {Path: "s", Staged: gitbackend.ChangeModified}}},
+		recent:   []gitbackend.Commit{{ID: "recent"}},
+		upstream: gitbackend.UpstreamRanges{Ahead: []gitbackend.Commit{{ID: "ahead"}}, Behind: []gitbackend.Commit{{ID: "behind"}}},
+		summary:  gitbackend.Summary{Upstream: "origin/main", Ahead: 1, Behind: 1},
+	}
+	m.install(s)
+	for _, id := range []sectionmodel.SectionID{"status/untracked", "status/unpulled"} {
+		if !m.tree.IsFolded(id) {
+			t.Errorf("%s should initially be folded", id)
+		}
+	}
+	for _, id := range []sectionmodel.SectionID{"status/unstaged", "status/staged", "status/unpushed"} {
+		if m.tree.IsFolded(id) {
+			t.Errorf("%s should initially be expanded", id)
+		}
+	}
+	for _, id := range []sectionmodel.SectionID{"status/unstaged", "status/untracked"} {
+		m.tree.SetCursor(id)
+		_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	}
+	// Preferences survive more than one disappearance/reappearance cycle.
+	m.install(snapshot{})
+	m.install(s)
+	m.install(snapshot{})
+	m.install(s)
+	if !m.tree.IsFolded("status/unstaged") {
+		t.Fatal("refresh lost user fold")
+	}
+	if m.tree.IsFolded("status/untracked") {
+		t.Fatal("refresh reapplied the default after the user expanded untracked")
+	}
+	fallback := New(nil)
+	fallback.install(snapshot{})
+	fallback.install(snapshot{recent: []gitbackend.Commit{{ID: "recent"}}})
+	if !fallback.tree.IsFolded("status/recent") {
+		t.Fatal("recent fallback should be folded when it first appears")
+	}
+}
+
+func TestAddRemoteModalEditingAndFetchTrueSubmission(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	var gotName, gotURL string
+	var gotFetch bool
+	m.addRemote = func(_ context.Context, name, url string, fetch bool) error {
+		gotName, gotURL, gotFetch = name, url, fetch
+		return nil
+	}
+	_, _ = m.Update(keyMsg("M"))
+	_, _ = m.Update(keyMsg("a"))
+	if m.mode != modeAddRemote || m.remoteFetch || m.remoteField != 0 {
+		t.Fatalf("M a state = mode %d fetch %v field %d", m.mode, m.remoteFetch, m.remoteField)
+	}
+	_, _ = m.Update(keyMsg("é"))
+	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	if m.remoteInput[0] != "" {
+		t.Fatalf("UTF-8 backspace left %q", m.remoteInput[0])
+	}
+	for _, r := range "origin" {
+		_, _ = m.Update(keyMsg(string(r)))
+	}
+	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	for _, r := range "https://example.test/repo" {
+		_, _ = m.Update(keyMsg(string(r)))
+	}
+	_, _ = m.Update(keyMsg("ctrl+f"))
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil || m.mode != modeStatus {
+		t.Fatal("remote submission did not close modal/start operation")
+	}
+	msg := cmd()
+	if operation, ok := msg.(operationMsg); !ok || operation.opErr != nil {
+		t.Fatalf("remote operation result = %#v", msg)
+	}
+	if gotName != "origin" || gotURL != "https://example.test/repo" || !gotFetch {
+		t.Fatalf("AddRemote called with %q %q fetch=%v", gotName, gotURL, gotFetch)
+	}
+}
+
+func TestExactFetchActionsAndFFDoesNothing(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.snapshot.pushRemote = "publish"
+	var upstreamCalls, pushCalls int
+	m.fetchUpstream = func(context.Context) error { upstreamCalls++; return nil }
+	m.fetchPush = func(context.Context) error { pushCalls++; return nil }
+	m.fetchAll = func(context.Context) error { return nil }
+	for _, suffix := range []string{"u", "p", "e", "a"} {
+		m.busy = false
+		_, _ = m.Update(keyMsg("f"))
+		_, cmd := m.Update(keyMsg(suffix))
+		if suffix == "e" { // no remotes: chooser reports a safe error instead of starting Git
+			if cmd != nil || !m.isError {
+				t.Fatalf("f e without remotes was not handled safely")
+			}
+			continue
+		}
+		if cmd == nil || !m.busy {
+			t.Fatalf("f %s did not start an operation", suffix)
+		}
+		if suffix == "u" || suffix == "p" {
+			_ = cmd()
+		}
+	}
+	if upstreamCalls != 1 || pushCalls != 1 {
+		t.Fatalf("dedicated fetch resolvers called upstream=%d push=%d", upstreamCalls, pushCalls)
+	}
+	m.busy = false
+	_, _ = m.Update(keyMsg("f"))
+	_, cmd := m.Update(keyMsg("f"))
+	if cmd != nil || m.busy || m.resolver.PendingPrefix() != "" {
+		t.Fatal("f f must be unbound")
+	}
+
+	chooser := New(nil)
+	chooser.loading = false
+	chooser.install(snapshot{remotes: []gitbackend.Remote{{Name: "origin"}, {Name: "backup"}}})
+	var fetched string
+	chooser.fetch = func(_ context.Context, remote ...string) error { fetched = remote[0]; return nil }
+	_, _ = chooser.Update(keyMsg("f"))
+	_, cmd = chooser.Update(keyMsg("e"))
+	if cmd != nil || chooser.mode != modeRemotes {
+		t.Fatal("f e did not open the remote chooser")
+	}
+	_, _ = chooser.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	_, cmd = chooser.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil {
+		t.Fatal("remote chooser did not submit")
+	}
+	_ = cmd()
+	if fetched != "backup" {
+		t.Fatalf("chooser fetched %q", fetched)
+	}
+}
+
+func TestSnapshotLoadUsesMagitLimitsPushRemoteAndTruncationProbe(t *testing.T) {
+	var recentLimit, upstreamLimit int
+	commits := make([]gitbackend.Commit, 257)
+	for i := range commits {
+		commits[i].ID = fmt.Sprintf("%040d", i)
+	}
+	s, err := loadSnapshotWith(context.Background(), snapshotQueries{
+		summary: func(context.Context) (gitbackend.Summary, error) {
+			return gitbackend.Summary{Upstream: "origin/main", Ahead: 300}, nil
+		},
+		status:  func(context.Context) (gitbackend.Status, error) { return gitbackend.Status{}, nil },
+		remotes: func(context.Context) ([]gitbackend.Remote, error) { return nil, nil },
+		recentLog: func(_ context.Context, limit int) ([]gitbackend.Commit, error) {
+			recentLimit = limit
+			return nil, nil
+		},
+		upstreamLogLimit: func(_ context.Context, limit int) (gitbackend.UpstreamRanges, error) {
+			upstreamLimit = limit
+			return gitbackend.UpstreamRanges{Ahead: commits}, nil
+		},
+		pushRemote: func(context.Context) (string, error) { return "publish", nil },
+	})
+	if err != nil {
+		t.Fatalf("load snapshot: %v", err)
+	}
+	if recentLimit != 10 || upstreamLimit != 257 || s.pushRemote != "publish" {
+		t.Fatalf("load calls recent=%d upstream=%d push=%q", recentLimit, upstreamLimit, s.pushRemote)
+	}
+	if len(s.upstream.Ahead) != 256 || !s.aheadTruncated {
+		t.Fatalf("probe normalization retained=%d truncated=%v", len(s.upstream.Ahead), s.aheadTruncated)
+	}
+}
+
+func TestAddRemotePreservesURLWhitespaceAndRejectsOnlyEmptyURL(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	var gotName, gotURL string
+	m.addRemote = func(_ context.Context, name, url string, _ bool) error { gotName, gotURL = name, url; return nil }
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+	m.mode, m.remoteField = modeAddRemote, 1
+	m.remoteInput = [2]string{"  origin  ", "  ssh://example/repo  "}
+	_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil {
+		t.Fatal("non-empty whitespace-bearing URL was rejected")
+	}
+	_ = cmd()
+	if gotName != "origin" || gotURL != "  ssh://example/repo  " {
+		t.Fatalf("add remote received name=%q URL=%q", gotName, gotURL)
+	}
+
+	empty := New(nil)
+	empty.loading, empty.mode, empty.remoteField = false, modeAddRemote, 1
+	empty.remoteInput = [2]string{"origin", ""}
+	if _, cmd := empty.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})); cmd != nil || !empty.isError {
+		t.Fatal("truly empty URL was not rejected")
+	}
+}
+
+func TestFetchPushConfiguresMissingRemoteThenFetches(t *testing.T) {
+	m := New(nil)
+	m.width, m.loading = 80, false
+	m.install(snapshot{remotes: []gitbackend.Remote{{Name: "origin"}, {Name: "publish"}}})
+	var configured string
+	var order []string
+	m.setPushRemote = func(_ context.Context, remote string) error {
+		configured = remote
+		order = append(order, "set")
+		return nil
+	}
+	m.fetchPush = func(context.Context) error { order = append(order, "fetch"); return nil }
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+
+	_, _ = m.Update(keyMsg("f"))
+	_, cmd := m.Update(keyMsg("p"))
+	if cmd != nil || m.mode != modeRemotes || m.remotePurpose != remoteConfigurePush {
+		t.Fatal("f p missing push remote did not open configure chooser")
+	}
+	if overlay := m.renderOverlay(12); !strings.Contains(overlay, "Configure push remote") {
+		t.Fatalf("push chooser title is not distinct: %q", overlay)
+	}
+	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if cmd == nil || !m.busy {
+		t.Fatal("choosing push remote did not start operation")
+	}
+	msg := cmd().(operationMsg)
+	if msg.opErr != nil || configured != "publish" || !reflect.DeepEqual(order, []string{"set", "fetch"}) {
+		t.Fatalf("configure/fetch result err=%v configured=%q order=%v", msg.opErr, configured, order)
+	}
+}
+
+func TestPushSelectsSetupChooserConfiguredRemoteOrPlainPush(t *testing.T) {
+	t.Run("chooser configures and pushes without fetching", func(t *testing.T) {
+		m := New(nil)
+		m.width, m.loading = 80, false
+		m.install(snapshot{summary: gitbackend.Summary{Branch: "main"}, remotes: []gitbackend.Remote{{Name: "origin"}, {Name: "publish"}}})
+		var order []string
+		m.setPushRemote = func(context.Context, string) error {
+			t.Fatal("destination chooser persisted push remote before push")
+			return nil
+		}
+		m.pushSetUpstream = func(_ context.Context, remote string) error {
+			order = append(order, "push:"+remote)
+			return nil
+		}
+		m.fetchPush = func(context.Context) error {
+			order = append(order, "fetch")
+			return nil
+		}
+		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+
+		_, _ = m.Update(keyMsg("P"))
+		_, cmd := m.Update(keyMsg("p"))
+		if cmd != nil || m.mode != modeRemotes || m.remotePurpose != remoteConfigureAndPush {
+			t.Fatalf("P p state = mode %d purpose %d", m.mode, m.remotePurpose)
+		}
+		if chooser := m.renderOverlay(12); !strings.Contains(chooser, "Push and set upstream") || !strings.Contains(chooser, "Enter choose destination") {
+			t.Fatalf("push destination chooser is unclear: %q", chooser)
+		}
+		_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+		_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+		if cmd == nil {
+			t.Fatal("chooser selection did not start operation")
+		}
+		msg := cmd().(operationMsg)
+		if msg.opErr != nil || !reflect.DeepEqual(order, []string{"push:publish"}) {
+			t.Fatalf("setup-push result err=%v order=%v", msg.opErr, order)
+		}
+	})
+
+	t.Run("configured push remote sets upstream", func(t *testing.T) {
+		m := New(nil)
+		m.loading = false
+		m.snapshot = snapshot{summary: gitbackend.Summary{Branch: "main"}, pushRemote: "publish"}
+		var setup string
+		m.pushSetUpstream = func(_ context.Context, remote string) error { setup = remote; return nil }
+		m.push = func(context.Context) error { t.Fatal("plain push called without upstream"); return nil }
+		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+		_, _ = m.Update(keyMsg("P"))
+		_, cmd := m.Update(keyMsg("p"))
+		if cmd == nil {
+			t.Fatal("configured push remote did not start setup push")
+		}
+		_ = cmd()
+		if setup != "publish" {
+			t.Fatalf("setup push remote = %q", setup)
+		}
+	})
+
+	t.Run("existing upstream uses plain push", func(t *testing.T) {
+		m := New(nil)
+		m.loading = false
+		m.snapshot = snapshot{summary: gitbackend.Summary{Branch: "main", Upstream: "origin/main"}, pushRemote: "publish"}
+		plainCalls := 0
+		m.push = func(context.Context) error { plainCalls++; return nil }
+		m.pushSetUpstream = func(context.Context, string) error { t.Fatal("setup push called with upstream"); return nil }
+		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+		_, _ = m.Update(keyMsg("P"))
+		_, cmd := m.Update(keyMsg("p"))
+		if cmd == nil {
+			t.Fatal("plain push did not start")
+		}
+		_ = cmd()
+		if plainCalls != 1 {
+			t.Fatalf("plain push calls = %d", plainCalls)
+		}
+	})
+
+	t.Run("no remotes is a clear error", func(t *testing.T) {
+		m := New(nil)
+		m.loading = false
+		_, _ = m.Update(keyMsg("P"))
+		_, cmd := m.Update(keyMsg("p"))
+		if cmd != nil || !m.isError || !strings.Contains(m.message, "requires a repository") {
+			t.Fatalf("no-remotes result cmd=%v error=%v message=%q", cmd != nil, m.isError, m.message)
+		}
+	})
+}
+
+func TestDiffResultInstallsWhileProcessPaneIsOpen(t *testing.T) {
+	m := New(nil)
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "file", Unstaged: gitbackend.ChangeModified}}}})
+	for id, row := range m.rows {
+		if row.path == "file" {
+			m.tree.SetCursor(id)
+		}
+	}
+	m.mode = modeProcess
+	m.detail = "Loading diff…"
+	m.detailRequest = 9
+	_, _ = m.Update(diffMsg{id: m.tree.Cursor(), request: 9, text: "+loaded"})
+	if m.detail != "+loaded" {
+		t.Fatalf("process mode discarded visible detail result: %q", m.detail)
+	}
+}
+
 func TestStaleBranchResultCannotOverrideNewerState(t *testing.T) {
 	m := New(nil)
 	m.busy = true
@@ -149,6 +607,22 @@ func TestStaleBranchResultCannotOverrideNewerState(t *testing.T) {
 	}
 	if m.busy {
 		t.Fatal("completed current branch request left the model busy")
+	}
+}
+
+func TestBranchResponseCancelsPrefixBeforeOpeningChooser(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	_, _ = m.Update(keyMsg("b"))
+	_, _ = m.Update(keyMsg("b"))
+	request, state := m.branchRequest, m.stateGeneration
+	_, _ = m.Update(keyMsg("c"))
+	if m.resolver.PendingPrefix() != "c" {
+		t.Fatal("commit transient did not open while branches loaded")
+	}
+	_, _ = m.Update(branchesMsg{request: request, state: state, branches: []gitbackend.Branch{{Name: "main"}}})
+	if m.mode != modeBranches || m.resolver.PendingPrefix() != "" {
+		t.Fatalf("branch response left conflicting transient: mode=%d prefix=%q", m.mode, m.resolver.PendingPrefix())
 	}
 }
 

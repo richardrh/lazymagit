@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richard/lazymagit/internal/git"
 )
 
@@ -47,7 +48,7 @@ func TestRenderDimensionsAtLayoutBoundaries(t *testing.T) {
 }
 
 func TestOverlayDimensionsAtBoundaryHeights(t *testing.T) {
-	for _, mode := range []mode{modeCommit, modeBranches, modeConfirm, modeHelp} {
+	for _, mode := range []mode{modeCommit, modeBranches, modeConfirm, modeHelp, modeAddRemote, modeRemotes} {
 		for _, height := range []int{5, 7, 12} {
 			m := New(&gitbackend.Repository{})
 			m.width, m.height, m.mode = 95, height, mode
@@ -73,15 +74,64 @@ func TestPanelDimensionsAreOuterDimensions(t *testing.T) {
 	}
 }
 
-func TestFooterShowsActiveKeyScheme(t *testing.T) {
+func TestFooterPrioritizesWorkflowsAndUsesUppercasePush(t *testing.T) {
 	m := New(&gitbackend.Repository{})
-	m.width = 120
-	if footer := m.renderFooter(); !strings.Contains(footer, "[Vim]") || !strings.Contains(footer, "x discard") {
-		t.Fatalf("Vim footer is not explicit and accurate: %q", footer)
+	for _, width := range []int{40, 120} {
+		m.width = width
+		footer := ansi.Strip(m.renderFooter())
+		for _, want := range []string{"c Commit", "f Fetch", "P Push", "b Branch"} {
+			if !strings.Contains(footer, want) {
+				t.Fatalf("width %d footer omitted %q: %q", width, want, footer)
+			}
+		}
+		if strings.Contains(footer, "p Push") {
+			t.Fatalf("footer advertised lowercase push navigation collision: %q", footer)
+		}
 	}
-	m.scheme = schemeMagit
-	if footer := m.renderFooter(); !strings.Contains(footer, "[Magit]") || !strings.Contains(footer, "x reserved") {
-		t.Fatalf("Magit footer is not explicit and accurate: %q", footer)
+	m.width, m.mode = 120, modeCommit
+	if footer := ansi.Strip(m.renderFooter()); strings.Contains(footer, "c Commit") || strings.Contains(footer, "P Push") {
+		t.Fatalf("modal footer misleadingly exposed intercepted globals: %q", footer)
+	}
+	m.mode = modeStatus
+	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") {
+		t.Fatalf("wide status footer omitted processes: %q", footer)
+	}
+}
+
+func TestNarrowFooterPrioritizesStatusErrors(t *testing.T) {
+	m := New(&gitbackend.Repository{})
+	m.mode, m.isError, m.message = modeStatus, true, "push rejected"
+	for _, width := range []int{20, 30, 40} {
+		m.width = width
+		footer := ansi.Strip(m.renderFooter())
+		if !strings.Contains(footer, "push rejected") {
+			t.Fatalf("width %d hid meaningful status error: %q", width, footer)
+		}
+	}
+}
+
+func TestRemoteChooserKeepsSelectionAndActionAtShortHeights(t *testing.T) {
+	for _, height := range []int{5, 7, 8, 16} {
+		m := New(&gitbackend.Repository{})
+		m.width, m.height, m.loading = 48, height, false
+		m.mode, m.remotePurpose, m.remoteCursor = modeRemotes, remoteConfigureAndPush, 1
+		m.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}, {Name: "publish"}}
+		got := m.render()
+		if width, renderedHeight := lipgloss.Width(got), lipgloss.Height(got); width != 48 || renderedHeight != height {
+			t.Fatalf("chooser 48x%d rendered %dx%d", height, width, renderedHeight)
+		}
+		plain := ansi.Strip(got)
+		for _, want := range []string{"publish", "Enter choose destination"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("height %d chooser omitted %q: %q", height, want, plain)
+			}
+		}
+		if height == 5 && strings.Contains(plain, "origin") {
+			t.Fatalf("short chooser showed an unselected remote instead of selected publish: %q", plain)
+		}
+		if height == 16 && !strings.Contains(plain, "Push and set upstream") {
+			t.Fatalf("normal chooser omitted title: %q", plain)
+		}
 	}
 }
 
@@ -108,6 +158,7 @@ func TestDetailScrollingIsIndependentAndClamped(t *testing.T) {
 
 func TestDetailOffsetResetsWhenSelectionOrDetailChanges(t *testing.T) {
 	m := New(&gitbackend.Repository{})
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}}}})
 	m.detailOffset = 8
 	_ = m.move(1)
 	if m.detailOffset != 0 {
@@ -120,13 +171,16 @@ func TestDetailOffsetResetsWhenSelectionOrDetailChanges(t *testing.T) {
 	}
 }
 
-func TestHelpDocumentsDetailScrolling(t *testing.T) {
+func TestHelpUsesBorderlessMagitDispatcher(t *testing.T) {
 	m := New(&gitbackend.Repository{})
 	m.width, m.height, m.mode = 120, 30, modeHelp
 	help := m.renderOverlay(26)
-	for _, key := range []string{"Space/PageDown/Ctrl-d", "Shift-Space/PageUp/Ctrl-u"} {
-		if !strings.Contains(help, key) {
-			t.Fatalf("help omitted detail scrolling key %q", key)
+	if strings.ContainsAny(help, "╔╗╚╝║═") {
+		t.Fatalf("help retained generic transient border: %q", help)
+	}
+	for _, heading := range []string{"Transient and dwim commands", "Applying changes", "Essential commands"} {
+		if !strings.Contains(help, heading) {
+			t.Fatalf("help omitted %q", heading)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/richard/lazymagit/internal/keymap"
 )
 
 var (
@@ -35,6 +36,22 @@ func (m *Model) render() string {
 	footer := m.renderFooter()
 	bodyHeight := m.height - 4
 	var body string
+	if m.mode == modeProcess && m.processPanelHeight() > 0 {
+		processHeight := m.processPanelHeight()
+		topHeight := bodyHeight - processHeight - 1
+		body = m.renderMainBody(topHeight) + "\n" + m.renderProcessPanel(m.width, processHeight)
+	} else {
+		body = m.renderMainBody(bodyHeight)
+	}
+	_, cataloguedPrefix := m.activeTransientCatalog()
+	if (m.mode != modeStatus && m.mode != modeProcess) || cataloguedPrefix {
+		body = m.renderOverlay(bodyHeight)
+	}
+	return fitBlock(header+"\n"+body+"\n"+footer, m.width, m.height)
+}
+
+func (m *Model) renderMainBody(bodyHeight int) string {
+	var body string
 	if bodyHeight < 3 {
 		body = fitBlock("Repository status", m.width, bodyHeight)
 	} else if m.width >= 96 {
@@ -53,10 +70,7 @@ func (m *Model) render() string {
 	} else {
 		body = m.renderStatusPanel(m.width, bodyHeight)
 	}
-	if m.mode != modeStatus {
-		body = m.renderOverlay(bodyHeight)
-	}
-	return fitBlock(header+"\n"+body+"\n"+footer, m.width, m.height)
+	return body
 }
 
 func (m *Model) renderHeader() string {
@@ -173,6 +187,22 @@ func (m *Model) renderDetailPanel(width, height int) string {
 	return panelStyle(width, height).Render(strings.Join(styled, "\n"))
 }
 
+func (m *Model) renderProcessPanel(width, height int) string {
+	if width < 3 || height < 3 {
+		return fitBlock("Git processes", width, height)
+	}
+	innerW, innerH := width-2, height-2
+	lines := m.processLinesAtWidth(innerW)
+	start := min(m.processOffset, max(0, len(lines)-max(0, innerH-1)))
+	end := min(len(lines), start+max(0, innerH-1))
+	visible := make([]string, 0, innerH)
+	visible = append(visible, lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render("Git processes"))
+	for _, line := range lines[start:end] {
+		visible = append(visible, truncate(line, innerW))
+	}
+	return panelStyle(width, height).Render(fitBlock(strings.Join(visible, "\n"), innerW, innerH))
+}
+
 func panelStyle(outerWidth, outerHeight int) lipgloss.Style {
 	return lipgloss.NewStyle().
 		Width(outerWidth).Height(outerHeight).
@@ -187,29 +217,70 @@ func (m *Model) renderFooter() string {
 	}
 	var left string
 	if prefix != "" {
-		suffix := map[string]string{
-			"g": "g → first",
-			"c": "c → commit",
-			"b": "b → switch branch",
-			"f": "f → fetch",
-			"P": "p → push",
-		}[prefix]
-		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] " + prefix + " …  " + suffix)
-	} else if m.scheme == schemeMagit {
-		left = lipgloss.NewStyle().Foreground(colorMuted).Render("[Magit] F2 Vim  n/p move  g/G refresh  k discard  x reserved  ? help")
+		if m.resolver.ActiveTransient() != "" {
+			catalog, _ := m.activeTransientCatalog()
+			left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] " + catalog.Title + " — choose a suffix")
+		} else {
+			left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] g …  g → first")
+		}
+	} else if m.mode == modeStatus {
+		workflow := func(key, label string) string {
+			return lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(key) + " " + label
+		}
+		var primary []string
+		for _, binding := range keymap.PrimaryBindings(schemeID(m.scheme)) {
+			primary = append(primary, workflow(binding.Display, binding.Label))
+		}
+		left = strings.Join(primary, "  ")
+		optional := []string{"$ Processes", "? Commands"}
+		if m.scheme == schemeMagit {
+			optional = append(optional, "[Magit] F2 Vim", "n/p move")
+		} else {
+			optional = append(optional, "[Vim] F2 Magit", "j/k move")
+		}
+		for _, item := range optional {
+			candidate := left + "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(item)
+			if ansi.StringWidth(candidate) <= m.width {
+				left = candidate
+			}
+		}
 	} else {
-		left = lipgloss.NewStyle().Foreground(colorMuted).Render("[Vim] F2 Magit  j/k move  gg/G first/last  x discard  ? help")
+		switch m.mode {
+		case modeCommit, modeConfirm, modeAddRemote:
+			left = lipgloss.NewStyle().Foreground(colorMuted).Render("Esc cancel")
+		case modeWorkflow:
+			left = lipgloss.NewStyle().Foreground(colorMuted).Render("Tab/↑/↓ field  Enter edit/submit  Esc cancel")
+		case modeHelp:
+			left = lipgloss.NewStyle().Foreground(colorMuted).Render("q/Esc close  ↑/↓ PageUp/PageDown")
+		case modeProcess:
+			left = lipgloss.NewStyle().Foreground(colorMuted).Render("y Copy output  $/q Close  ↑/↓ PageUp/PageDown")
+		default:
+			left = lipgloss.NewStyle().Foreground(colorMuted).Render("q/Esc back")
+		}
 	}
 	messageStyle := lipgloss.NewStyle().Foreground(colorCyan)
 	if m.isError {
 		messageStyle = messageStyle.Foreground(colorRed).Bold(true)
 	}
 	message := messageStyle.Render(sanitizeSingleLine(m.message))
+	if m.isError && ansi.StringWidth(left)+2+ansi.StringWidth(message) > m.width {
+		return truncate(message, m.width)
+	}
 	available := max(0, m.width-ansi.StringWidth(left)-2)
 	return truncate(left+"  "+truncate(message, available), m.width)
 }
 
 func (m *Model) renderOverlay(height int) string {
+	if pending := m.resolver.PendingPrefix(); pending != "" && pending != "g" {
+		if m.resolver.ActiveTransient() != "" {
+			prefix := transientInvocationRoot(pending)
+			catalog, _ := m.transientCatalog(prefix)
+			return renderTransient(catalog, m.width, height, m.transientOffset)
+		}
+	}
+	if m.mode == modeRemotes {
+		return m.renderRemoteOverlay(height)
+	}
 	if m.width < 4 || height < 3 {
 		return fitBlock("", m.width, height)
 	}
@@ -243,22 +314,148 @@ func (m *Model) renderOverlay(height int) string {
 			lines = append(lines, "No local branches")
 		}
 		content = strings.Join(lines, "\n") + "\n\nEnter switch  •  q back"
-	case modeHelp:
-		title = " Help "
-		scheme, navigation, collisions := "Vim (F2 → Magit)", "  j/k         move        gg/G   first/last", "  x           discard untracked/unstaged (confirm)"
-		if m.scheme == schemeMagit {
-			scheme, navigation, collisions = "Magit (F2 → Vim)", "  n/p         move", "  g/G         refresh     k      discard whole file (confirm)\n  x           reserved reset; unsupported"
+	case modeAddRemote:
+		title = " Add remote "
+		fields := [2]string{"Name", "URL"}
+		var lines []string
+		for i, label := range fields {
+			mark := "  "
+			if i == m.remoteField {
+				mark = "▶ "
+			}
+			value := sanitizeSingleLine(m.remoteInput[i])
+			if i == m.remoteField {
+				value += "█"
+			}
+			lines = append(lines, mark+label+": "+value)
 		}
-		content = strings.Join([]string{
-			"KEY SCHEME", "  Active: " + scheme, "", "NAVIGATION", navigation, "  Tab         fold        1/2/3  global depth", "",
-			"DETAIL", "  Space/PageDown/Ctrl-d    scroll down", "  Shift-Space/PageUp/Ctrl-u scroll up", "",
-			"STATUS", collisions, "  s           stage file  u      unstage", "",
-			"COMMANDS", "  c c         commit      b b    switch branch", "  f f         fetch       P p    push", "  q           quit/back   ?      toggle help",
-		}, "\n")
+		fetch := "yes"
+		if !m.remoteFetch {
+			fetch = "no"
+		}
+		content = strings.Join(lines, "\n\n") + "\n\nFetch after add: " + fetch + " (Ctrl-f toggle)\n\nTab/↑/↓ field  •  Enter next/add  •  Esc cancel"
+	case modeHelp:
+		return renderDispatcher(m.dispatcherCatalog(), m.width, height, m.transientOffset)
+	case modeWorkflow:
+		return m.renderWorkflowOverlay(width, height)
 	}
 	heading := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(title)
 	text := fitBlock(heading+"\n\n"+content, innerW, innerH)
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
+		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func (m *Model) renderWorkflowOverlay(width, height int) string {
+	if m.workflow == nil {
+		return fitBlock("", width, height)
+	}
+	if width < 4 || height < 3 {
+		return fitBlock(sanitizeSingleLine(m.workflow.dialog.Title), width, height)
+	}
+	innerW, innerH := width-4, height-2
+	w := m.workflow
+	lines := []string{lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" " + sanitizeSingleLine(w.dialog.Title) + " ")}
+	for i, field := range w.dialog.Fields {
+		mark := "  "
+		if i == w.field {
+			mark = "▶ "
+		}
+		value := field.Value
+		if field.Kind == WorkflowBool {
+			if field.Bool {
+				value = "yes"
+			} else {
+				value = "no"
+			}
+		}
+		if field.Kind == WorkflowEnum || field.Kind == WorkflowSelect {
+			for _, choice := range field.Choices {
+				if choice.Value == field.Value {
+					value = choice.Label
+				}
+			}
+		}
+		if i == w.field && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
+			value += "█"
+		}
+		lines = append(lines, mark+sanitizeSingleLine(field.Label)+": "+sanitizeSingleLine(value))
+	}
+	confirmation, plan := w.dialog.Confirmation, w.dialog.Plan
+	if w.review != nil {
+		confirmation, plan = w.review.Confirmation, w.review.Plan
+	}
+	if confirmation != "" {
+		lines = append(lines, "", sanitizeSingleLine(confirmation))
+	}
+	if len(plan) > 0 {
+		lines = append(lines, "", "Plan:")
+		for _, step := range plan {
+			lines = append(lines, "  • "+sanitizeSingleLine(step))
+		}
+	}
+	submit := "Submit"
+	if w.dialog.ReviewPreflight != nil {
+		submit = "Review"
+		if w.review != nil {
+			submit = "Execute"
+		}
+	}
+	if w.busy {
+		submit = "Checking…"
+	}
+	mark := "  "
+	if w.field >= len(w.dialog.Fields) {
+		mark = "▶ "
+	}
+	lines = append(lines, "", mark+submit, "", "Tab/↑/↓ field  •  Enter edit/submit  •  Esc cancel")
+	if w.error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render(sanitizeSingleLine(w.error)))
+	}
+	text := fitBlock(strings.Join(lines, "\n"), innerW, innerH)
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func (m *Model) renderRemoteOverlay(height int) string {
+	title, hint := " Fetch elsewhere ", "Enter fetch"
+	if m.remotePurpose == remoteConfigurePush {
+		title, hint = " Configure push remote ", "Enter configure and fetch"
+	} else if m.remotePurpose == remoteConfigureAndPush {
+		title, hint = " Push and set upstream ", "Enter choose destination"
+	}
+	selected := "No remotes"
+	cursor := 0
+	if len(m.snapshot.remotes) > 0 {
+		cursor = min(max(0, m.remoteCursor), len(m.snapshot.remotes)-1)
+		selected = sanitizeSingleLine(m.snapshot.remotes[cursor].Name)
+	}
+	compact := lipgloss.NewStyle().Reverse(true).Bold(true).Render(selected) + "  •  " + hint
+	if m.width < 4 || height < 3 {
+		return fitBlock(compact, m.width, height)
+	}
+	innerW, innerH := m.width-4, height-2
+	var text string
+	if innerH < 5 {
+		text = fitBlock(compact, innerW, innerH)
+	} else {
+		available := max(1, innerH-4)
+		start := max(0, cursor-available/2)
+		start = min(start, max(0, len(m.snapshot.remotes)-available))
+		end := min(len(m.snapshot.remotes), start+available)
+		lines := make([]string, 0, available)
+		for i := start; i < end; i++ {
+			line := "  " + sanitizeSingleLine(m.snapshot.remotes[i].Name)
+			if i == cursor {
+				line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
+			}
+			lines = append(lines, line)
+		}
+		if len(lines) == 0 {
+			lines = append(lines, "No remotes")
+		}
+		heading := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(title)
+		text = fitBlock(heading+"\n"+strings.Join(lines, "\n")+"\n\n"+hint+"  •  q back", innerW, innerH)
+	}
+	return lipgloss.NewStyle().Width(m.width).Height(height).Padding(0, 1).
 		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
 }
 

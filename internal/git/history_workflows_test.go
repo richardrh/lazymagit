@@ -1,0 +1,218 @@
+package git
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+)
+
+func TestCherryPickOrderedNoCommitAndProcessRecord(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	base := r.commitAll("base")
+	r.git("switch", "-c", "source")
+	r.write("one", "one\n")
+	one := r.commitAll("one")
+	r.write("two", "two\n")
+	two := r.commitAll("two")
+	r.git("switch", "main")
+	repo, _ := Discover(r.dir)
+	var records []ProcessRecord
+	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
+
+	if err := repo.CherryPickStart(ctx, []string{one, two}, PickOptions{NoCommit: true, Signoff: true, NoEdit: true}); err != nil {
+		t.Fatalf("CherryPickStart: %v", err)
+	}
+	if got := r.git("rev-parse", "HEAD"); got != base {
+		t.Fatalf("--no-commit moved HEAD to %s", got)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "one\ntwo" {
+		t.Fatalf("staged paths = %q", got)
+	}
+	want := []string{"cherry-pick", "--no-commit", "--signoff", "--no-edit", "--", one, two}
+	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
+		t.Fatalf("process records = %#v, want args %#v", records, want)
+	}
+}
+
+func TestCherryPickConflictUsesAdminStateAndCanAbort(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "source")
+	r.write("file", "source\n")
+	commit := r.commitAll("source")
+	r.git("switch", "main")
+	r.write("file", "main\n")
+	r.commitAll("main")
+	repo, _ := Discover(r.dir)
+
+	if err := repo.CherryPickStart(context.Background(), []string{commit}, PickOptions{}); err == nil {
+		t.Fatal("conflicting cherry-pick unexpectedly succeeded")
+	}
+	if err := repo.CherryPickAbort(context.Background()); err != nil {
+		t.Fatalf("CherryPickAbort: %v", err)
+	}
+	if got := r.read("file"); got != "main\n" {
+		t.Fatalf("abort restored %q", got)
+	}
+	if err := repo.CherryPickContinue(context.Background()); !errors.Is(err, ErrWorkflowNotActive) {
+		t.Fatalf("continue outside workflow = %v", err)
+	}
+}
+
+func TestRebaseNonInteractiveOntoAndLifecycleGuard(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	base := r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("topic", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("main", "main\n")
+	main := r.commitAll("main")
+	r.git("switch", "topic")
+	repo, _ := Discover(r.dir)
+
+	if err := repo.RebaseStart(context.Background(), RebaseOptions{Upstream: base, Onto: main}); err != nil {
+		t.Fatalf("RebaseStart: %v", err)
+	}
+	if parent := r.git("rev-parse", "HEAD^"); parent != main {
+		t.Fatalf("rebased parent = %s, want %s", parent, main)
+	}
+	if err := repo.RebaseAbort(context.Background()); !errors.Is(err, ErrWorkflowNotActive) {
+		t.Fatalf("abort outside rebase = %v", err)
+	}
+	var editorRequired *EditorRequiredError
+	if err := repo.RebaseInteractive(context.Background(), RebaseOptions{Upstream: base}); !errors.As(err, &editorRequired) {
+		t.Fatalf("interactive rebase error = %v", err)
+	}
+}
+
+func TestRebaseTodoValidationAndAtomicAdminWrite(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	oid := r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	admin := filepath.Join(repo.GitDir(), "rebase-merge")
+	if err := os.Mkdir(admin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(admin, "git-rebase-todo"), []byte("pick "+oid+" base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := "pick " + oid + " base\ndrop " + oid + " duplicate\n"
+	if err := repo.WriteRebaseTodo(context.Background(), want); err != nil {
+		t.Fatalf("WriteRebaseTodo: %v", err)
+	}
+	got, err := repo.ReadRebaseTodo(context.Background())
+	if err != nil || got != want {
+		t.Fatalf("ReadRebaseTodo = %q, %v", got, err)
+	}
+	if err := ValidateRebaseTodo("exec rm -rf .\n"); err == nil {
+		t.Fatal("shell-bearing exec todo was accepted")
+	}
+}
+
+func TestResetRequiresConfirmationAndReportsDestruction(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	base := r.commitAll("base")
+	r.write("file", "changed\n")
+	r.commitAll("changed")
+	repo, _ := Discover(r.dir)
+	var records []ProcessRecord
+	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
+	opts := ResetOptions{Mode: ResetHard, Target: base}
+
+	err := repo.Reset(ctx, opts)
+	var required *HistoryConfirmationRequiredError
+	if !errors.As(err, &required) || !required.Preflight.LosesHEAD || !required.Preflight.LosesIndex || !required.Preflight.LosesWorktree {
+		t.Fatalf("reset confirmation = %#v, %v", required, err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("unconfirmed reset ran commands: %#v", records)
+	}
+	opts.Confirmed = true
+	if err := repo.Reset(ctx, opts); err != nil {
+		t.Fatalf("confirmed Reset: %v", err)
+	}
+	if got := r.git("rev-parse", "HEAD"); got != base {
+		t.Fatalf("HEAD = %s, want %s", got, base)
+	}
+}
+
+func TestResetIndexAndWorktreeDoNotMoveHEAD(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	r.commitAll("base")
+	r.write("file", "head\n")
+	head := r.commitAll("head")
+	r.write("file", "staged\n")
+	r.git("add", "file")
+	repo, _ := Discover(r.dir)
+
+	if err := repo.Reset(context.Background(), ResetOptions{Mode: ResetIndex, Target: "HEAD", ConfirmOptions: ConfirmOptions{Confirmed: true}}); err != nil {
+		t.Fatalf("ResetIndex: %v", err)
+	}
+	if got := r.git("rev-parse", "HEAD"); got != head {
+		t.Fatalf("index reset moved HEAD")
+	}
+	if err := repo.Reset(context.Background(), ResetOptions{Mode: ResetWorktree, Target: "HEAD", ConfirmOptions: ConfirmOptions{Confirmed: true}}); err != nil {
+		t.Fatalf("ResetWorktree: %v", err)
+	}
+	if got := r.read("file"); got != "head\n" {
+		t.Fatalf("worktree reset contents = %q", got)
+	}
+}
+
+func TestBisectLifecycleAndExplicitArgvValidation(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("n", "0\n")
+	good := r.commitAll("good")
+	r.write("n", "1\n")
+	r.commitAll("middle")
+	r.write("n", "2\n")
+	bad := r.commitAll("bad")
+	repo, _ := Discover(r.dir)
+
+	capability := NewAllowUnsafeExecution()
+	if err := repo.UnsafeBisectRun(context.Background(), capability, nil); !errors.Is(err, ErrWorkflowNotActive) {
+		t.Fatalf("run outside bisect = %v", err)
+	}
+	if err := repo.BisectStart(context.Background(), BisectStartOptions{Bad: bad, Good: good}); err != nil {
+		t.Fatalf("BisectStart: %v", err)
+	}
+	if err := repo.UnsafeBisectRun(context.Background(), capability, nil); err == nil {
+		t.Fatal("empty bisect argv accepted")
+	}
+	if err := repo.BisectReset(context.Background()); err != nil {
+		t.Fatalf("BisectReset: %v", err)
+	}
+}
+
+func TestNotesRemoveConfirmationAndEditorRequirement(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	oid := r.commitAll("base")
+	r.git("notes", "add", "-m", "note", oid)
+	repo, _ := Discover(r.dir)
+	o := NotesRemoveOptions{Objects: []string{oid}}
+	if err := repo.NotesRemove(context.Background(), o); !errors.Is(err, ErrConfirmationRequired) {
+		t.Fatalf("NotesRemove confirmation = %v", err)
+	}
+	if got := r.git("notes", "show", oid); got != "note" {
+		t.Fatalf("unconfirmed remove changed note to %q", got)
+	}
+	o.Confirmed = true
+	if err := repo.NotesRemove(context.Background(), o); err != nil {
+		t.Fatalf("NotesRemove: %v", err)
+	}
+	var editorRequired *EditorRequiredError
+	if err := repo.NotesEdit(context.Background(), "", oid); !errors.As(err, &editorRequired) {
+		t.Fatalf("NotesEdit = %v", err)
+	}
+}

@@ -1,0 +1,164 @@
+package ui
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
+
+func historyE2EReplaceField(t *testing.T, m *Model, value string) {
+	t.Helper()
+	if m.mode != modeWorkflow || m.workflow == nil {
+		t.Fatalf("expected workflow, mode=%d message=%q", m.mode, m.message)
+	}
+	for m.workflow.dialog.Fields[m.workflow.field].Value != "" {
+		sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	}
+	for _, char := range value {
+		sendE2EKey(t, m, keyMsg(string(char)))
+	}
+}
+
+func historyE2ESubmit(t *testing.T, m *Model) {
+	t.Helper()
+	for m.workflow != nil && m.workflow.field < len(m.workflow.dialog.Fields) {
+		sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	}
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+}
+
+func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base.txt", "base\n")
+	base := func() string { r.git("add", "--all"); r.git("commit", "-m", "base"); return r.git("rev-parse", "HEAD") }()
+	r.git("checkout", "-b", "source")
+	r.write("applied.txt", "from source\n")
+	source := func() string {
+		r.git("add", "--all")
+		r.git("commit", "-m", "source")
+		return r.git("rev-parse", "HEAD")
+	}()
+	r.git("checkout", "main")
+	m := newE2EModel(t, r)
+	sendE2EKey(t, m, keyMsg("f2"))
+
+	// Lower-case a is Magit's no-commit cherry apply.
+	sendE2EKey(t, m, keyMsg("a"))
+	historyE2EReplaceField(t, m, source)
+	historyE2ESubmit(t, m)
+	if got := r.git("rev-parse", "HEAD"); got != base {
+		t.Fatalf("apply moved HEAD to %s, want %s", got, base)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "applied.txt" {
+		t.Fatalf("apply index = %q", got)
+	}
+	if content, err := os.ReadFile(filepath.Join(r.dir, "applied.txt")); err != nil || string(content) != "from source\n" {
+		t.Fatalf("apply worktree=%q err=%v", content, err)
+	}
+	r.git("reset", "--hard", base)
+	sendE2EKey(t, m, keyMsg("g"))
+
+	sendE2EKey(t, m, keyMsg("a"))
+	historyE2EReplaceField(t, m, source)
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("cancel changed repository: %q", got)
+	}
+
+	// X h reviews a hard reset. Change worktree after review and before the
+	// second Enter; execution must reject the stale token and preserve it.
+	sendE2EKey(t, m, keyMsg("X"))
+	sendE2EKey(t, m, keyMsg("h"))
+	historyE2ESubmit(t, m)
+	if m.workflow == nil || m.workflow.review == nil {
+		t.Fatalf("hard reset did not reach review: mode=%d message=%q", m.mode, m.message)
+	}
+	r.write("base.txt", "changed after review\n")
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if got := r.git("rev-parse", "HEAD"); got != base {
+		t.Fatalf("stale reset moved HEAD to %s", got)
+	}
+	content, err := os.ReadFile(filepath.Join(r.dir, "base.txt"))
+	if err != nil || string(content) != "changed after review\n" {
+		t.Fatalf("stale reset changed worktree=%q err=%v", content, err)
+	}
+	if !strings.Contains(m.message, "stale") {
+		t.Fatalf("stale reset message = %q", m.message)
+	}
+}
+
+func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
+	for _, finish := range []string{"continue", "abort"} {
+		t.Run(finish, func(t *testing.T) {
+			r := newUIE2ERepo(t)
+			r.write("conflict.txt", "base\n")
+			r.git("add", "--all")
+			r.git("commit", "-m", "base")
+			r.git("checkout", "-b", "source")
+			r.write("conflict.txt", "source\n")
+			source := func() string {
+				r.git("add", "--all")
+				r.git("commit", "-m", "source")
+				return r.git("rev-parse", "HEAD")
+			}()
+			r.git("checkout", "main")
+			r.write("conflict.txt", "main\n")
+			main := func() string { r.git("add", "--all"); r.git("commit", "-m", "main"); return r.git("rev-parse", "HEAD") }()
+			m := newE2EModel(t, r)
+			sendE2EKey(t, m, keyMsg("f2"))
+			if finish == "continue" {
+				// A A is Magit's committing cherry-copy path. Unlike lower-case
+				// cherry-apply (--no-commit), a conflict has sequencer state and a
+				// CHERRY_PICK_HEAD that can be continued.
+				sendE2EKey(t, m, keyMsg("A"))
+				sendE2EKey(t, m, keyMsg("A"))
+			} else {
+				sendE2EKey(t, m, keyMsg("V"))
+				sendE2EKey(t, m, keyMsg("V"))
+			}
+			historyE2EReplaceField(t, m, source)
+			historyE2ESubmit(t, m)
+			headName := "REVERT_HEAD"
+			if finish == "continue" {
+				headName = "CHERRY_PICK_HEAD"
+			}
+			headBytes, headErr := os.ReadFile(filepath.Join(r.dir, ".git", headName))
+			if got := strings.TrimSpace(string(headBytes)); headErr != nil || got != source {
+				t.Fatalf("%s=%s err=%v want %s; message=%q status=%q", headName, got, headErr, source, m.message, r.git("status", "--porcelain"))
+			}
+			if got := r.git("rev-parse", "HEAD"); got != main {
+				t.Fatalf("conflict moved HEAD=%s want %s", got, main)
+			}
+
+			if finish == "continue" {
+				r.write("conflict.txt", "source\n")
+				r.git("add", "--", "conflict.txt")
+				sendE2EKey(t, m, keyMsg("A"))
+				sendE2EKey(t, m, keyMsg("A"))
+				if got := r.git("rev-parse", "HEAD^"); got != main {
+					t.Fatalf("continue parent=%s want %s", got, main)
+				}
+				if got := r.git("status", "--porcelain"); got != "" {
+					t.Fatalf("continue status=%q", got)
+				}
+			} else {
+				sendE2EKey(t, m, keyMsg("V"))
+				sendE2EKey(t, m, keyMsg("a"))
+				historyE2ESubmit(t, m) // review
+				sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+				if got := r.git("rev-parse", "HEAD"); got != main {
+					t.Fatalf("abort HEAD=%s want %s", got, main)
+				}
+				if got := r.git("status", "--porcelain"); got != "" {
+					t.Fatalf("abort status=%q", got)
+				}
+				if _, err := os.Stat(filepath.Join(r.dir, ".git", "REVERT_HEAD")); !os.IsNotExist(err) {
+					t.Fatalf("REVERT_HEAD remains: %v", err)
+				}
+			}
+		})
+	}
+}

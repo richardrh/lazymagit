@@ -32,25 +32,20 @@ type row struct {
 // snapshot is the complete status-buffer input. It is fetched off the Bubble
 // Tea update loop using a bounded sequence of Git queries.
 type snapshot struct {
-	summary  gitbackend.Summary
-	status   gitbackend.Status
-	recent   []gitbackend.Commit
-	upstream gitbackend.UpstreamRanges
+	summary                         gitbackend.Summary
+	status                          gitbackend.Status
+	recent                          []gitbackend.Commit
+	upstream                        gitbackend.UpstreamRanges
+	remotes                         []gitbackend.Remote
+	pushRemote                      string
+	aheadTruncated, behindTruncated bool
 }
 
-var sectionOrder = []struct {
-	id, title string
-}{
-	{"untracked", "Untracked"},
-	{"unstaged", "Unstaged"},
-	{"staged", "Staged"},
-	{"unpushed", "Unpushed"},
-	{"unpulled", "Unpulled"},
-	{"recent", "Recent commits"},
-}
+var sectionIDs = []string{"untracked", "unstaged", "staged", "unpushed", "unpulled", "recent"}
 
 func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]row) {
-	children := make(map[string][]*sectionmodel.Section, len(sectionOrder))
+	s = normalizeUpstreamSnapshot(s)
+	children := make(map[string][]*sectionmodel.Section, len(sectionIDs))
 	rows := make(map[sectionmodel.SectionID]row)
 
 	files := append([]gitbackend.FileStatus(nil), s.status.Files...)
@@ -74,48 +69,110 @@ func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]ro
 	}
 	addCommits("unpushed", s.upstream.Ahead)
 	addCommits("unpulled", s.upstream.Behind)
-	addCommits("recent", s.recent)
+	if len(s.upstream.Ahead) == 0 {
+		addCommits("recent", s.recent)
+	}
 
-	roots := make([]*sectionmodel.Section, 0, len(sectionOrder))
-	for _, spec := range sectionOrder {
-		id := sectionmodel.SectionID("status/" + spec.id)
-		title := fmt.Sprintf("%s  (%d)", spec.title, len(children[spec.id]))
-		roots = append(roots, sectionmodel.NewSection(id, title, children[spec.id]...))
-		rows[id] = row{id: id, kind: rowHeading, depth: 1, section: spec.id}
+	titles := map[string]string{
+		"untracked": "Untracked files", "unstaged": "Unstaged changes", "staged": "Staged changes",
+		"unpushed": "Unmerged into " + sanitizeSingleLine(s.summary.Upstream),
+		"unpulled": "Unpulled from " + sanitizeSingleLine(s.summary.Upstream),
+		"recent":   "Recent commits",
+	}
+	roots := make([]*sectionmodel.Section, 0, len(sectionIDs))
+	for _, section := range sectionIDs {
+		if len(children[section]) == 0 {
+			continue
+		}
+		id := sectionmodel.SectionID("status/" + section)
+		title := strings.TrimSpace(titles[section])
+		if section != "recent" {
+			count := fmt.Sprintf("%d", len(children[section]))
+			if (section == "unpushed" && s.aheadTruncated) || (section == "unpulled" && s.behindTruncated) {
+				count += "+"
+			}
+			title = fmt.Sprintf("%s (%s)", title, count)
+		}
+		roots = append(roots, sectionmodel.NewSection(id, title, children[section]...))
+		rows[id] = row{id: id, kind: rowHeading, depth: 1, section: section}
 	}
 	return roots, rows
 }
 
 func addFile(children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row, section string, kind rowKind, path string, change gitbackend.Change) {
 	id := sectionmodel.SectionID("status/" + section + "/file/" + path)
-	title := changeMark(change) + " " + sanitizeSingleLine(filepath.ToSlash(path))
+	title := sanitizeSingleLine(filepath.ToSlash(path))
+	if kind != rowUntracked {
+		title = fmt.Sprintf("%-11s%s", changeWord(change), title)
+	}
 	children[section] = append(children[section], sectionmodel.NewSection(id, title))
 	rows[id] = row{id: id, kind: kind, path: path, depth: 2, section: section}
 }
 
-func changeMark(c gitbackend.Change) string {
+func changeWord(c gitbackend.Change) string {
 	switch c {
 	case gitbackend.ChangeAdded, gitbackend.ChangeUntracked:
-		return "A"
+		return "new file"
 	case gitbackend.ChangeDeleted:
-		return "D"
+		return "deleted"
 	case gitbackend.ChangeRenamed:
-		return "R"
+		return "renamed"
 	case gitbackend.ChangeCopied:
-		return "C"
+		return "copied"
 	case gitbackend.ChangeTypeChanged:
-		return "T"
+		return "type changed"
 	case gitbackend.ChangeUnmerged:
-		return "U"
+		return "unmerged"
 	default:
-		return "M"
+		return "modified"
 	}
 }
 
 func commitTitle(c gitbackend.Commit) string {
-	idRunes := []rune(sanitizeSingleLine(c.ID))
-	if len(idRunes) > 8 {
-		idRunes = idRunes[:8]
+	id := sanitizeSingleLine(c.ShortID)
+	if id == "" {
+		idRunes := []rune(sanitizeSingleLine(c.ID))
+		if len(idRunes) > 7 {
+			idRunes = idRunes[:7]
+		}
+		id = string(idRunes)
 	}
-	return fmt.Sprintf("%s  %s", string(idRunes), sanitizeSingleLine(strings.TrimSpace(c.Subject)))
+	parts := []string{id}
+	for _, ref := range strings.Split(sanitizeSingleLine(c.Refs), ", ") {
+		ref = strings.TrimSpace(ref)
+		ref = strings.TrimPrefix(ref, "tag: ")
+		if strings.HasPrefix(ref, "HEAD -> ") {
+			ref = strings.TrimPrefix(ref, "HEAD -> ")
+		}
+		if ref == "HEAD" {
+			ref = "@"
+		}
+		if ref != "" {
+			parts = append(parts, ref)
+		}
+	}
+	if subject := sanitizeSingleLine(strings.TrimSpace(c.Subject)); subject != "" {
+		parts = append(parts, subject)
+	}
+	return strings.Join(parts, " ")
+}
+
+func normalizeUpstreamSnapshot(s snapshot) snapshot {
+	normalize := func(commits []gitbackend.Commit, exact int, hasExact bool, truncated bool) ([]gitbackend.Commit, bool) {
+		if hasExact && exact <= len(commits) {
+			commits = commits[:exact]
+			if exact <= 256 {
+				truncated = false
+			}
+		}
+		if len(commits) > 256 {
+			commits = commits[:256]
+			truncated = true
+		}
+		return commits, truncated
+	}
+	hasExact := s.summary.Upstream != ""
+	s.upstream.Ahead, s.aheadTruncated = normalize(s.upstream.Ahead, s.summary.Ahead, hasExact, s.aheadTruncated)
+	s.upstream.Behind, s.behindTruncated = normalize(s.upstream.Behind, s.summary.Behind, hasExact, s.behindTruncated)
+	return s
 }

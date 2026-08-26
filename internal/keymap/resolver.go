@@ -1,199 +1,211 @@
-// Package keymap resolves key strings into UI-independent actions.
 package keymap
 
-// View identifies the active application view.
-type View uint8
+import "strings"
 
-const (
-	ViewNone View = iota
-	ViewStatus
-	ViewLog
-	ViewBranches
-)
-
-// Section identifies the semantic status area under the cursor.
-type Section uint8
-
-const (
-	SectionNone Section = iota
-	SectionUnstaged
-	SectionStaged
-)
-
-// Context is the state relevant to conditional key bindings.
-type Context struct {
-	View    View
-	Section Section
-}
-
-// Action is a command understood by the application update loop.
-type Action uint8
-
-const (
-	ActionNone Action = iota
-	ActionMoveDown
-	ActionMoveUp
-	ActionFirst
-	ActionLast
-	ActionRefresh
-	ActionStage
-	ActionUnstage
-	ActionDiscard
-	ActionCommit
-	ActionSwitchBranch
-	ActionFetch
-	ActionPush
-)
-
-// Result describes how a key was resolved. Prefix is populated while Pending
-// so a status line can display the keys awaiting completion.
 type Result struct {
-	Action  Action
+	Command CommandID
+	Binding *Binding
 	Handled bool
 	Pending bool
 	Prefix  string
+	Reason  string
 }
 
-type prefixState uint8
+type trieNode struct {
+	children map[string]*trieNode
+	binding  *Binding
+}
 
-const (
-	prefixNone prefixState = iota
-	prefixG
-	prefixCommit
-	prefixBranch
-	prefixFetch
-	prefixPush
-)
-
-// Resolver is an explicit prefix state machine. A Resolver should be retained
-// by the update loop rather than recreated for every key.
+// Resolver is a generic sequence trie. It has no command-specific prefix state
+// and therefore supports arbitrary-length and nested canonical token sequences.
 type Resolver struct {
-	state prefixState
-	view  View
+	root, node    *trieNode
+	context       Context
+	tokens        []string
+	completed     *Binding
+	transient     string
+	transientBase int
 }
 
-// NewResolver returns an idle resolver.
-func NewResolver() *Resolver { return &Resolver{} }
-
-// PendingPrefix returns text suitable for a status-line prefix indicator.
-func (r *Resolver) PendingPrefix() string { return prefixText(r.state) }
-
-// Reset cancels a pending sequence.
+func NewResolver() *Resolver              { return &Resolver{} }
+func (r *Resolver) PendingPrefix() string { return strings.Join(r.tokens, " ") }
 func (r *Resolver) Reset() {
-	r.state = prefixNone
-	r.view = ViewNone
+	r.root, r.node, r.tokens, r.completed, r.transient, r.transientBase = nil, nil, nil, nil, "", 0
+}
+func (r *Resolver) ActiveTransient() string { return r.transient }
+func (r *Resolver) PendingSuffix() string {
+	if r.transientBase >= len(r.tokens) {
+		return ""
+	}
+	return strings.Join(r.tokens[r.transientBase:], " ")
 }
 
-// Feed consumes one Bubble Tea-style key string.
+// ContinueTransient discards a partially consumed suffix while retaining the
+// active transient invocation. UIs use this after handling an infix through
+// their typed option editor so the next suffix starts at the transient root.
+func (r *Resolver) ContinueTransient() bool {
+	if r.transient == "" || r.transientBase > len(r.tokens) {
+		return false
+	}
+	r.tokens = r.tokens[:r.transientBase]
+	r.buildTransient(r.context)
+	return true
+}
+
 func (r *Resolver) Feed(context Context, key string) Result {
-	if r.state != prefixNone {
+	if len(r.tokens) > 0 {
 		if key == "esc" {
 			r.Reset()
 			return Result{Handled: true}
 		}
-		// Prefixes belong to the view in which they started. If focus changes,
-		// cancel and interpret this key normally in the new context.
-		if context.View != r.view {
+		if context.View != r.context.View || context.Scheme != r.context.Scheme {
 			r.Reset()
-			return r.feedIdle(context, key)
+			return r.Feed(context, key)
 		}
-		return r.feedPending(key)
+		return r.advance(context, key)
 	}
-	return r.feedIdle(context, key)
+	r.build(context)
+	return r.advance(context, key)
 }
 
-// Flush resolves an ambiguous complete prefix (currently a single g), and
-// cancels command prefixes that still require another key.
 func (r *Resolver) Flush(context Context) Result {
-	if r.state == prefixNone {
+	if len(r.tokens) == 0 {
 		return Result{}
 	}
-	state, view := r.state, r.view
+	b := r.completed
 	r.Reset()
-	if state == prefixG && context.View == view && view == ViewStatus {
-		return actionResult(ActionRefresh)
+	if b == nil {
+		return Result{Handled: true}
 	}
-	return Result{Handled: true}
+	return resultFor(*b, context)
 }
 
-func (r *Resolver) feedIdle(context Context, key string) Result {
-	if context.View != ViewStatus {
+func (r *Resolver) advance(context Context, key string) Result {
+	next := r.node.children[key]
+	if next == nil {
+		r.Reset()
 		return Result{}
 	}
-	switch key {
-	case "j":
-		return actionResult(ActionMoveDown)
-	case "k":
-		return actionResult(ActionMoveUp)
-	case "G":
-		return actionResult(ActionLast)
-	case "s":
-		if context.Section == SectionUnstaged {
-			return actionResult(ActionStage)
-		}
-	case "u":
-		if context.Section == SectionStaged {
-			return actionResult(ActionUnstage)
-		}
-	case "x":
-		if context.Section == SectionUnstaged {
-			return actionResult(ActionDiscard)
-		}
-	case "g":
-		return r.start(prefixG, context.View)
-	case "c":
-		return r.start(prefixCommit, context.View)
-	case "b":
-		return r.start(prefixBranch, context.View)
-	case "f":
-		return r.start(prefixFetch, context.View)
-	case "P":
-		return r.start(prefixPush, context.View)
+	r.node = next
+	r.tokens = append(r.tokens, key)
+	r.completed = next.binding
+	if len(next.children) > 0 {
+		return Result{Handled: true, Pending: true, Prefix: r.PendingPrefix(), Binding: next.binding}
 	}
-	return Result{}
-}
-
-func (r *Resolver) feedPending(key string) Result {
-	state := r.state
+	b := next.binding
+	if b == nil {
+		r.Reset()
+		return Result{}
+	}
+	if b.Handler == HandlerPrefix {
+		r.transient = b.ChildTransient
+		if r.transient == "" {
+			r.transient = b.UpstreamCommand
+		}
+		r.transientBase = len(r.tokens)
+		r.buildTransient(context)
+		return Result{Handled: true, Pending: true, Prefix: r.PendingPrefix(), Binding: b}
+	}
 	r.Reset()
-	switch {
-	case state == prefixG && key == "g":
-		return actionResult(ActionFirst)
-	case state == prefixCommit && key == "c":
-		return actionResult(ActionCommit)
-	case state == prefixBranch && key == "b":
-		return actionResult(ActionSwitchBranch)
-	case state == prefixFetch && key == "f":
-		return actionResult(ActionFetch)
-	case state == prefixPush && key == "p":
-		return actionResult(ActionPush)
-	default:
-		// The unmatched key is not claimed, allowing the caller to handle it.
-		return Result{}
+	return resultFor(*b, context)
+}
+
+func resultFor(b Binding, context Context) Result {
+	ok, reason := b.Available(context)
+	result := Result{Handled: true, Binding: &b, Reason: reason}
+	if b.Handler == HandlerPrefix {
+		result.Pending = true
+		result.Prefix = strings.Join(b.Sequence, " ")
+		return result
+	}
+	if b.Handler == HandlerExecute && ok {
+		result.Command = b.Command
+	}
+	return result
+}
+
+func (r *Resolver) build(context Context) {
+	r.root = &trieNode{children: map[string]*trieNode{}}
+	r.node = r.root
+	r.context = context
+	for i := range registry {
+		b := &registry[i]
+		if b.Scheme != context.Scheme || b.Context != ContextStatus {
+			continue
+		}
+		n := r.root
+		for _, token := range b.Sequence {
+			if n.children[token] == nil {
+				n.children[token] = &trieNode{children: map[string]*trieNode{}}
+			}
+			n = n.children[token]
+		}
+		n.binding = b
 	}
 }
 
-func (r *Resolver) start(state prefixState, view View) Result {
-	r.state = state
-	r.view = view
-	return Result{Handled: true, Pending: true, Prefix: prefixText(state)}
+func (r *Resolver) buildTransient(context Context) {
+	r.root = &trieNode{children: map[string]*trieNode{}}
+	r.node = r.root
+	r.completed = nil
+	for i := range registry {
+		b := &registry[i]
+		if b.Scheme != context.Scheme || b.Transient != r.transient {
+			continue
+		}
+		n := r.root
+		for _, token := range b.LocalSequence {
+			if n.children[token] == nil {
+				n.children[token] = &trieNode{children: map[string]*trieNode{}}
+			}
+			n = n.children[token]
+		}
+		// Preserve the first conditional occurrence. UI condition selection can
+		// replace it before dispatch; the resolver must never erase duplicates.
+		if n.binding == nil {
+			n.binding = b
+		}
+	}
 }
 
-func actionResult(action Action) Result { return Result{Action: action, Handled: true} }
-
-func prefixText(state prefixState) string {
-	switch state {
-	case prefixG:
-		return "g"
-	case prefixCommit:
-		return "c"
-	case prefixBranch:
-		return "b"
-	case prefixFetch:
-		return "f"
-	case prefixPush:
-		return "P"
-	default:
-		return ""
+// Find returns a canonical registry binding for menu/footer integration.
+func Find(scheme Scheme, context string, sequence ...string) (Binding, bool) {
+	var infix *Binding
+	for _, b := range registry {
+		if b.Scheme == scheme && b.Context == context && strings.Join(b.Sequence, "\x00") == strings.Join(sequence, "\x00") {
+			if b.Handler != HandlerInfix {
+				return b, true
+			}
+			copy := b
+			infix = &copy
+		}
 	}
+	if infix != nil {
+		return *infix, true
+	}
+	return Binding{}, false
+}
+
+func BindingsFor(scheme Scheme, context string) []Binding {
+	var out []Binding
+	for _, b := range registry {
+		if b.Scheme == scheme && b.Context == context {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+func PrimaryBindings(scheme Scheme) []Binding {
+	order := []CommandID{"transient.commit", "transient.fetch", "transient.push", "transient.branch"}
+	var out []Binding
+	for _, command := range order {
+		for _, b := range registry {
+			if b.Scheme == scheme && b.Context == ContextStatus && b.Command == command {
+				out = append(out, b)
+				break
+			}
+		}
+	}
+	return out
 }
