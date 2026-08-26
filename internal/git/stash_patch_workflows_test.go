@@ -67,6 +67,7 @@ func TestStashWorkflowOptionsAndTypedInspection(t *testing.T) {
 	if err := repo.StashApply(recorded, stashes[0].Ref, StashApplyOptions{}); err != nil {
 		t.Fatalf("StashApply: %v", err)
 	}
+	assertRecordedArgs(t, records, []string{"stash", "apply", stashes[0].ID})
 	if got := r.read("tracked.txt"); got != "stashed\n" {
 		t.Fatalf("applied contents = %q", got)
 	}

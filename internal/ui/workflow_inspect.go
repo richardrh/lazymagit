@@ -34,7 +34,6 @@ var inspectSuffixes = map[string]WorkflowHandler{
 	"magit-diff-staged":       inspectDiffStaged,
 	"magit-diff-working-tree": inspectDiffWorkingTree,
 	"magit-show-commit":       inspectShowCommit,
-	"magit-stash-show":        inspectShowStash,
 
 	// The useful, stateless portion of magit-diff-refresh.
 	"magit-diff-refresh": inspectDiffDWIM,
@@ -208,7 +207,7 @@ func inspectShowCommit(m *Model, _ WorkflowCommand) tea.Cmd {
 	})
 }
 
-func inspectShowStash(m *Model, _ WorkflowCommand) tea.Cmd {
+func inspectShowLatestStash(m *Model, _ WorkflowCommand) tea.Cmd {
 	return loadInspection(m, "Stash", func(ctx context.Context) (string, error) {
 		result, err := m.repo.QueryShowRevision(ctx, gitbackend.ShowRevisionQuery{Revision: "stash", Stat: true, Patch: true, OutputLimit: inspectOutputLimit})
 		return truncationNote(result.Truncated) + result.Detail, err
@@ -258,7 +257,7 @@ func inspectCompareCommit(m *Model, command WorkflowCommand) tea.Cmd {
 	return inspectShowCommit(m, command)
 }
 func inspectCompareStash(m *Model, command WorkflowCommand) tea.Cmd {
-	return inspectShowStash(m, command)
+	return inspectShowLatestStash(m, command)
 }
 func inspectCompareRange(m *Model, command WorkflowCommand) tea.Cmd {
 	return inspectDiffRange(m, command)

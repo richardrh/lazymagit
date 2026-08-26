@@ -9,12 +9,13 @@ import (
 )
 
 var (
-	ErrConfirmationRequired = errors.New("confirmation required")
-	ErrStalePlan            = errors.New("workflow plan is stale")
-	ErrEditorRequired       = errors.New("editor required")
-	ErrTooLarge             = errors.New("workflow input or output is too large")
-	ErrInteractiveRequired  = errors.New("interactive execution requires explicit permission")
-	ErrUnsafeExecution      = errors.New("unsafe execution requires explicit permission")
+	ErrConfirmationRequired            = errors.New("confirmation required")
+	ErrStalePlan                       = errors.New("workflow plan is stale")
+	ErrEditorRequired                  = errors.New("editor required")
+	ErrTooLarge                        = errors.New("workflow input or output is too large")
+	ErrInteractiveRequired             = errors.New("interactive execution requires explicit permission")
+	ErrUnsafeExecution                 = errors.New("unsafe execution requires explicit permission")
+	ErrReviewedStashRemovalUnsupported = errors.New("exact reviewed stash removal is unsupported by stock Git")
 )
 
 // ConfirmationToken binds a confirmation to the immutable identity that was

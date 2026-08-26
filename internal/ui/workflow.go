@@ -243,6 +243,9 @@ type WorkflowDialog struct {
 	Validate            func(WorkflowValues) error
 	Preflight           func(context.Context, WorkflowValues) error
 	Submit              func(context.Context, WorkflowValues) error
+	// Run dispatches a UI-thread command after validation and closes the dialog.
+	// It is mutually exclusive with mutation and preflight callbacks.
+	Run func(WorkflowValues) tea.Cmd
 	// ReviewPreflight and SubmitReview opt into reviewed two-phase mutation.
 	// The first activation asynchronously obtains a review; only a distinct
 	// second activation executes it. Legacy Preflight/Submit remain supported.
@@ -376,7 +379,11 @@ func validateWorkflow(d WorkflowDialog, values WorkflowValues) error {
 			return fmt.Errorf("%s is required", field.Label)
 		}
 	}
-	if d.ReviewPreflight != nil || d.SubmitReview != nil {
+	if d.Run != nil {
+		if d.Submit != nil || d.Preflight != nil || d.ReviewPreflight != nil || d.SubmitReview != nil {
+			return errors.New("workflow run callback is mutually exclusive with submit and preflight callbacks")
+		}
+	} else if d.ReviewPreflight != nil || d.SubmitReview != nil {
 		if d.ReviewPreflight == nil || d.SubmitReview == nil {
 			return errors.New("reviewed workflow requires both preflight and submit callbacks")
 		}
@@ -506,6 +513,12 @@ func (m *Model) handleWorkflowKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 func (m *Model) submitWorkflow(values WorkflowValues) tea.Cmd {
 	w := m.workflow
+	if w.dialog.Run != nil {
+		run := w.dialog.Run
+		m.workflow = nil
+		m.setMode(modeStatus)
+		return run(cloneWorkflowValues(values))
+	}
 	name, submit := strings.TrimSpace(w.dialog.Operation), w.dialog.Submit
 	if name == "" {
 		name = strings.TrimSpace(w.dialog.Title)

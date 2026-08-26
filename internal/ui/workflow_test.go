@@ -254,3 +254,42 @@ func TestWorkflowRoutingCopiesOptionsAndDialogPreflight(t *testing.T) {
 		t.Fatal("workflow rendering emitted unsafe control data")
 	}
 }
+
+func TestWorkflowRunCallbackExclusivity(t *testing.T) {
+	run := func(WorkflowValues) tea.Cmd { return nil }
+	for name, dialog := range map[string]WorkflowDialog{
+		"submit":    {Run: run, Submit: func(context.Context, WorkflowValues) error { return nil }},
+		"preflight": {Run: run, Preflight: func(context.Context, WorkflowValues) error { return nil }},
+		"review": {Run: run,
+			ReviewPreflight: func(context.Context, WorkflowValues) (WorkflowReview, error) { return WorkflowReview{}, nil },
+			SubmitReview:    func(context.Context, WorkflowValues, WorkflowReview) error { return nil }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateWorkflow(dialog, WorkflowValues{}); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+				t.Fatalf("Run conflict validation = %v", err)
+			}
+		})
+	}
+	if err := validateWorkflow(WorkflowDialog{Run: run}, WorkflowValues{}); err != nil {
+		t.Fatalf("standalone Run callback rejected: %v", err)
+	}
+}
+
+func TestWorkflowRunInvokesOnSubmissionAndClosesDialog(t *testing.T) {
+	type runMsg struct{ value string }
+	m := New(&gitbackend.Repository{})
+	m.loading = false
+	invoked := false
+	m.OpenWorkflow(WorkflowDialog{Fields: []WorkflowField{{Name: "value", Kind: WorkflowText, Value: "selected"}}, Run: func(values WorkflowValues) tea.Cmd {
+		invoked = true
+		return func() tea.Msg { return runMsg{value: values["value"]} }
+	}})
+	m.workflow.field = len(m.workflow.dialog.Fields)
+	_, cmd := m.handleWorkflowKey(keyMsg("enter"))
+	if !invoked || cmd == nil || m.workflow != nil || m.mode != modeStatus {
+		t.Fatalf("Run dispatch state: invoked=%v cmd=%v workflow=%#v mode=%v", invoked, cmd != nil, m.workflow, m.mode)
+	}
+	if msg, ok := cmd().(runMsg); !ok || msg.value != "selected" {
+		t.Fatalf("Run command message = %#v", msg)
+	}
+}

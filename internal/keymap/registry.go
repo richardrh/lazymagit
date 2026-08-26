@@ -383,7 +383,7 @@ func transientBindings(m manifest) []Binding {
 			category, reason := UnavailableMissing, "suffix: not implemented"
 			if kind == KindInfix {
 				handler, category, reason = HandlerInfix, UnavailableInfix, "infix: argument editing is not implemented"
-			} else if child := transientChild(tr.Name, entry.Command, names, orphans); child != "" {
+			} else if child := transientChild(tr.Name, entry.Command, names, orphans); child != "" && child != tr.Name {
 				childTransient = child
 				command, handler, availability, parity, category, reason = transientCommandID(child), HandlerPrefix, AvailabilityAlways, ParityPartial, UnavailableNone, ""
 			} else if id, ok := implemented[tr.Name+"\x00"+entry.Command]; ok {
@@ -550,11 +550,19 @@ func TransientByName(name string) (Transient, bool) {
 // installed by workflow domains, so the registry and generated ledger never
 // call a connected workflow "missing" merely because keymap cannot import ui.
 var transientCapability = map[string]map[string]bool{
-	"magit-branch": setOf("magit-checkout", "magit-branch-checkout", "magit-branch-orphan", "magit-branch-and-checkout", "magit-worktree-checkout", "magit-branch-create", "magit-worktree-branch", "magit-branch-configure", "magit-branch-rename", "magit-branch-reset", "magit-branch-delete"),
-	"magit-commit": setOf("magit-commit-create", "magit-commit-extend", "magit-commit-amend", "magit-commit-reword", "magit-commit-fixup", "magit-commit-squash", "magit-commit-alter", "magit-commit-augment", "magit-commit-revise"),
-	"magit-fetch":  setOf("magit-fetch-from-pushremote", "magit-fetch-from-upstream", "magit-fetch-other", "magit-fetch-all", "magit-fetch-branch", "magit-fetch-refspec", "magit-fetch-modules", "magit-branch-configure"),
-	"magit-push":   setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),
-	"magit-remote": setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
+	"magit-branch":        setOf("magit-checkout", "magit-branch-checkout", "magit-branch-orphan", "magit-branch-and-checkout", "magit-worktree-checkout", "magit-branch-create", "magit-worktree-branch", "magit-branch-configure", "magit-branch-rename", "magit-branch-reset", "magit-branch-delete"),
+	"magit-commit":        setOf("magit-commit-create", "magit-commit-extend", "magit-commit-amend", "magit-commit-reword", "magit-commit-fixup", "magit-commit-squash", "magit-commit-alter", "magit-commit-augment", "magit-commit-revise"),
+	"magit-diff":          setOf("magit-stash-show"),
+	"magit-fetch":         setOf("magit-fetch-from-pushremote", "magit-fetch-from-upstream", "magit-fetch-other", "magit-fetch-all", "magit-fetch-branch", "magit-fetch-refspec", "magit-fetch-modules", "magit-branch-configure"),
+	"magit-fetch-modules": setOf("magit-fetch-modules"),
+	"magit-diff-refresh":  setOf("magit-diff-refresh"),
+	"magit-log-refresh":   setOf("magit-log-refresh"),
+	"magit-patch-apply":   setOf("magit-patch-apply"),
+	"magit-patch-create":  setOf("magit-patch-create"),
+	"magit-push":          setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),
+	"magit-remote":        setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
+	"magit-stash":         setOf("magit-stash-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),
+	"magit-stash-push":    setOf("magit-stash-push"),
 }
 
 func setOf(values ...string) map[string]bool {
@@ -593,6 +601,10 @@ func OptionConsumerCommands(prefix, option string) []string {
 		if option == "transient:magit-remote:-f" {
 			return []string{"magit-remote-add"}
 		}
+	case "z":
+		return []string{"magit-stash-both", "magit-stash-keep-index"}
+	case "z P":
+		return []string{"magit-stash-push"}
 	}
 	return nil
 }

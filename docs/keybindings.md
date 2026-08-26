@@ -279,7 +279,7 @@ All manifest transients are generated from effective status bindings and transie
 |---|---|---|---|---|---|---|
 | `-f` | `transient:magit-commit-absorb:--force` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-v` | `transient:magit-commit-absorb:--verbose` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `x` | `magit-commit-absorb` | **suffix** | Actions |  | `partial` |  |
+| `x` | `magit-commit-absorb` | **suffix** | Actions |  | `missing` | suffix: not implemented |
 
 ### `c x` — magit-commit-autofixup (4 occurrences)
 
@@ -288,7 +288,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-c` | `magit-autofixup:--context` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-s` | `magit-autofixup:--strict` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-v` | `transient:magit-commit-autofixup:-vv` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `x` | `magit-commit-autofixup` | **suffix** | Actions |  | `partial` |  |
+| `x` | `magit-commit-autofixup` | **suffix** | Actions |  | `missing` | suffix: not implemented |
 
 ### `d` — magit-diff (8 occurrences)
 
@@ -301,13 +301,13 @@ All manifest transients are generated from effective status bindings and transie
 | `s` | `magit-diff-staged` | **suffix** | Actions |  | `missing` | suffix: not implemented |
 | `w` | `magit-diff-working-tree` | **suffix** | Actions |  | `missing` | suffix: not implemented |
 | `c` | `magit-show-commit` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `t` | `magit-stash-show` | **suffix** | Actions |  | `missing` | suffix: not implemented |
+| `t` | `magit-stash-show` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `D` — magit-diff-refresh (9 occurrences)
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `g` | `magit-diff-refresh` | **suffix** | Refresh |  | `partial` |  |
+| `g` | `magit-diff-refresh` | **suffix** | Refresh |  | `partial` | TUI workflow handler (startup-validated) |
 | `s` | `transient-set-and-exit` | **suffix** | Refresh |  | `missing` | suffix: not implemented |
 | `w` | `transient-save-and-exit` | **suffix** | Refresh |  | `missing` | suffix: not implemented |
 | `t` | `magit-diff-toggle-refine-hunk` | **suffix** | Toggle |  | `missing` | suffix: not implemented |
@@ -412,7 +412,7 @@ All manifest transients are generated from effective status bindings and transie
 |---|---|---|---|---|---|---|
 | `-v` | `transient:magit-fetch-modules:--verbose` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-j` | `transient:magit-fetch-modules:--jobs=` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `m` | `magit-fetch-modules` | **suffix** | Action |  | `partial` |  |
+| `m` | `magit-fetch-modules` | **suffix** | Action |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `E t` — magit-git-mergetool (8 occurrences)
 
@@ -425,7 +425,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-b` | `magit-mergetool.keepBackup` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-k` | `magit-mergetool.keepTemporaries` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-w` | `magit-mergetool.writeToTemp` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
-| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `partial` |  |
+| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `missing` | suffix: not implemented |
 
 ### `i` — magit-gitignore (8 occurrences)
 
@@ -471,7 +471,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-g` | `transient:magit-log-refresh:--graph` | **infix** | Arguments | if-not-mode: magit-log-mode | `missing` | infix: argument editing is not implemented |
 | `-c` | `transient:magit-log-refresh:--color` | **infix** | Arguments | if-not-mode: magit-log-mode | `missing` | infix: argument editing is not implemented |
 | `-d` | `transient:magit-log-refresh:--decorate` | **infix** | Arguments | if-not-mode: magit-log-mode | `missing` | infix: argument editing is not implemented |
-| `g` | `magit-log-refresh` | **suffix** | Refresh |  | `partial` |  |
+| `g` | `magit-log-refresh` | **suffix** | Refresh |  | `partial` | TUI workflow handler (startup-validated) |
 | `s` | `transient-set-and-exit` | **suffix** | Refresh |  | `missing` | suffix: not implemented |
 | `w` | `transient-save-and-exit` | **suffix** | Refresh |  | `missing` | suffix: not implemented |
 | `L` | `magit-toggle-margin` | **suffix** | Margin |  | `missing` | suffix: not implemented |
@@ -538,7 +538,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-i` | `transient:magit-patch-apply:--index` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-c` | `transient:magit-patch-apply:--cached` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-3` | `transient:magit-patch-apply:--3way` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `a` | `magit-patch-apply` | **suffix** | Actions |  | `partial` |  |
+| `a` | `magit-patch-apply` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `W c` — magit-patch-create (23 occurrences)
 
@@ -566,7 +566,7 @@ All manifest transients are generated from effective status bindings and transie
 | `--` | `magit:--` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |
 | `-b` | `transient:magit-patch-create:--ignore-space-change` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |
 | `-w` | `transient:magit-patch-create:--ignore-all-space` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |
-| `c` | `magit-patch-create` | **suffix** | Actions |  | `partial` |  |
+| `c` | `magit-patch-create` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `F` — magit-pull (15 occurrences)
 
@@ -764,36 +764,36 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-u` | `transient:magit-stash:--include-untracked` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-a` | `transient:magit-stash:--all` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `z` | `magit-stash-both` | **suffix** | Stash |  | `missing` | suffix: not implemented |
+| `-u` | `transient:magit-stash:--include-untracked` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-a` | `transient:magit-stash:--all` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `z` | `magit-stash-both` | **suffix** | Stash |  | `partial` | TUI workflow handler (startup-validated) |
 | `i` | `magit-stash-index` | **suffix** | Stash |  | `missing` | suffix: not implemented |
 | `w` | `magit-stash-worktree` | **suffix** | Stash |  | `missing` | suffix: not implemented |
-| `x` | `magit-stash-keep-index` | **suffix** | Stash |  | `missing` | suffix: not implemented |
+| `x` | `magit-stash-keep-index` | **suffix** | Stash |  | `partial` | TUI workflow handler (startup-validated) |
 | `P` | `magit-stash-push` | **suffix** | Stash |  | `partial` |  |
 | `Z` | `magit-snapshot-both` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
 | `I` | `magit-snapshot-index` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
 | `W` | `magit-snapshot-worktree` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
 | `r` | `magit-wip-commit` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
-| `a` | `magit-stash-apply` | **suffix** | Use |  | `missing` | suffix: not implemented |
+| `a` | `magit-stash-apply` | **suffix** | Use |  | `partial` | TUI workflow handler (startup-validated) |
 | `p` | `magit-stash-pop` | **suffix** | Use |  | `missing` | suffix: not implemented |
 | `k` | `magit-stash-drop` | **suffix** | Use |  | `missing` | suffix: not implemented |
-| `l` | `magit-stash-list` | **suffix** | Inspect |  | `missing` | suffix: not implemented |
-| `v` | `magit-stash-show` | **suffix** | Inspect |  | `missing` | suffix: not implemented |
-| `b` | `magit-stash-branch` | **suffix** | Transform |  | `missing` | suffix: not implemented |
+| `l` | `magit-stash-list` | **suffix** | Inspect |  | `partial` | TUI workflow handler (startup-validated) |
+| `v` | `magit-stash-show` | **suffix** | Inspect |  | `partial` | TUI workflow handler (startup-validated) |
+| `b` | `magit-stash-branch` | **suffix** | Transform |  | `partial` | TUI workflow handler (startup-validated) |
 | `B` | `magit-stash-branch-here` | **suffix** | Transform |  | `missing` | suffix: not implemented |
-| `f` | `magit-stash-format-patch` | **suffix** | Transform |  | `missing` | suffix: not implemented |
+| `f` | `magit-stash-format-patch` | **suffix** | Transform |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `z P` — magit-stash-push (6 occurrences)
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `--` | `magit:--` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-u` | `transient:magit-stash-push:--include-untracked` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-a` | `transient:magit-stash-push:--all` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-k` | `transient:magit-stash-push:--keep-index` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-K` | `transient:magit-stash-push:--no-keep-index` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `P` | `magit-stash-push` | **suffix** | Actions |  | `partial` |  |
+| `--` | `magit:--` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-u` | `transient:magit-stash-push:--include-untracked` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-a` | `transient:magit-stash-push:--all` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-k` | `transient:magit-stash-push:--keep-index` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-K` | `transient:magit-stash-push:--no-keep-index` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `P` | `magit-stash-push` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `j` — magit-status-jump (13 occurrences)
 

@@ -138,7 +138,11 @@ func (r *Repository) StashPush(ctx context.Context, options StashPushOptions) er
 type StashApplyOptions struct{ Index bool }
 
 func (r *Repository) StashApply(ctx context.Context, ref string, options StashApplyOptions) error {
-	return r.stashApplyOrPop(ctx, "apply", ref, options)
+	_, oid, err := r.stashIdentity(ctx, ref)
+	if err != nil {
+		return err
+	}
+	return r.stashApplyArgument(ctx, "apply", oid, options)
 }
 
 func (r *Repository) StashPop(ctx context.Context, ref string, options StashApplyOptions) error {
@@ -146,16 +150,24 @@ func (r *Repository) StashPop(ctx context.Context, ref string, options StashAppl
 }
 
 func (r *Repository) stashApplyOrPop(ctx context.Context, operation, ref string, options StashApplyOptions) error {
-	args := []string{"stash", operation}
-	if options.Index {
-		args = append(args, "--index")
-	}
+	argument := ""
 	if ref != "" {
 		selector, err := r.stashSelector(ctx, ref)
 		if err != nil {
 			return err
 		}
-		args = append(args, selector)
+		argument = selector
+	}
+	return r.stashApplyArgument(ctx, operation, argument, options)
+}
+
+func (r *Repository) stashApplyArgument(ctx context.Context, operation, argument string, options StashApplyOptions) error {
+	args := []string{"stash", operation}
+	if options.Index {
+		args = append(args, "--index")
+	}
+	if argument != "" {
+		args = append(args, argument)
 	}
 	return r.run(ctx, args...)
 }
@@ -181,14 +193,21 @@ func (r *Repository) StashClear(ctx context.Context, options ConfirmationOptions
 // StashBranch creates and switches to branch at a stash's original base. Git
 // drops the stash after applying it successfully.
 func (r *Repository) StashBranch(ctx context.Context, branch, ref string) error {
-	if _, err := r.output(ctx, "check-ref-format", "--branch", branch); err != nil {
-		return fmt.Errorf("invalid stash branch name: %w", err)
+	if err := r.validateStashBranchName(ctx, branch); err != nil {
+		return err
 	}
 	selector, err := r.stashSelector(ctx, ref)
 	if err != nil {
 		return err
 	}
 	return r.run(ctx, "stash", "branch", branch, selector)
+}
+
+func (r *Repository) validateStashBranchName(ctx context.Context, branch string) error {
+	if _, err := r.output(ctx, "check-ref-format", "--branch", branch); err != nil {
+		return fmt.Errorf("invalid stash branch name: %w", err)
+	}
+	return nil
 }
 
 func defaultStashRef(ref string) string {

@@ -141,6 +141,20 @@ func TestOccurrencesHaveStableUniqueDomainIdentity(t *testing.T) {
 	}
 }
 
+func TestSelfNamedSuffixesAreTerminalOrUnavailable(t *testing.T) {
+	for _, binding := range Registry() {
+		if binding.Scheme != SchemeMagit || binding.Kind != KindSuffix || binding.Transient != binding.UpstreamCommand {
+			continue
+		}
+		if binding.Handler == HandlerPrefix || binding.ChildTransient != "" {
+			t.Errorf("self-named suffix forms a recursive edge: %+v", binding)
+		}
+		if !transientCapability[binding.Transient][binding.UpstreamCommand] && (binding.Handler != HandlerUnsupported || binding.Availability != AvailabilityNever) {
+			t.Errorf("unsupported self-named suffix is actionable: %+v", binding)
+		}
+	}
+}
+
 func TestEveryAvailableCatalogSequenceResolvesToItsRegisteredCommand(t *testing.T) {
 	for _, scheme := range []Scheme{SchemeVim, SchemeMagit} {
 		ctx := Context{View: ViewStatus, Section: SectionUnstaged, Scheme: scheme}
