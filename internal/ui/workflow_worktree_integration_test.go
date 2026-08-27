@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func worktreeE2EText(t *testing.T, m *Model, value string) {
@@ -26,6 +27,46 @@ func worktreeE2EEnter(t *testing.T, m *Model) {
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 }
 
+func TestWorktreeBrowserShowsAndFiltersLinkedWorktrees(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base.txt", "base\n")
+	r.git("add", ".")
+	r.git("commit", "-m", "base")
+	r.git("branch", "listed-topic")
+	linked := filepath.Join(t.TempDir(), "listed")
+	r.git("worktree", "add", linked, "listed-topic")
+	m := newE2EModel(t, r)
+	m.scheme = schemeMagit
+
+	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("g"))
+	plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
+	for _, want := range []string{"primary", "listed-topic", "Close"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("worktree browser omitted %q:\n%s", want, plain)
+		}
+	}
+	values := map[string]bool{}
+	for _, choice := range m.workflow.dialog.Fields[0].Choices {
+		values[choice.Value] = true
+	}
+	primaryValue, err := filepath.EvalSymlinks(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedValue, err := filepath.EvalSymlinks(linked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !values[primaryValue] || !values[linkedValue] {
+		t.Fatalf("worktree browser values = %v", values)
+	}
+	sendE2EKey(t, m, keyMsg("listed-topic"))
+	if got := m.workflow.dialog.Fields[0].Value; got != linkedValue {
+		t.Fatalf("worktree filter selected %q, want %q", got, linkedValue)
+	}
+}
+
 func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	r := newUIE2ERepo(t)
 	r.write("base.txt", "base\n")
@@ -43,6 +84,22 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 		sendE2EKey(t, m, keyMsg("g"))
 		if m.mode != modeWorkflow || m.workflow == nil || m.workflow.dialog.Title != "Worktrees" {
 			t.Fatalf("%s g did not list worktrees", prefix)
+		}
+		if len(m.workflow.dialog.Fields) != 1 || m.workflow.dialog.Fields[0].Kind != WorkflowSearch {
+			t.Fatalf("%s g did not open searchable worktrees: %+v", prefix, m.workflow.dialog.Fields)
+		}
+		plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
+		for _, want := range []string{"primary", "Close"} {
+			if !strings.Contains(plain, want) {
+				t.Fatalf("%s g omitted %q:\n%s", prefix, want, plain)
+			}
+		}
+		primary, err := filepath.EvalSymlinks(r.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.workflow.dialog.Fields[0].Choices[0].Value; got != primary {
+			t.Fatalf("%s g primary value = %q, want %q", prefix, got, primary)
 		}
 		sendE2EKey(t, m, keyMsg("esc"))
 	}

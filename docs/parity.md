@@ -15,9 +15,9 @@ not.
 | Status file sections | Partial | Magit headings/order, independent staged/unstaged state, stable folds | Inline hunks, conflicts, operation headers |
 | Status commit sections | Partial | Magit hash/ref/subject rows, recent fallback, upstream ranges | Full decoration ordering/faces and configurable log arguments |
 | Revision inspection | Partial | Metadata, changed-file stat/names, bounded full patch | Revision-local commands and parent navigation |
-| Whole-file stage/unstage | Partial | `s`/`u`; `S` stages all tracked changes excluding untracked; `U` clears index changes while preserving the worktree; unborn branches, renames/deletions, literal paths | Region/hunk and multi-selection operations |
-| Hunk/region operations | Missing | — | Stage, unstage, discard, reverse, split and refine hunks |
-| Discard | Partial | Confirmed safe whole-file discard with destructive preflights | Mixed-state and hunk-level discard |
+| Whole-file stage/unstage | Partial | `s`/`u`; `S` stages all tracked changes excluding untracked; `U` clears index changes while preserving the worktree; unborn branches, renames/deletions, literal paths | Multi-selection operations |
+| Hunk/region operations | Partial | `[`/`]` focus hunks; `v` selects changed lines; reviewed stage, unstage, and discard regenerate and stale-check the exact patch before mutation | Split/refine hunks, arbitrary disjoint selections, binary/rename region operations |
+| Discard | Partial | Confirmed safe whole-file discard plus reviewed unstaged/staged hunk and changed-line discard | Mixed-state whole-file preservation edge cases and multi-selection discard |
 | Commit | Partial | `c c`, hooks, one-line message, responsive command catalog | Multiline editor and executable amend/fixup/squash/reword/signoff |
 | Branch | Partial | `b b` local switch; backend create/list | TUI create/delete/rename/upstream/spin-off |
 | Remote | Partial | `M a`, separate name/URL, fetch-on-add default | `remote.pushDefault` prompt, rename/remove/set-url/prune |
@@ -46,6 +46,4 @@ not.
 6. Keep destructive edge cases as mandatory regression tests before marking a
    row exact.
 
-The next core parity milestone is hunk/region staging, followed by practical
-commit/branch/pull/conflict workflows. Those provide more Magit value than
-adding rarely used top-level commands out of order.
+The next core parity milestone is practical conflict and history-editing workflows, followed by richer multi-selection patch operations. These provide more Magit value than adding rarely used top-level commands out of order.

@@ -93,7 +93,7 @@ func TestFooterPrioritizesWorkflowsAndUsesUppercasePush(t *testing.T) {
 		t.Fatalf("modal footer misleadingly exposed intercepted globals: %q", footer)
 	}
 	m.mode = modeStatus
-	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") || !strings.Contains(footer, "[/ ] hunks") {
+	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") || !strings.Contains(footer, "[ prev  ] next") {
 		t.Fatalf("wide status footer omitted process or pager controls: %q", footer)
 	}
 }
@@ -169,16 +169,24 @@ func TestDetailLineAndHunkNavigation(t *testing.T) {
 		t.Fatalf("Down offset = %d, want 1", m.detailOffset)
 	}
 	_, _ = m.Update(keyMsg("]"))
-	if m.detailOffset != 3 {
-		t.Fatalf("first hunk offset = %d, want 3", m.detailOffset)
+	if m.detailOffset != 3 || m.detailHunk != 3 || m.message != "Next hunk" {
+		t.Fatalf("first hunk offset=%d focus=%d message=%q", m.detailOffset, m.detailHunk, m.message)
 	}
 	_, _ = m.Update(keyMsg("]"))
-	if m.detailOffset != 7 {
-		t.Fatalf("next hunk offset = %d, want 7", m.detailOffset)
+	if m.detailOffset != 7 || m.detailHunk != 7 {
+		t.Fatalf("next hunk offset=%d focus=%d", m.detailOffset, m.detailHunk)
+	}
+	_, _ = m.Update(keyMsg("]"))
+	if m.detailHunk != 7 || m.message != "No next hunk" {
+		t.Fatalf("next boundary focus=%d message=%q", m.detailHunk, m.message)
 	}
 	_, _ = m.Update(keyMsg("["))
-	if m.detailOffset != 3 {
-		t.Fatalf("previous hunk offset = %d, want 3", m.detailOffset)
+	if m.detailOffset != 3 || m.detailHunk != 3 || m.message != "Previous hunk" {
+		t.Fatalf("previous hunk offset=%d focus=%d message=%q", m.detailOffset, m.detailHunk, m.message)
+	}
+	rendered := m.renderDetailPanel(60, 12)
+	if !strings.Contains(rendered, "\x1b[") || !strings.Contains(ansi.Strip(rendered), "@@ -1,2 +1,2 @@") {
+		t.Fatalf("focused hunk was not visibly rendered: %q", ansi.Strip(rendered))
 	}
 	_, _ = m.Update(keyMsg("home"))
 	if m.detailOffset != 0 {

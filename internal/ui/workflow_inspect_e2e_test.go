@@ -111,9 +111,9 @@ func TestInspectReflogShortlogAndMergedRefsThroughModelUpdate(t *testing.T) {
 	if m.workflow == nil {
 		t.Fatalf("shortlog prompt did not open: %q", m.message)
 	}
-	historyE2EReplaceField(t, m, "HEAD")
+	historyE2EReplaceField(t, m, "HEAD~1")
 	historyE2ESubmit(t, m)
-	assertInspectDetail(t, m, "Shortlog HEAD", "UI E2E Test")
+	assertInspectDetail(t, m, "Shortlog HEAD~1", "UI E2E Test")
 
 	sendInspectSequence(t, m, "y", "-", "m", "y")
 	assertInspectDetail(t, m, "References", "Local branches", "main")

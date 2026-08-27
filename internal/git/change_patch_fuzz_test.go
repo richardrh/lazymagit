@@ -23,6 +23,12 @@ func FuzzParseUnifiedDiffReparseHunk(f *testing.F) {
 			if len(doc.Files[fileIndex].Hunks) > 64 {
 				t.Skip()
 			}
+			if filePatch, err := doc.FilePatch(fileIndex); err == nil {
+				reparsed, err := ParseUnifiedDiff(filePatch)
+				if err != nil || len(reparsed.Files) != 1 || len(reparsed.Files[0].Hunks) != len(doc.Files[fileIndex].Hunks) {
+					t.Fatalf("reparse rendered file: hunks=%d err=%v\n%s", len(reparsed.Files), err, filePatch)
+				}
+			}
 			for hunkIndex := range doc.Files[fileIndex].Hunks {
 				hunkPatch, err := doc.HunkPatch(fileIndex, hunkIndex)
 				if err != nil { // Binary and rename patches are intentionally immutable.
@@ -38,6 +44,19 @@ func FuzzParseUnifiedDiffReparseHunk(f *testing.F) {
 				again, err := reparsed.HunkPatch(0, 0)
 				if err != nil || !bytes.Equal(again, hunkPatch) {
 					t.Fatalf("hunk rendering is not stable: err=%v", err)
+				}
+				lines := doc.Files[fileIndex].Hunks[hunkIndex].Lines
+				for start := range lines {
+					if lines[start].Kind == DiffLineContext {
+						continue
+					}
+					region, err := doc.ChangedLineRegionPatch(fileIndex, hunkIndex, start, start+1)
+					if err != nil {
+						t.Fatalf("render changed line %d: %v", start, err)
+					}
+					if _, err := ParseUnifiedDiff(region); err != nil {
+						t.Fatalf("reparse changed line %d: %v\n%s", start, err, region)
+					}
 				}
 			}
 		}

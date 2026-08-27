@@ -104,6 +104,11 @@ type Model struct {
 	width, height         int
 	loading               bool
 	busy                  bool
+	compact               bool
+	searching             bool
+	searchQuery           string
+	searchMatches         []sectionmodel.SectionID
+	searchIndex           int
 	message               string
 	isError               bool
 	detail                string
@@ -118,6 +123,10 @@ type Model struct {
 	branchRequest         uint64
 	stateGeneration       uint64
 	detailOffset          int
+	detailHunk            int
+	detailLine            int
+	detailRangeStart      int
+	detailRangeEnd        int
 	inspectionActive      bool
 	transientOffset       int
 	vimGToken             uint64
@@ -162,15 +171,21 @@ type Model struct {
 	workflowLoadCancel context.CancelFunc
 }
 
+type Options struct {
+	Compact bool
+}
+
 // New creates an application for a discovered, non-bare repository.
-func New(repo *gitbackend.Repository) *Model {
+func New(repo *gitbackend.Repository) *Model { return NewWithOptions(repo, Options{}) }
+
+func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 	roots, rows := project(snapshot{})
 	appCtx, appCancel := context.WithCancel(context.Background())
 	m := &Model{
 		repo: repo, tree: sectionmodel.New(roots), rows: rows,
-		resolver: keymap.NewResolver(), scheme: schemeVim, loading: true,
-		message: "Loading repository…",
-		appCtx:  appCtx, appCancel: appCancel,
+		resolver: keymap.NewResolver(), scheme: schemeVim, loading: true, compact: options.Compact,
+		message: "Loading repository…", detailHunk: -1, detailLine: -1, detailRangeStart: -1, detailRangeEnd: -1,
+		appCtx: appCtx, appCancel: appCancel,
 		foldPreferences: map[sectionmodel.SectionID]bool{
 			"status/untracked": true, "status/stashes": true, "status/unpulled": true, "status/recent": true,
 		},
@@ -330,6 +345,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancelDetail()
 		m.detailID = msg.id
 		m.detailOffset = 0
+		m.resetDetailSelection()
 		if msg.err != nil {
 			m.detail = "Unable to load " + msg.detailKind() + ":\n" + sanitizeSingleLine(msg.err.Error())
 		} else if msg.text == "" {
@@ -584,6 +600,10 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	if m.handleStatusSearchKey(key, msg.Key().Text) {
+		m.cancelPrefix()
+		return m, m.loadDetailCmd()
+	}
 	if key == "q" {
 		m.shutdown()
 		return m, tea.Quit
@@ -594,9 +614,17 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setMode(modeHelp)
 		return m, nil
 	}
+	if m.handlePatchRangeKey(key) {
+		m.cancelPrefix()
+		return m, nil
+	}
 	if cmd, handled := m.handleDetailScroll(key); handled {
 		m.cancelPrefix()
 		return m, cmd
+	}
+	if request, ok := m.focusedHunkRequest(key); ok {
+		m.cancelPrefix()
+		return m, m.openInteractiveChange(request)
 	}
 	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
 		if cmd, handled := m.handleNavigationKey(msg); handled {
@@ -739,7 +767,10 @@ func (m *Model) editTransientOption(entry menuEntry) {
 		m.setMessage("Edit " + entry.Label + "; Enter applies, Esc cancels")
 		return
 	}
-	value := m.transientOptions[entry.Command]
+	value, set := m.transientOptions[entry.Command]
+	if !set {
+		value = entry.Option
+	}
 	value.Enabled = !value.Enabled
 	m.transientOptions[entry.Command] = value
 	m.setMessage(entry.Label + " " + map[bool]string{true: "enabled", false: "disabled"}[value.Enabled])
@@ -948,21 +979,34 @@ func (m *Model) detailLines() []string {
 
 func (m *Model) scrollDetailHunk(direction int) {
 	lines := m.detailLines()
+	start := m.detailHunk
+	if start < 0 {
+		start = m.detailOffset
+		if direction < 0 {
+			start = len(lines)
+		}
+	}
 	if direction > 0 {
-		for i := m.detailOffset + 1; i < len(lines); i++ {
+		for i := start + 1; i < len(lines); i++ {
 			if strings.HasPrefix(lines[i], "@@") {
+				m.detailHunk = i
 				m.detailOffset = min(i, m.detailMaximumOffset())
+				m.setMessage("Next hunk")
 				return
 			}
 		}
+		m.setMessage("No next hunk")
 		return
 	}
-	for i := min(m.detailOffset-1, len(lines)-1); i >= 0; i-- {
+	for i := min(start-1, len(lines)-1); i >= 0; i-- {
 		if strings.HasPrefix(lines[i], "@@") {
-			m.detailOffset = i
+			m.detailHunk = i
+			m.detailOffset = min(i, m.detailMaximumOffset())
+			m.setMessage("Previous hunk")
 			return
 		}
 	}
+	m.setMessage("No previous hunk")
 }
 
 func (m *Model) clampDetailOffset() {
@@ -1252,9 +1296,17 @@ func (m *Model) cancelDetail() {
 func (m *Model) setMessage(message string) { m.message, m.isError = sanitizeSingleLine(message), false }
 func (m *Model) setError(err error)        { m.message, m.isError = sanitizeSingleLine(err.Error()), true }
 
+func (m *Model) resetDetailSelection() {
+	m.detailHunk = -1
+	m.detailLine = -1
+	m.detailRangeStart = -1
+	m.detailRangeEnd = -1
+}
+
 func (m *Model) bumpState() {
 	m.cancelDetail()
 	m.detailOffset = 0
+	m.resetDetailSelection()
 	m.stateGeneration++
 	m.detailRequest++
 }

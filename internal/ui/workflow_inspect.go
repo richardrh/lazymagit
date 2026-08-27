@@ -48,8 +48,7 @@ var inspectSuffixes = map[string]WorkflowHandler{
 	"magit-ediff-compare":           inspectCompareRange,
 	"magit-ediff-show-stash":        inspectCompareStash,
 
-	// magit-log. Commands needing an Emacs prompt, reflog, shortlog, WIP refs,
-	// or --merged support remain explicitly unregistered.
+	// magit-log and its portable, read-only terminal adaptations.
 	"magit-log-current":           inspectLogCurrent,
 	"magit-log-head":              inspectLogCurrent,
 	"magit-log-other":             inspectLogOther,
@@ -348,6 +347,12 @@ func inspectLogCurrent(m *Model, command WorkflowCommand) tea.Cmd {
 	return runLogInspection(m, "Log", query)
 }
 
+func inspectLogReflog(m *Model, command WorkflowCommand) tea.Cmd {
+	query := logQueryFromCommand(command)
+	query.Reflog = true
+	return runLogInspection(m, "Log reflog objects", query)
+}
+
 func reflogResultText(result gitbackend.ReflogResult) string {
 	lines := make([]string, 0, len(result.Items))
 	for _, item := range result.Items {
@@ -368,7 +373,7 @@ func runReflogInspection(m *Model, title string, query gitbackend.ReflogQuery) t
 }
 
 func inspectReflogAll(m *Model, _ WorkflowCommand) tea.Cmd {
-	return runReflogInspection(m, "All reflogs", gitbackend.ReflogQuery{All: true, Limit: inspectItemLimit})
+	return runReflogInspection(m, "All reflogs", gitbackend.ReflogQuery{All: true, Limit: 256})
 }
 
 func inspectReflogCurrent(m *Model, _ WorkflowCommand) tea.Cmd {
@@ -376,39 +381,42 @@ func inspectReflogCurrent(m *Model, _ WorkflowCommand) tea.Cmd {
 	if revision == "" || m.snapshot.summary.Detached {
 		revision = "HEAD"
 	}
-	return runReflogInspection(m, "Reflog "+revision, gitbackend.ReflogQuery{Revision: revision, Limit: inspectItemLimit})
+	return runReflogInspection(m, "Reflog "+revision, gitbackend.ReflogQuery{Revision: revision, Limit: 256})
 }
 
 func inspectReflogHead(m *Model, _ WorkflowCommand) tea.Cmd {
-	return runReflogInspection(m, "HEAD reflog", gitbackend.ReflogQuery{Revision: "HEAD", Limit: inspectItemLimit})
+	return runReflogInspection(m, "HEAD reflog", gitbackend.ReflogQuery{Revision: "HEAD", Limit: 256})
 }
 
 func inspectReflogOther(m *Model, _ WorkflowCommand) tea.Cmd {
 	return m.OpenWorkflow(WorkflowDialog{Title: "Reflog for another ref", Fields: []WorkflowField{{Name: "revision", Label: "Ref or revision", Kind: WorkflowText, Value: "HEAD", Required: true}}, Run: func(values WorkflowValues) tea.Cmd {
 		revision := strings.TrimSpace(values["revision"])
-		return runReflogInspection(m, "Reflog "+revision, gitbackend.ReflogQuery{Revision: revision, Limit: inspectItemLimit})
+		return runReflogInspection(m, "Reflog "+revision, gitbackend.ReflogQuery{Revision: revision, Limit: 256})
 	}})
 }
 
 func shortlogQueryFromCommand(command WorkflowCommand) (gitbackend.ShortlogQuery, error) {
-	query := gitbackend.ShortlogQuery{OutputLimit: inspectOutputLimit}
+	query := gitbackend.ShortlogQuery{Numbered: true, Summary: true, OutputLimit: inspectOutputLimit}
 	for _, binding := range keymap.BindingsForTransient(schemeID(schemeMagit), "magit-shortlog") {
 		value, ok := command.Options[binding.Command]
-		if !ok || !value.Enabled && value.Value == "" {
+		if !ok {
 			continue
 		}
 		switch binding.UpstreamCommand {
 		case "transient:magit-shortlog:--numbered":
-			query.Numbered = true
+			query.Numbered = value.Enabled
 		case "transient:magit-shortlog:--summary":
-			query.Summary = true
+			query.Summary = value.Enabled
 		case "transient:magit-shortlog:--email":
-			query.Email = true
+			query.Email = value.Enabled
 		case "transient:magit-shortlog:--group=":
 			query.Group = value.Value
 		case "transient:magit-shortlog:--format=":
 			query.Format = value.Value
 		case "transient:magit-shortlog:-w":
+			if value.Value == "" {
+				continue
+			}
 			parts := strings.Split(value.Value, ",")
 			if len(parts) > 3 {
 				return query, errors.New("shortlog wrap accepts width and at most two indents")
@@ -471,10 +479,10 @@ func inspectShortlogRange(m *Model, command WorkflowCommand) tea.Cmd {
 		m.setError(err)
 		return nil
 	}
-	return m.OpenWorkflow(WorkflowDialog{Title: "Shortlog range", Fields: []WorkflowField{{Name: "from", Label: "From revision", Kind: WorkflowText, Required: true}, {Name: "to", Label: "To revision", Kind: WorkflowText, Value: "HEAD", Required: true}}, Run: func(values WorkflowValues) tea.Cmd {
+	return m.OpenWorkflow(WorkflowDialog{Title: "Shortlog revision or range", Fields: []WorkflowField{{Name: "revision", Label: "Revision or range", Kind: WorkflowText, Value: "HEAD", Required: true}}, Run: func(values WorkflowValues) tea.Cmd {
 		selected := query
-		selected.Range = strings.TrimSpace(values["from"]) + ".." + strings.TrimSpace(values["to"])
-		return runShortlogInspection(m, "Shortlog range", selected)
+		selected.Range = strings.TrimSpace(values["revision"])
+		return runShortlogInspection(m, "Shortlog "+selected.Range, selected)
 	}})
 }
 
@@ -491,34 +499,15 @@ func inspectLogMatchingRefs(m *Model, command WorkflowCommand, tags bool) tea.Cm
 	if tags {
 		kind = "tags"
 	}
-	return m.OpenWorkflow(WorkflowDialog{Title: "Log matching " + kind, Fields: []WorkflowField{{Name: "pattern", Label: "Literal name substring", Kind: WorkflowText, Required: true}}, Run: func(values WorkflowValues) tea.Cmd {
-		pattern := strings.ToLower(strings.TrimSpace(values["pattern"]))
+	return m.OpenWorkflow(WorkflowDialog{Title: "Log matching " + kind, Fields: []WorkflowField{{Name: "pattern", Label: "Git shell glob", Kind: WorkflowText, Required: true}}, Run: func(values WorkflowValues) tea.Cmd {
+		pattern := strings.TrimSpace(values["pattern"])
 		query := logQueryFromCommand(command)
-		return loadInspection(m, "Log matching "+kind, func(ctx context.Context) (string, error) {
-			refs, err := m.repo.QueryRefs(ctx, gitbackend.RefQuery{Limit: inspectItemLimit, OutputLimit: inspectOutputLimit})
-			if err != nil {
-				return "", err
-			}
-			candidates := append([]gitbackend.Ref(nil), refs.Local...)
-			if tags {
-				candidates = append([]gitbackend.Ref(nil), refs.Tags...)
-			} else {
-				candidates = append(candidates, refs.Remote...)
-			}
-			for _, ref := range candidates {
-				if strings.Contains(strings.ToLower(ref.Name), pattern) {
-					query.Revisions = append(query.Revisions, ref.FullName)
-				}
-			}
-			if len(query.Revisions) == 0 {
-				return "", fmt.Errorf("no %s match %q", kind, values["pattern"])
-			}
-			result, err := m.repo.QueryLog(ctx, query)
-			if err != nil {
-				return "", err
-			}
-			return truncationNote(refs.Truncated) + logResultText(result), nil
-		})
+		if tags {
+			query.TagPattern = pattern
+		} else {
+			query.BranchPattern = pattern
+		}
+		return runLogInspection(m, "Log matching "+kind, query)
 	}})
 }
 
@@ -614,19 +603,43 @@ func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQ
 		case "transient:magit-show-refs:--merged=":
 			query.MergedTo = value.Value
 		case "transient:magit-show-refs:--merged":
-			query.MergedTo = focus
+			query.MergedTo = "HEAD"
 		case "transient:magit-show-refs:--no-merged=":
 			query.NoMergedTo = value.Value
 		case "transient:magit-show-refs:--no-merged":
-			query.NoMergedTo = focus
+			query.NoMergedTo = "HEAD"
 		default:
 			return query, fmt.Errorf("unsupported refs option %s", binding.UpstreamCommand)
 		}
 	}
-	if query.MergedTo != "" && query.NoMergedTo != "" {
-		return query, errors.New("merged and no-merged ref filters are mutually exclusive")
-	}
 	return query, nil
+}
+
+func runRefsInspection(m *Model, title string, command WorkflowCommand, focus string) tea.Cmd {
+	query, err := refQueryFromCommand(command, focus)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
+	return loadInspection(m, title, func(ctx context.Context) (string, error) {
+		result, err := m.repo.QueryRefs(ctx, query)
+		if err != nil {
+			return "", err
+		}
+		return refsResultText(result), nil
+	})
+}
+
+func inspectRefsHead(m *Model, command WorkflowCommand) tea.Cmd {
+	return runRefsInspection(m, "References compared with HEAD", command, "HEAD")
+}
+
+func inspectRefsCurrent(m *Model, command WorkflowCommand) tea.Cmd {
+	focus := m.snapshot.summary.Branch
+	if focus == "" || m.snapshot.summary.Detached {
+		focus = "HEAD"
+	}
+	return runRefsInspection(m, "References compared with "+focus, command, focus)
 }
 
 func inspectRefs(m *Model, command WorkflowCommand) tea.Cmd {

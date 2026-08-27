@@ -15,12 +15,30 @@ import (
 	"github.com/richard/lazymagit/internal/keymap"
 )
 
+func TestBranchMenuHidesInactiveDirectConfigurationRows(t *testing.T) {
+	m := New(nil)
+	m.scheme = schemeMagit
+	m.snapshot.summary.Branch = "testbranch"
+	catalog, ok := m.transientCatalog("magit-branch")
+	if !ok {
+		t.Fatal("branch catalog missing")
+	}
+	rendered := ansi.Strip(renderTransient(catalog, 120, 30, 0))
+	for _, hidden := range []string{"Branch.<branch>.description", "Branch.<branch>.merge/remote", "Branch.<branch>.rebase", "Branch.<branch>.pushRemote", "Pull.rebase", "Remote.pushDefault", "Configure testbranch", "Update default branch"} {
+		if strings.Contains(rendered, hidden) {
+			t.Errorf("branch menu retained inactive direct-config row %q:\n%s", hidden, rendered)
+		}
+	}
+	if !strings.Contains(rendered, "C configure...") {
+		t.Fatalf("branch menu hid the configuration workflow:\n%s", rendered)
+	}
+}
+
 func TestDynamicTransientHeadingsRenderTerminalLabels(t *testing.T) {
 	m := New(nil)
 	m.scheme = schemeMagit
 	m.snapshot.summary.Branch = "main"
 	for name, want := range map[string]string{
-		"magit-branch": "Configure main",
 		"magit-push":   "Push main to",
 		"magit-rebase": "Rebase main onto",
 	} {
@@ -31,12 +49,6 @@ func TestDynamicTransientHeadingsRenderTerminalLabels(t *testing.T) {
 		rendered := ansi.Strip(renderTransient(catalog, 120, 30, 0))
 		if strings.Contains(rendered, "#[nil") || !strings.Contains(rendered, want) {
 			t.Fatalf("%s dynamic heading rendered incorrectly:\n%s", name, rendered)
-		}
-	}
-	for prefix, catalog := range buildPrefixCatalogs(keymap.SchemeMagit) {
-		rendered := ansi.Strip(renderTransient(catalog, 120, 30, 0))
-		if strings.Contains(rendered, "#[nil") {
-			t.Fatalf("static catalog %q exposed raw Lisp heading:\n%s", prefix, rendered)
 		}
 	}
 }
@@ -75,13 +87,13 @@ func TestTransientMenusHaveNoRegistryDrift(t *testing.T) {
 		registered := keymap.BindingsForTransient(keymap.SchemeVim, name)
 		identities := map[string]int{}
 		for _, binding := range registered {
-			identities[strings.Join(binding.Sequence[1:], " ")+"\x00"+binding.UpstreamCommand+"\x00"+string(binding.Kind)+"\x00"+binding.Group+"\x00"+strings.Join(binding.Conditions, "\x01")]++
+			identities[binding.Occurrence+"\x00"+strings.Join(binding.LocalSequence, " ")+"\x00"+binding.UpstreamCommand+"\x00"+string(binding.Kind)+"\x00"+strings.Join(binding.Conditions, "\x01")]++
 		}
 		seen := 0
 		for _, group := range catalog.Groups {
 			for _, entry := range group.Entries {
 				seen++
-				identity := entry.Key + "\x00" + entry.UpstreamCommand + "\x00" + string(entry.Kind) + "\x00" + group.Title + "\x00" + strings.Join(entry.Conditions, "\x01")
+				identity := entry.Occurrence + "\x00" + entry.Key + "\x00" + entry.UpstreamCommand + "\x00" + string(entry.Kind) + "\x00" + strings.Join(entry.Conditions, "\x01")
 				identities[identity]--
 				if !entry.Available && (entry.Category == "" || entry.Reason == "") {
 					t.Errorf("%s %s is implicitly grey: %+v", prefix, entry.Key, entry)

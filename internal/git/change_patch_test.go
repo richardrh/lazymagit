@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -186,6 +187,144 @@ func TestChangePatchAddDeleteAndUnsupported(t *testing.T) {
 	binary := []byte("diff --git a/x b/x\nindex 1..2 100644\nBinary files a/x and b/x differ\n")
 	if err := repo.ApplyChangePatch(context.Background(), binary, ChangePatchStage); !errors.Is(err, ErrUnsupportedChangePatch) {
 		t.Fatalf("binary apply error = %v", err)
+	}
+}
+
+func TestInteractiveChangeReviewStageUnstageDiscardAndStale(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	baseLines := make([]string, 120)
+	for i := range baseLines {
+		baseLines[i] = fmt.Sprintf("line %03d", i+1)
+	}
+	r.write("file.txt", strings.Join(baseLines, "\n")+"\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	changedLines := append([]string(nil), baseLines...)
+	changedLines[4] = "FIRST CHANGE"
+	changedLines[94] = "SECOND CHANGE"
+	r.write("file.txt", strings.Join(changedLines, "\n")+"\n")
+	doc, err := repo.LoadUnstagedDiffDocument(ctx, "file.txt")
+	if err != nil || len(doc.Files) != 1 || len(doc.Files[0].Hunks) != 2 {
+		t.Fatalf("unstaged document = %#v, %v", doc, err)
+	}
+	filePatch, err := doc.FilePatch(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(filePatch), "diff --git ") != 1 || strings.Count(string(filePatch), "@@ -") != 2 {
+		t.Fatalf("file patch did not retain one header and two hunks:\n%s", filePatch)
+	}
+
+	stageRequest := InteractiveChangeRequest{Action: InteractiveChangeStage, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0}
+	stageReview, err := repo.ReviewInteractiveChange(ctx, stageRequest)
+	if err != nil || stageReview.ChangedLines != 2 || stageReview.PatchHash == "" {
+		t.Fatalf("stage review = %#v, %v", stageReview, err)
+	}
+	var records []ProcessRecord
+	recorded := WithProcessRecorder(ctx, func(record ProcessRecord) { records = append(records, record) })
+	if err := repo.ExecuteReviewedInteractiveChange(recorded, stageReview); err != nil {
+		t.Fatal(err)
+	}
+	assertRecordedArgs(t, records, []string{"apply", "--cached", "--whitespace=nowarn", "-"})
+	wantIndex := append([]string(nil), baseLines...)
+	wantIndex[4] = "FIRST CHANGE"
+	if got, want := r.git("show", ":file.txt"), strings.Join(wantIndex, "\n"); got != want {
+		t.Fatalf("index after hunk stage = %q, want %q", got, want)
+	}
+	if got := r.read("file.txt"); !strings.Contains(got, "SECOND CHANGE") {
+		t.Fatalf("hunk stage changed remaining worktree hunk: %q", got)
+	}
+
+	unstageReview, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeUnstage, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, unstageReview); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("index still changed after reviewed unstage: %q", got)
+	}
+
+	discardReview, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeDiscardUnstaged, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, discardReview); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.read("file.txt"); strings.Contains(got, "FIRST CHANGE") || !strings.Contains(got, "SECOND CHANGE") {
+		t.Fatalf("reviewed discard targeted wrong hunk: %q", got)
+	}
+
+	stale, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeStage, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.write("file.txt", strings.Replace(r.read("file.txt"), "SECOND CHANGE", "CHANGED AGAIN", 1))
+	beforeIndex := r.git("show", ":file.txt")
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, stale); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("stale reviewed change = %v", err)
+	}
+	if got := r.git("show", ":file.txt"); got != beforeIndex {
+		t.Fatalf("stale reviewed change mutated index: %q", got)
+	}
+}
+
+func TestInteractiveChangeLineRangeAndStagedDiscard(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file.txt", "one\ntwo\nthree\nfour\n")
+	r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	r.write("file.txt", "one\nTWO\nthree\nFOUR\n")
+
+	doc, err := repo.LoadUnstagedDiffDocument(ctx, "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end := changedBlockContaining(t, doc.Files[0].Hunks[0], "TWO")
+	request := InteractiveChangeRequest{Action: InteractiveChangeStage, Scope: InteractiveChangeLines, Path: "file.txt", Hunk: 0, Start: start, End: end}
+	review, err := repo.ReviewInteractiveChange(ctx, request)
+	if err != nil || review.ChangedLines == 0 {
+		t.Fatalf("line review = %#v, %v", review, err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.git("show", ":file.txt"), "one\nTWO\nthree\nfour"; got != want {
+		t.Fatalf("line-range stage = %q, want %q", got, want)
+	}
+
+	// Remove the remaining unstaged hunk so index and worktree match; staged
+	// discard can then update both atomically with git apply --index --reverse.
+	remaining, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeDiscardUnstaged, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, remaining); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("diff", "--name-only"); got != "" {
+		t.Fatalf("remaining unstaged discard left worktree diff: %q\nworktree=%q\nindex=%q", got, r.read("file.txt"), r.git("show", ":file.txt"))
+	}
+	stagedDiscard, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeDiscardStaged, Scope: InteractiveChangeHunk, Path: "file.txt", Hunk: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, stagedDiscard); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.read("file.txt"); got != "one\ntwo\nthree\nfour\n" {
+		t.Fatalf("staged discard worktree = %q", got)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("staged discard left index changes: %q", got)
 	}
 }
 

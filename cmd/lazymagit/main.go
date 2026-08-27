@@ -17,7 +17,7 @@ import (
 	"github.com/richard/lazymagit/internal/ui"
 )
 
-const usage = "usage: lazymagit [--init] [repository]"
+const usage = "usage: lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -43,7 +43,7 @@ type runtimeDeps struct {
 	interactive bool
 	discover    func(string) (repository, error)
 	init        func(context.Context, string) (repository, error)
-	startUI     func(repository) error
+	startUI     func(repository, string, string) error
 }
 
 func productionRuntime() *runtimeDeps {
@@ -57,12 +57,15 @@ func productionRuntime() *runtimeDeps {
 		init: func(ctx context.Context, path string) (repository, error) {
 			return gitbackend.Init(ctx, path)
 		},
-		startUI: func(repo repository) error {
+		startUI: func(repo repository, theme, layout string) error {
 			backendRepo, ok := repo.(*gitbackend.Repository)
 			if !ok {
 				return errors.New("invalid repository backend")
 			}
-			_, err := tea.NewProgram(ui.New(backendRepo)).Run()
+			if err := ui.ApplyTheme(theme); err != nil {
+				return err
+			}
+			_, err := tea.NewProgram(ui.NewWithOptions(backendRepo, ui.Options{Compact: layout == "compact"})).Run()
 			return err
 		},
 	}
@@ -75,15 +78,18 @@ func run(args []string) error {
 }
 
 type options struct {
-	init bool
-	path string
+	init   bool
+	theme  string
+	layout string
+	path   string
 }
 
 func parseArgs(args []string) (options, error) {
-	opts := options{path: "."}
+	opts := options{path: ".", theme: "default", layout: "standard"}
 	pathSet := false
 	optionsEnded := false
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if !optionsEnded {
 			switch {
 			case arg == "--":
@@ -91,6 +97,35 @@ func parseArgs(args []string) (options, error) {
 				continue
 			case arg == "--init" && !pathSet && !opts.init:
 				opts.init = true
+				continue
+			case arg == "--theme" && !pathSet:
+				i++
+				if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+					return options{}, fmt.Errorf("%s", usage)
+				}
+				opts.theme = args[i]
+				continue
+			case strings.HasPrefix(arg, "--theme=") && !pathSet:
+				opts.theme = strings.TrimPrefix(arg, "--theme=")
+				if strings.TrimSpace(opts.theme) == "" {
+					return options{}, fmt.Errorf("%s", usage)
+				}
+				continue
+			case arg == "--layout" && !pathSet:
+				i++
+				if i >= len(args) {
+					return options{}, fmt.Errorf("%s", usage)
+				}
+				opts.layout = args[i]
+				if opts.layout != "standard" && opts.layout != "compact" {
+					return options{}, fmt.Errorf("layout must be standard or compact")
+				}
+				continue
+			case strings.HasPrefix(arg, "--layout=") && !pathSet:
+				opts.layout = strings.TrimPrefix(arg, "--layout=")
+				if opts.layout != "standard" && opts.layout != "compact" {
+					return options{}, fmt.Errorf("layout must be standard or compact")
+				}
 				continue
 			case strings.HasPrefix(arg, "-"):
 				return options{}, fmt.Errorf("%s", usage)
@@ -123,7 +158,7 @@ func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
 				return err
 			}
 		}
-		return startUI(rt, repo)
+		return startUI(rt, repo, opts.theme, opts.layout)
 	}
 	if !errors.Is(discoverErr, gitbackend.ErrNotRepository) {
 		return fmt.Errorf("cannot open repository %s: %w", quotePath(abs), discoverErr)
@@ -134,7 +169,7 @@ func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
 		if err != nil {
 			return err
 		}
-		return startUI(rt, repo)
+		return startUI(rt, repo, opts.theme, opts.layout)
 	}
 	if !rt.interactive {
 		return fmt.Errorf("%s is not a Git repository; use --init to create one", quotePath(abs))
@@ -151,7 +186,7 @@ func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
 	if err != nil {
 		return err
 	}
-	return startUI(rt, repo)
+	return startUI(rt, repo, opts.theme, opts.layout)
 }
 
 func isExactRepository(repo repository, abs string) bool {
@@ -170,11 +205,11 @@ func initialize(ctx context.Context, rt *runtimeDeps, abs string) (repository, e
 	return repo, nil
 }
 
-func startUI(rt *runtimeDeps, repo repository) error {
+func startUI(rt *runtimeDeps, repo repository, theme, layout string) error {
 	if repo.IsBare() {
 		return fmt.Errorf("bare repository %s has no work tree", quotePath(repo.GitDir()))
 	}
-	if err := rt.startUI(repo); err != nil {
+	if err := rt.startUI(repo, theme, layout); err != nil {
 		return fmt.Errorf("terminal UI: %w", err)
 	}
 	return nil

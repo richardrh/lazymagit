@@ -71,7 +71,7 @@ func buildPrefixCatalogs(scheme keymap.Scheme) map[string]menuCatalog {
 			if !ok {
 				index = len(catalog.Groups)
 				groups[binding.Group] = index
-				catalog.Groups = append(catalog.Groups, menuGroup{Title: staticTransientGroupTitle(tr.Name, binding.Group)})
+				catalog.Groups = append(catalog.Groups, menuGroup{Title: binding.Group})
 			}
 			available, reason := binding.Available(keymap.Context{View: keymap.ViewStatus, Scheme: scheme})
 			category := menuEntryRegistry
@@ -166,36 +166,16 @@ func (m *Model) transientCatalog(prefix string) (menuCatalog, bool) {
 		if baseline, found := prefixCatalogs[prefix].occurrence(binding.Occurrence); found {
 			command = baseline.Command
 		}
-		value := m.transientOptions[command]
+		value, set := m.transientOptions[command]
+		if !set {
+			value = transientDefaultOption(binding)
+		}
 		if m.transientEdit != nil && m.transientEdit.Command == binding.Command {
 			value.Value += "█"
 		}
 		catalog.Groups[index].Entries = append(catalog.Groups[index].Entries, menuEntry{Occurrence: binding.Occurrence, Key: key, Display: keymapDisplayFor(binding.LocalSequence), Label: binding.Label, Available: available, Command: command, UpstreamCommand: binding.UpstreamCommand, Reason: reason, Category: category, Kind: binding.Kind, Conditions: append([]string(nil), binding.Conditions...), Option: value, TakesValue: binding.TakesValue, Active: active, Prefix: binding.Handler == keymap.HandlerPrefix})
 	}
 	return catalog, true
-}
-
-func staticTransientGroupTitle(transient, title string) string {
-	if !strings.HasPrefix(title, "#[") {
-		return title
-	}
-	switch transient {
-	case "magit-branch", "magit-branch-configure":
-		return "Configure branch"
-	case "magit-pull":
-		if strings.Contains(title, "Pull arguments") {
-			return "Pull arguments"
-		}
-		return "Pull from"
-	case "magit-push":
-		return "Push branch to"
-	case "magit-rebase":
-		return "Rebase branch onto"
-	case "magit-remote-configure":
-		return "Configure remote"
-	default:
-		return "Commands"
-	}
 }
 
 func (m *Model) transientGroupTitle(transient, title string) string {
@@ -231,6 +211,16 @@ func (m *Model) transientGroupTitle(transient, title string) string {
 	default:
 		return "Commands"
 	}
+}
+
+func transientDefaultOption(binding keymap.Binding) OptionValue {
+	if binding.Transient == "magit-shortlog" {
+		switch binding.UpstreamCommand {
+		case "transient:magit-shortlog:--numbered", "transient:magit-shortlog:--summary":
+			return OptionValue{Enabled: true}
+		}
+	}
+	return OptionValue{}
 }
 
 func keymapDisplayFor(sequence []string) string {
@@ -694,10 +684,37 @@ func unavailableMarker(entry menuEntry) string {
 	return " × "
 }
 
+func visibleTransientCatalog(catalog menuCatalog) menuCatalog {
+	visible := menuCatalog{Title: catalog.Title}
+	for _, group := range catalog.Groups {
+		filtered := menuGroup{Title: group.Title}
+		for _, entry := range group.Entries {
+			if !entry.Active && hasDirectConfigureCondition(entry.Conditions) {
+				continue
+			}
+			filtered.Entries = append(filtered.Entries, entry)
+		}
+		if len(filtered.Entries) > 0 {
+			visible.Groups = append(visible.Groups, filtered)
+		}
+	}
+	return visible
+}
+
+func hasDirectConfigureCondition(conditions []string) bool {
+	for _, condition := range conditions {
+		if strings.Contains(condition, "direct-configure") {
+			return true
+		}
+	}
+	return false
+}
+
 // renderTransient renders a bordered, vertically scrollable grid of groups.
 // Very short viewports use a borderless command summary so the choices never
 // disappear behind border and title chrome.
 func renderTransient(catalog menuCatalog, width, height, offset int) string {
+	catalog = visibleTransientCatalog(catalog)
 	if width <= 0 || height <= 0 {
 		return fitBlock("", max(0, width), max(0, height))
 	}
@@ -888,6 +905,7 @@ func preferredMenuGroupWidth(group menuGroup) int {
 }
 
 func transientMaximumOffset(catalog menuCatalog, width, height int) int {
+	catalog = visibleTransientCatalog(catalog)
 	if width < 4 || height < 5 {
 		available := 0
 		for _, group := range catalog.Groups {

@@ -135,7 +135,7 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 			fields = append(fields, WorkflowField{Name: commitConsentField, Label: "Allow Git signing program", Kind: WorkflowBool})
 		}
 		dialog := WorkflowDialog{
-			Title: spec.title, Operation: strings.ToLower(spec.title), Fields: fields,
+			Title: spec.title, Operation: strings.ToLower(spec.title), ActionLabel: "Review & Submit", Fields: fields,
 			Confirmation: "Review commit details, then execute",
 			Plan:         []string{spec.title},
 			Validate: func(values WorkflowValues) error {

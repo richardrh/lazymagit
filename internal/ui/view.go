@@ -11,16 +11,6 @@ import (
 	"github.com/richard/lazymagit/internal/keymap"
 )
 
-var (
-	colorPurple = lipgloss.Color("#A78BFA")
-	colorCyan   = lipgloss.Color("#67E8F9")
-	colorGreen  = lipgloss.Color("#86EFAC")
-	colorRed    = lipgloss.Color("#FDA4AF")
-	colorGold   = lipgloss.Color("#FDE68A")
-	colorMuted  = lipgloss.Color("#94A3B8")
-	colorBorder = lipgloss.Color("#475569")
-)
-
 func (m *Model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
@@ -51,6 +41,9 @@ func (m *Model) render() string {
 }
 
 func (m *Model) renderMainBody(bodyHeight int) string {
+	if m.compact {
+		return m.renderCompactMainBody(bodyHeight)
+	}
 	var body string
 	if bodyHeight < 3 {
 		body = fitBlock("Repository status", m.width, bodyHeight)
@@ -71,6 +64,91 @@ func (m *Model) renderMainBody(bodyHeight int) string {
 		body = m.renderStatusPanel(m.width, bodyHeight)
 	}
 	return body
+}
+
+func (m *Model) renderCompactMainBody(bodyHeight int) string {
+	if bodyHeight <= 0 {
+		return ""
+	}
+	if m.width < 72 {
+		return m.renderCompactStatus(m.width, bodyHeight)
+	}
+	left := max(30, m.width*38/100)
+	right := m.width - left - 1
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		m.renderCompactStatus(left, bodyHeight),
+		lipgloss.NewStyle().Foreground(colorBorder).Render("│"),
+		m.renderCompactDetail(right, bodyHeight),
+	)
+}
+
+func (m *Model) renderCompactStatus(width, height int) string {
+	ids := m.tree.VisibleSectionIDs()
+	cursor := 0
+	for i, id := range ids {
+		if id == m.tree.Cursor() {
+			cursor = i
+			break
+		}
+	}
+	start := min(max(0, cursor-height+1), max(0, len(ids)-height))
+	var lines []string
+	for _, id := range ids[start:min(len(ids), start+height)] {
+		section, row := m.tree.Section(id), m.rows[id]
+		prefix := "  "
+		if row.kind == rowHeading {
+			prefix = map[bool]string{true: "▸ ", false: "▾ "}[m.tree.IsFolded(id)]
+		}
+		style := lipgloss.NewStyle()
+		switch {
+		case row.kind == rowHeading:
+			style = style.Foreground(colorGold).Bold(true)
+		case row.kind == rowStaged:
+			style = style.Foreground(colorGreen)
+		case row.kind == rowUntracked || row.kind == rowUnstaged:
+			style = style.Foreground(colorPurple)
+		default:
+			style = style.Foreground(colorText)
+		}
+		if m.statusSearchMatch(id) {
+			style = style.Underline(true).Foreground(colorCyan)
+		}
+		if id == m.tree.Cursor() {
+			style = style.Reverse(true).Bold(true)
+		}
+		lines = append(lines, style.Render(truncate(prefix+section.Title(), width)))
+	}
+	return fitBlock(strings.Join(lines, "\n"), width, height)
+}
+
+func (m *Model) renderCompactDetail(width, height int) string {
+	lines := strings.Split(strings.TrimSuffix(sanitizeDiff(m.detail), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		lines[0] = "Select a file or commit to inspect details."
+	}
+	start := min(m.detailOffset, max(0, len(lines)-height))
+	var styled []string
+	rangeLow, rangeHigh := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
+	for visibleIndex, line := range lines[start:min(len(lines), start+height)] {
+		absoluteIndex := start + visibleIndex
+		style := lipgloss.NewStyle().Foreground(colorText)
+		switch {
+		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
+			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
+		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
+			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+			style = style.Foreground(colorGreen)
+		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+			style = style.Foreground(colorRed)
+		case strings.HasPrefix(line, "@@"):
+			style = style.Foreground(colorCyan)
+		case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "commit "):
+			style = style.Foreground(colorPurple).Bold(true)
+		}
+		styled = append(styled, style.Render(truncate(line, width)))
+	}
+	return fitBlock(strings.Join(styled, "\n"), width, height)
 }
 
 func (m *Model) renderHeader() string {
@@ -139,6 +217,9 @@ func (m *Model) renderStatusPanel(width, height int) string {
 		} else {
 			style = style.Foreground(colorCyan)
 		}
+		if m.statusSearchMatch(id) {
+			style = style.Underline(true).Foreground(colorCyan)
+		}
 		if selected {
 			style = style.Reverse(true).Bold(true)
 		}
@@ -165,9 +246,15 @@ func (m *Model) renderDetailPanel(width, height int) string {
 		lines = lines[:innerH]
 	}
 	styled := make([]string, 0, innerH)
-	for _, line := range lines {
+	rangeLow, rangeHigh := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
+	for visibleIndex, line := range lines {
+		absoluteIndex := start + visibleIndex
 		style := lipgloss.NewStyle()
 		switch {
+		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
+			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
+		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
+			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			style = style.Foreground(colorGreen)
 		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
@@ -177,7 +264,7 @@ func (m *Model) renderDetailPanel(width, height int) string {
 		case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "commit "):
 			style = style.Foreground(colorPurple).Bold(true)
 		default:
-			style = style.Foreground(lipgloss.Color("#CBD5E1"))
+			style = style.Foreground(colorText)
 		}
 		styled = append(styled, style.Render(truncate(line, innerW)))
 	}
@@ -232,7 +319,7 @@ func (m *Model) renderFooter() string {
 			primary = append(primary, workflow(binding.Display, binding.Label))
 		}
 		left = strings.Join(primary, "  ")
-		optional := []string{"↑/↓ detail  [/ ] hunks", "$ Processes", "? Commands"}
+		optional := []string{"↑/↓ detail  [ prev  ] next  v lines", "$ Processes", "? Commands"}
 		if m.scheme == schemeMagit {
 			optional = append(optional, "[Magit] F2 Vim", "n/p move")
 		} else {
@@ -355,35 +442,84 @@ func (m *Model) renderWorkflowOverlay(width, height int) string {
 	innerW, innerH := width-4, height-2
 	w := m.workflow
 	lines := []string{lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" " + sanitizeSingleLine(w.dialog.Title) + " ")}
-	for i, field := range w.dialog.Fields {
-		mark := "  "
-		if i == w.field {
-			mark = "▶ "
-		}
-		value := field.Value
-		if field.Kind == WorkflowBool {
-			if field.Bool {
-				value = "yes"
-			} else {
-				value = "no"
-			}
-		}
-		if field.Kind == WorkflowEnum || field.Kind == WorkflowSelect {
-			for _, choice := range field.Choices {
-				if choice.Value == field.Value {
-					value = choice.Label
-				}
-			}
-		}
-		if i == w.field && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
-			value += "█"
-		}
-		lines = append(lines, mark+sanitizeSingleLine(field.Label)+": "+sanitizeSingleLine(value))
+	lines = append(lines, renderWorkflowFields(w)...)
+	lines = append(lines, renderWorkflowReview(w)...)
+	lines = append(lines, "", renderWorkflowAction(workflowActionLabel(w), w.field >= len(w.dialog.Fields), w.busy), "", "Tab field  •  ↑/↓ choose  •  Enter select/submit  •  Esc cancel")
+	if w.error != "" {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render(sanitizeSingleLine(w.error)))
 	}
+	text := fitBlock(strings.Join(lines, "\n"), innerW, innerH)
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func renderWorkflowFields(w *workflowState) []string {
+	var lines []string
+	for index, field := range w.dialog.Fields {
+		lines = append(lines, renderWorkflowField(field, index == w.field)...)
+	}
+	return lines
+}
+
+func renderWorkflowField(field WorkflowField, selected bool) []string {
+	mark := "  "
+	if selected {
+		mark = "▶ "
+	}
+	if field.Kind == WorkflowSearch {
+		return renderWorkflowSearchField(field, mark, selected)
+	}
+	value := workflowFieldValue(field)
+	if selected && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
+		value += "█"
+	}
+	return []string{mark + sanitizeSingleLine(field.Label) + ": " + sanitizeSingleLine(value)}
+}
+
+func workflowFieldValue(field WorkflowField) string {
+	if field.Kind == WorkflowBool {
+		return map[bool]string{true: "yes", false: "no"}[field.Bool]
+	}
+	if field.Kind == WorkflowEnum || field.Kind == WorkflowSelect {
+		for _, choice := range field.Choices {
+			if choice.Value == field.Value {
+				return choice.Label
+			}
+		}
+	}
+	return field.Value
+}
+
+func renderWorkflowSearchField(field WorkflowField, mark string, selected bool) []string {
+	query := field.Search
+	if selected {
+		query += "█"
+	}
+	lines := []string{mark + sanitizeSingleLine(field.Label) + ": " + sanitizeSingleLine(query)}
+	matches := workflowSearchChoices(field)
+	if len(matches) == 0 {
+		label := "No matches"
+		if field.AllowCustom && strings.TrimSpace(field.Search) != "" {
+			label = "Use revision: " + strings.TrimSpace(field.Search)
+		}
+		return append(lines, "    "+sanitizeSingleLine(label))
+	}
+	start := min(max(0, field.Choice-3), max(0, len(matches)-7))
+	for choiceIndex, choice := range matches[start:min(len(matches), start+7)] {
+		prefix := "    "
+		if start+choiceIndex == field.Choice {
+			prefix = "  › "
+		}
+		lines = append(lines, prefix+sanitizeSingleLine(choice.Label))
+	}
+	return lines
+}
+
+func renderWorkflowReview(w *workflowState) []string {
 	confirmation, plan := w.dialog.Confirmation, w.dialog.Plan
 	if w.review != nil {
 		confirmation, plan = w.review.Confirmation, w.review.Plan
 	}
+	var lines []string
 	if confirmation != "" {
 		lines = append(lines, "", sanitizeSingleLine(confirmation))
 	}
@@ -393,26 +529,44 @@ func (m *Model) renderWorkflowOverlay(width, height int) string {
 			lines = append(lines, "  • "+sanitizeSingleLine(step))
 		}
 	}
-	submit := "Submit"
-	if w.dialog.ReviewPreflight != nil {
-		submit = "Review"
-		if w.review != nil {
-			submit = "Execute"
-		}
-	}
+	return lines
+}
+
+func workflowActionLabel(w *workflowState) string {
 	if w.busy {
-		submit = "Checking…"
+		return "Checking…"
 	}
-	mark := "  "
-	if w.field >= len(w.dialog.Fields) {
-		mark = "▶ "
+	if w.dialog.ReviewPreflight != nil {
+		if w.review != nil {
+			return "Execute"
+		}
+		return "Review"
 	}
-	lines = append(lines, "", mark+submit, "", "Tab/↑/↓ field  •  Enter edit/submit  •  Esc cancel")
-	if w.error != "" {
-		lines = append(lines, lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render(sanitizeSingleLine(w.error)))
+	if label := strings.TrimSpace(w.dialog.ActionLabel); label != "" {
+		return label
 	}
-	text := fitBlock(strings.Join(lines, "\n"), innerW, innerH)
-	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+	if w.dialog.Run != nil {
+		return "Open"
+	}
+	return "Submit"
+}
+
+func renderWorkflowAction(label string, selected, busy bool) string {
+	style := lipgloss.NewStyle().Bold(true).Padding(0, 2).Foreground(colorOnAccent).Background(colorCyan)
+	if strings.Contains(label, "Review") {
+		style = style.Background(colorGold)
+	}
+	if label == "Execute" {
+		style = style.Background(colorGreen)
+	}
+	if busy {
+		style = style.Foreground(colorMuted).Background(colorBorder)
+	}
+	button := style.Render(sanitizeSingleLine(label))
+	if selected {
+		return "▶ " + button
+	}
+	return "  " + button
 }
 
 func (m *Model) renderRemoteOverlay(height int) string {

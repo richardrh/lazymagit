@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -272,6 +273,56 @@ func malformed(line int, why string) error {
 	return fmt.Errorf("%w: %s", ErrMalformedChangePatch, why)
 }
 
+type InteractiveChangeAction uint8
+
+const (
+	InteractiveChangeStage InteractiveChangeAction = iota
+	InteractiveChangeUnstage
+	InteractiveChangeDiscardUnstaged
+	InteractiveChangeDiscardStaged
+)
+
+type InteractiveChangeScope uint8
+
+const (
+	InteractiveChangeFile InteractiveChangeScope = iota
+	InteractiveChangeHunk
+	InteractiveChangeLines
+)
+
+type InteractiveChangeRequest struct {
+	Action     InteractiveChangeAction
+	Scope      InteractiveChangeScope
+	Path       string
+	Hunk       int
+	Start, End int
+}
+
+type ReviewedInteractiveChange struct {
+	Request      InteractiveChangeRequest
+	HunkHeading  string
+	ChangedLines int
+	PatchHash    string
+	token        ConfirmationToken
+}
+
+// FilePatch reconstructs every hunk for one mutable text file.
+func (d *DiffDocument) FilePatch(fileIndex int) ([]byte, error) {
+	if d == nil || fileIndex < 0 || fileIndex >= len(d.Files) {
+		return nil, ErrInvalidChangePatchRegion
+	}
+	f := &d.Files[fileIndex]
+	if err := mutableFile(f); err != nil {
+		return nil, err
+	}
+	var b strings.Builder
+	writeFileHeader(&b, f)
+	for _, hunk := range f.Hunks {
+		writeHunk(&b, hunk)
+	}
+	return []byte(b.String()), nil
+}
+
 // HunkPatch reconstructs one complete hunk and its file header.
 func (d *DiffDocument) HunkPatch(fileIndex, hunkIndex int) ([]byte, error) {
 	if d == nil || fileIndex < 0 || fileIndex >= len(d.Files) || hunkIndex < 0 || hunkIndex >= len(d.Files[fileIndex].Hunks) {
@@ -349,11 +400,20 @@ func countHunkSides(lines []DiffLine) (old, new int) {
 
 func renderPatch(f *DiffFile, h DiffHunk) []byte {
 	var b strings.Builder
+	writeFileHeader(&b, f)
+	writeHunk(&b, h)
+	return []byte(b.String())
+}
+
+func writeFileHeader(b *strings.Builder, f *DiffFile) {
 	for _, line := range f.header {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
-	fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@%s\n", h.OldRange.Start, h.OldRange.Count, h.NewRange.Start, h.NewRange.Count, h.Heading)
+}
+
+func writeHunk(b *strings.Builder, h DiffHunk) {
+	fmt.Fprintf(b, "@@ -%d,%d +%d,%d @@%s\n", h.OldRange.Start, h.OldRange.Count, h.NewRange.Start, h.NewRange.Count, h.Heading)
 	for _, line := range h.Lines {
 		b.WriteByte(byte(line.Kind))
 		b.WriteString(line.Text)
@@ -362,7 +422,6 @@ func renderPatch(f *DiffFile, h DiffHunk) []byte {
 			b.WriteString("\\ No newline at end of file\n")
 		}
 	}
-	return []byte(b.String())
 }
 
 func (r *Repository) LoadUnstagedDiffDocument(ctx context.Context, path string) (*DiffDocument, error) {
@@ -391,6 +450,106 @@ func (r *Repository) loadChangeDiffDocument(ctx context.Context, path string, st
 	return ParseUnifiedDiff(out)
 }
 
+func (r *Repository) selectedInteractivePatch(ctx context.Context, request InteractiveChangeRequest) ([]byte, string, int, error) {
+	if strings.TrimSpace(request.Path) == "" {
+		return nil, "", 0, errors.New("interactive change path is empty")
+	}
+	staged := request.Action == InteractiveChangeUnstage || request.Action == InteractiveChangeDiscardStaged
+	if request.Action > InteractiveChangeDiscardStaged {
+		return nil, "", 0, errors.New("unknown interactive change action")
+	}
+	doc, err := r.loadChangeDiffDocument(ctx, request.Path, staged)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	if len(doc.Files) != 1 {
+		return nil, "", 0, ErrInvalidChangePatchRegion
+	}
+	file := &doc.Files[0]
+	var patch []byte
+	heading := ""
+	changed := 0
+	switch request.Scope {
+	case InteractiveChangeFile:
+		patch, err = doc.FilePatch(0)
+		for _, hunk := range file.Hunks {
+			changed += changedLineCount(hunk.Lines)
+		}
+	case InteractiveChangeHunk:
+		patch, err = doc.HunkPatch(0, request.Hunk)
+		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
+			heading = file.Hunks[request.Hunk].Heading
+			changed = changedLineCount(file.Hunks[request.Hunk].Lines)
+		}
+	case InteractiveChangeLines:
+		patch, err = doc.ChangedLineRegionPatch(0, request.Hunk, request.Start, request.End)
+		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
+			heading = file.Hunks[request.Hunk].Heading
+			for i := request.Start; i < request.End && i < len(file.Hunks[request.Hunk].Lines); i++ {
+				if i >= 0 && file.Hunks[request.Hunk].Lines[i].Kind != DiffLineContext {
+					changed++
+				}
+			}
+		}
+	default:
+		return nil, "", 0, errors.New("unknown interactive change scope")
+	}
+	if err != nil {
+		return nil, "", 0, err
+	}
+	return patch, heading, changed, nil
+}
+
+func changedLineCount(lines []DiffLine) int {
+	count := 0
+	for _, line := range lines {
+		if line.Kind != DiffLineContext {
+			count++
+		}
+	}
+	return count
+}
+
+func interactiveChangeIdentity(request InteractiveChangeRequest, patch []byte) string {
+	sum := sha256.Sum256(patch)
+	return fmt.Sprintf("%d\x00%d\x00%s\x00%d\x00%d\x00%d\x00%x", request.Action, request.Scope, request.Path, request.Hunk, request.Start, request.End, sum)
+}
+
+func (r *Repository) ReviewInteractiveChange(ctx context.Context, request InteractiveChangeRequest) (ReviewedInteractiveChange, error) {
+	patch, heading, changed, err := r.selectedInteractivePatch(ctx, request)
+	if err != nil {
+		return ReviewedInteractiveChange{}, err
+	}
+	identity := interactiveChangeIdentity(request, patch)
+	sum := sha256.Sum256(patch)
+	return ReviewedInteractiveChange{Request: request, HunkHeading: heading, ChangedLines: changed, PatchHash: fmt.Sprintf("%x", sum), token: NewConfirmationToken(identity)}, nil
+}
+
+func (r *Repository) ExecuteReviewedInteractiveChange(ctx context.Context, reviewed ReviewedInteractiveChange) error {
+	patch, _, _, err := r.selectedInteractivePatch(ctx, reviewed.Request)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrStalePlan, err)
+	}
+	identity := interactiveChangeIdentity(reviewed.Request, patch)
+	if !reviewed.token.validFor(identity) {
+		return ErrStalePlan
+	}
+	operation := ChangePatchStage
+	switch reviewed.Request.Action {
+	case InteractiveChangeStage:
+		operation = ChangePatchStage
+	case InteractiveChangeUnstage:
+		operation = ChangePatchUnstage
+	case InteractiveChangeDiscardUnstaged:
+		operation = ChangePatchReverse
+	case InteractiveChangeDiscardStaged:
+		operation = ChangePatchDiscardStaged
+	default:
+		return errors.New("unknown interactive change action")
+	}
+	return r.ApplyChangePatch(ctx, patch, operation)
+}
+
 type ChangePatchOperation uint8
 
 const (
@@ -398,6 +557,7 @@ const (
 	ChangePatchUnstage
 	ChangePatchApply
 	ChangePatchReverse
+	ChangePatchDiscardStaged
 )
 
 // ApplyChangePatch validates patch structure before passing it on stdin. Patch
@@ -427,6 +587,8 @@ func (r *Repository) ApplyChangePatch(ctx context.Context, patch []byte, operati
 	case ChangePatchApply:
 	case ChangePatchReverse:
 		args = append(args, "--reverse")
+	case ChangePatchDiscardStaged:
+		args = append(args, "--index", "--reverse")
 	default:
 		return errors.New("unknown change patch operation")
 	}

@@ -215,6 +215,7 @@ const (
 	WorkflowBool    WorkflowFieldKind = "bool"
 	WorkflowEnum    WorkflowFieldKind = "enum"
 	WorkflowSelect  WorkflowFieldKind = "select"
+	WorkflowSearch  WorkflowFieldKind = "search"
 	WorkflowConfirm WorkflowFieldKind = "confirm"
 )
 
@@ -224,8 +225,11 @@ type WorkflowField struct {
 	Name, Label string
 	Kind        WorkflowFieldKind
 	Value       string
+	Search      string
 	Bool        bool
 	Choices     []WorkflowChoice
+	Choice      int
+	AllowCustom bool
 	Required    bool
 }
 
@@ -252,6 +256,7 @@ type WorkflowLoader func(context.Context) (WorkflowDialog, error)
 // operation recorder/refresh path. Validation errors keep the dialog open.
 type WorkflowDialog struct {
 	Title, Confirmation string
+	ActionLabel         string
 	Plan                []string
 	Fields              []WorkflowField
 	Validate            func(WorkflowValues) error
@@ -375,6 +380,35 @@ func (m *Model) StartWorkflowOperation(name string, operation func(context.Conte
 	return m.startOperation(name, operation)
 }
 
+func workflowSearchChoices(field WorkflowField) []WorkflowChoice {
+	query := strings.ToLower(strings.TrimSpace(field.Search))
+	if query == "" {
+		return append([]WorkflowChoice(nil), field.Choices...)
+	}
+	var matches []WorkflowChoice
+	for _, choice := range field.Choices {
+		if strings.Contains(strings.ToLower(choice.Label), query) || strings.Contains(strings.ToLower(choice.Value), query) {
+			matches = append(matches, choice)
+		}
+	}
+	return matches
+}
+
+func updateWorkflowSearch(field *WorkflowField, delta int) {
+	matches := workflowSearchChoices(*field)
+	if len(matches) == 0 {
+		field.Choice = 0
+		if field.AllowCustom {
+			field.Value = strings.TrimSpace(field.Search)
+		} else {
+			field.Value = ""
+		}
+		return
+	}
+	field.Choice = min(max(0, field.Choice+delta), len(matches)-1)
+	field.Value = matches[field.Choice].Value
+}
+
 func (m *Model) workflowValues() WorkflowValues {
 	values := make(WorkflowValues, len(m.workflow.dialog.Fields))
 	for _, f := range m.workflow.dialog.Fields {
@@ -418,111 +452,207 @@ func (m *Model) handleWorkflowKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	key := msg.String()
 	if key == "esc" || key == "q" && len(w.dialog.Fields) == 0 {
-		if w.cancel != nil {
-			w.cancel()
-			w.cancel = nil
-		}
-		if w.dialog.OnCancel != nil {
-			w.dialog.OnCancel()
-		}
-		m.workflow = nil
-		m.workflowRequest++
-		m.setMode(modeStatus)
-		m.setMessage("Workflow cancelled")
-		return m, m.loadDetailCmd()
+		return m, m.cancelWorkflow()
 	}
 	if w.busy {
 		return m, nil
 	}
-	// A displayed review is immutable. Only execution or cancellation is
-	// accepted; editing requires cancelling and starting a new review.
 	if w.review != nil && key != "enter" {
 		w.error = "Review is locked; press Enter to execute or Esc to cancel"
 		return m, nil
 	}
-	if key == "tab" || key == "down" {
-		w.field = min(w.field+1, len(w.dialog.Fields))
-		return m, nil
-	}
-	if key == "shift+tab" || key == "up" {
-		w.field = max(0, w.field-1)
+	if handleWorkflowNavigation(w, key) {
 		return m, nil
 	}
 	if key == "enter" && w.field >= len(w.dialog.Fields) {
-		values := m.workflowValues()
-		if err := validateWorkflow(w.dialog, values); err != nil {
-			w.error = sanitizeSingleLine(err.Error())
-			return m, nil
-		}
-		if w.review != nil {
-			return m, m.submitReviewedWorkflow(values, *w.review)
-		}
-		if w.dialog.ReviewPreflight != nil {
-			w.busy = true
-			w.request++
-			ctx, cancel := context.WithCancel(m.appCtx)
-			w.cancel = cancel
-			request, preflight := w.request, w.dialog.ReviewPreflight
-			values = cloneWorkflowValues(values)
-			return m, func() tea.Msg {
-				review, err := preflight(ctx, cloneWorkflowValues(values))
-				return workflowReviewMsg{request: request, values: values, review: cloneWorkflowReview(review), err: err}
-			}
-		}
-		if w.dialog.Preflight != nil {
-			w.busy = true
-			w.request++
-			request := w.request
-			preflight := w.dialog.Preflight
-			ctx, cancel := context.WithCancel(m.appCtx)
-			w.cancel = cancel
-			values = cloneWorkflowValues(values)
-			return m, func() tea.Msg {
-				return workflowPreflightMsg{request: request, values: values, err: preflight(ctx, cloneWorkflowValues(values))}
-			}
-		}
-		return m, m.submitWorkflow(values)
+		return m, m.activateWorkflow()
 	}
 	if w.field >= len(w.dialog.Fields) {
 		return m, nil
 	}
-	f := &w.dialog.Fields[w.field]
-	changed := false
-	switch f.Kind {
-	case WorkflowBool:
-		if key == "enter" || key == "space" {
-			f.Bool = !f.Bool
-			changed = true
-		}
-	case WorkflowEnum, WorkflowSelect:
-		if len(f.Choices) > 0 && (key == "enter" || key == "space" || key == "right") {
-			i := 0
-			for n, c := range f.Choices {
-				if c.Value == f.Value {
-					i = n
-				}
-			}
-			f.Value = f.Choices[(i+1)%len(f.Choices)].Value
-			changed = true
-		}
-	case WorkflowText, WorkflowConfirm:
-		if key == "backspace" || key == "ctrl+h" {
-			if f.Value != "" {
-				_, n := utf8.DecodeLastRuneInString(f.Value)
-				f.Value = f.Value[:len(f.Value)-n]
-				changed = true
-			}
-		} else if text := msg.Key().Text; text != "" {
-			f.Value += text
-			changed = true
-		}
-	}
-	if changed {
+	if editWorkflowField(&w.dialog.Fields[w.field], msg) {
 		w.review = nil
 		w.request++
 	}
 	w.error = ""
 	return m, nil
+}
+
+func (m *Model) cancelWorkflow() tea.Cmd {
+	w := m.workflow
+	if w.cancel != nil {
+		w.cancel()
+	}
+	if w.dialog.OnCancel != nil {
+		w.dialog.OnCancel()
+	}
+	m.workflow = nil
+	m.workflowRequest++
+	m.setMode(modeStatus)
+	m.setMessage("Workflow cancelled")
+	return m.loadDetailCmd()
+}
+
+func handleWorkflowNavigation(w *workflowState, key string) bool {
+	switch key {
+	case "tab":
+		w.field = min(w.field+1, len(w.dialog.Fields))
+		return true
+	case "shift+tab":
+		w.field = max(0, w.field-1)
+		return true
+	}
+	if w.field >= len(w.dialog.Fields) {
+		return false
+	}
+	field := &w.dialog.Fields[w.field]
+	if field.Kind == WorkflowSearch {
+		switch key {
+		case "down":
+			updateWorkflowSearch(field, 1)
+			return true
+		case "up":
+			updateWorkflowSearch(field, -1)
+			return true
+		case "enter":
+			w.field = len(w.dialog.Fields)
+			return false
+		}
+		return false
+	}
+	if key == "down" {
+		w.field = min(w.field+1, len(w.dialog.Fields))
+		return true
+	}
+	if key == "up" {
+		w.field = max(0, w.field-1)
+		return true
+	}
+	return false
+}
+
+func (m *Model) activateWorkflow() tea.Cmd {
+	w := m.workflow
+	values := m.workflowValues()
+	if err := validateWorkflow(w.dialog, values); err != nil {
+		w.error = sanitizeSingleLine(err.Error())
+		return nil
+	}
+	if w.review != nil {
+		return m.submitReviewedWorkflow(values, *w.review)
+	}
+	if w.dialog.ReviewPreflight != nil {
+		return m.startWorkflowReview(values)
+	}
+	if w.dialog.Preflight != nil {
+		return m.startWorkflowPreflight(values)
+	}
+	return m.submitWorkflow(values)
+}
+
+func (m *Model) startWorkflowReview(values WorkflowValues) tea.Cmd {
+	w := m.workflow
+	w.busy = true
+	w.request++
+	ctx, cancel := context.WithCancel(m.appCtx)
+	w.cancel = cancel
+	request, preflight := w.request, w.dialog.ReviewPreflight
+	values = cloneWorkflowValues(values)
+	return func() tea.Msg {
+		review, err := preflight(ctx, cloneWorkflowValues(values))
+		return workflowReviewMsg{request: request, values: values, review: cloneWorkflowReview(review), err: err}
+	}
+}
+
+func (m *Model) startWorkflowPreflight(values WorkflowValues) tea.Cmd {
+	w := m.workflow
+	w.busy = true
+	w.request++
+	ctx, cancel := context.WithCancel(m.appCtx)
+	w.cancel = cancel
+	request, preflight := w.request, w.dialog.Preflight
+	values = cloneWorkflowValues(values)
+	return func() tea.Msg {
+		return workflowPreflightMsg{request: request, values: values, err: preflight(ctx, cloneWorkflowValues(values))}
+	}
+}
+
+func editWorkflowField(field *WorkflowField, msg tea.KeyPressMsg) bool {
+	key := msg.String()
+	switch field.Kind {
+	case WorkflowBool:
+		return editWorkflowBool(field, key)
+	case WorkflowEnum, WorkflowSelect:
+		return editWorkflowChoice(field, key)
+	case WorkflowSearch:
+		return editWorkflowSearch(field, key, msg.Key().Text)
+	case WorkflowText, WorkflowConfirm:
+		return editWorkflowText(field, key, msg.Key().Text)
+	default:
+		return false
+	}
+}
+
+func editWorkflowBool(field *WorkflowField, key string) bool {
+	if key != "enter" && key != "space" {
+		return false
+	}
+	field.Bool = !field.Bool
+	return true
+}
+
+func editWorkflowChoice(field *WorkflowField, key string) bool {
+	if len(field.Choices) == 0 || key != "enter" && key != "space" && key != "right" {
+		return false
+	}
+	index := 0
+	for i, choice := range field.Choices {
+		if choice.Value == field.Value {
+			index = i
+		}
+	}
+	field.Value = field.Choices[(index+1)%len(field.Choices)].Value
+	return true
+}
+
+func editWorkflowSearch(field *WorkflowField, key, text string) bool {
+	if key == "backspace" || key == "ctrl+h" {
+		if field.Search != "" {
+			_, size := utf8.DecodeLastRuneInString(field.Search)
+			field.Search = field.Search[:len(field.Search)-size]
+			field.Choice = 0
+			updateWorkflowSearch(field, 0)
+			return true
+		}
+		if field.Value != "" {
+			field.Value = ""
+			return true
+		}
+		return false
+	}
+	if text == "" {
+		return false
+	}
+	field.Search += text
+	field.Choice = 0
+	updateWorkflowSearch(field, 0)
+	return true
+}
+
+func editWorkflowText(field *WorkflowField, key, text string) bool {
+	if key == "backspace" || key == "ctrl+h" {
+		if field.Value == "" {
+			return false
+		}
+		_, size := utf8.DecodeLastRuneInString(field.Value)
+		field.Value = field.Value[:len(field.Value)-size]
+		return true
+	}
+	if text == "" {
+		return false
+	}
+	field.Value += text
+	return true
 }
 
 func (m *Model) submitWorkflow(values WorkflowValues) tea.Cmd {

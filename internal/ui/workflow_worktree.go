@@ -193,7 +193,7 @@ func worktreeListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 		if err != nil {
 			return WorkflowDialog{}, err
 		}
-		plan := make([]string, 0, len(all))
+		choices := make([]WorkflowChoice, 0, len(all))
 		for _, wt := range all {
 			state := wt.Branch
 			if state == "" {
@@ -208,9 +208,16 @@ func worktreeListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			if wt.Prunable {
 				state += "; prunable: " + wt.PruneReason
 			}
-			plan = append(plan, wt.Path+" — "+state)
+			choices = append(choices, WorkflowChoice{Value: wt.Path, Label: state + " — " + wt.Path})
 		}
-		return WorkflowDialog{Title: "Worktrees", Confirmation: "Enter closes this list", Plan: plan, Submit: func(context.Context, WorkflowValues) error { return nil }, Operation: "list worktrees"}, nil
+		if len(choices) == 0 {
+			return WorkflowDialog{}, errors.New("no worktrees available")
+		}
+		return WorkflowDialog{
+			Title: "Worktrees", ActionLabel: "Close",
+			Fields: []WorkflowField{{Name: "worktree", Label: "Search", Kind: WorkflowSearch, Value: choices[0].Value, Choices: choices, Required: true}},
+			Run:    func(WorkflowValues) tea.Cmd { return nil },
+		}, nil
 	})
 }
 

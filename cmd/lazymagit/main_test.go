@@ -33,7 +33,7 @@ func testRuntime(input string, interactive bool) (*runtimeDeps, *strings.Builder
 			*initCalls++
 			return fakeRepository{workTree: "/repo", gitDir: "/repo/.git"}, nil
 		},
-		startUI: func(repository) error {
+		startUI: func(repository, string, string) error {
 			*uiCalls++
 			return nil
 		},
@@ -43,17 +43,27 @@ func testRuntime(input string, interactive bool) (*runtimeDeps, *strings.Builder
 
 func TestParseArgs(t *testing.T) {
 	tests := []struct {
-		name     string
-		args     []string
-		wantInit bool
-		wantPath string
-		wantErr  bool
+		name       string
+		args       []string
+		wantInit   bool
+		wantTheme  string
+		wantLayout string
+		wantPath   string
+		wantErr    bool
 	}{
-		{name: "default", wantPath: "."},
-		{name: "repository", args: []string{"repo"}, wantPath: "repo"},
-		{name: "init", args: []string{"--init", "repo"}, wantInit: true, wantPath: "repo"},
-		{name: "leading dash", args: []string{"--", "-repo"}, wantPath: "-repo"},
-		{name: "init leading dash", args: []string{"--init", "--", "-repo"}, wantInit: true, wantPath: "-repo"},
+		{name: "default", wantTheme: "default", wantLayout: "standard", wantPath: "."},
+		{name: "repository", args: []string{"repo"}, wantTheme: "default", wantLayout: "standard", wantPath: "repo"},
+		{name: "theme", args: []string{"--theme", "tokyo-night", "repo"}, wantTheme: "tokyo-night", wantLayout: "standard", wantPath: "repo"},
+		{name: "theme equals", args: []string{"--theme=catppuccin", "repo"}, wantTheme: "catppuccin", wantLayout: "standard", wantPath: "repo"},
+		{name: "compact layout", args: []string{"--layout", "compact", "repo"}, wantTheme: "default", wantLayout: "compact", wantPath: "repo"},
+		{name: "layout equals", args: []string{"--layout=standard", "repo"}, wantTheme: "default", wantLayout: "standard", wantPath: "repo"},
+		{name: "init", args: []string{"--init", "repo"}, wantInit: true, wantTheme: "default", wantLayout: "standard", wantPath: "repo"},
+		{name: "leading dash", args: []string{"--", "-repo"}, wantTheme: "default", wantLayout: "standard", wantPath: "-repo"},
+		{name: "init leading dash", args: []string{"--init", "--", "-repo"}, wantInit: true, wantTheme: "default", wantLayout: "standard", wantPath: "-repo"},
+		{name: "missing theme", args: []string{"--theme"}, wantErr: true},
+		{name: "empty theme", args: []string{"--theme="}, wantErr: true},
+		{name: "missing layout", args: []string{"--layout"}, wantErr: true},
+		{name: "invalid layout", args: []string{"--layout=wide"}, wantErr: true},
 		{name: "unknown option", args: []string{"--bad"}, wantErr: true},
 		{name: "extra argument", args: []string{"one", "two"}, wantErr: true},
 		{name: "option after path", args: []string{"repo", "--init"}, wantErr: true},
@@ -64,8 +74,8 @@ func TestParseArgs(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseArgs() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if err == nil && (got.init != tt.wantInit || got.path != tt.wantPath) {
-				t.Fatalf("parseArgs() = %#v, want init=%v path=%q", got, tt.wantInit, tt.wantPath)
+			if err == nil && (got.init != tt.wantInit || got.theme != tt.wantTheme || got.layout != tt.wantLayout || got.path != tt.wantPath) {
+				t.Fatalf("parseArgs() = %#v, want init=%v theme=%q layout=%q path=%q", got, tt.wantInit, tt.wantTheme, tt.wantLayout, tt.wantPath)
 			}
 		})
 	}

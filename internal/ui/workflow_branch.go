@@ -117,17 +117,24 @@ func choiceDefault(choices []WorkflowChoice, preferred string) string {
 
 func branchCheckoutRevision(m *Model, _ WorkflowCommand) tea.Cmd {
 	return loadBranchWorkflow(m, "branch/revision choices", func(ctx context.Context) (WorkflowDialog, error) {
-		_, current, err := branchChoices(ctx, m.repo, false, true)
+		choices, current, err := branchChoices(ctx, m.repo, true, true)
 		if err != nil {
 			return WorkflowDialog{}, err
 		}
 		if current == "" {
 			current = "HEAD"
 		}
+		choice := 0
+		for i := range choices {
+			if choices[i].Value == current {
+				choice = i
+				break
+			}
+		}
 		return WorkflowDialog{
-			Title: "Checkout branch or revision", Operation: "checkout branch/revision",
-			Plan:   []string{"Exact local branch names are switched to normally", "Other revisions are checked out with detached HEAD"},
-			Fields: []WorkflowField{{Name: "revision", Label: "Local branch or revision", Kind: WorkflowText, Value: current, Required: true}},
+			Title: "Checkout branch or revision", Operation: "checkout branch/revision", ActionLabel: "Checkout",
+			Plan:   []string{"Type to filter local and remote-tracking branches", "A custom revision is checked out with detached HEAD"},
+			Fields: []WorkflowField{{Name: "revision", Label: "Search", Kind: WorkflowSearch, Value: current, Choices: choices, Choice: choice, AllowCustom: true, Required: true}},
 			Submit: func(ctx context.Context, values WorkflowValues) error {
 				branches, err := m.repo.Branches(ctx)
 				if err != nil {

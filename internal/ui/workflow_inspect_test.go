@@ -68,7 +68,7 @@ func TestInspectionUnsupportedEmacsBufferAndMutationOperations(t *testing.T) {
 	for _, upstream := range []string{
 		"transient-save-and-exit", "magit-toggle-buffer-lock", "magit-toggle-margin",
 		"magit-diff-toggle-refine-hunk", "magit-ediff-stage", "magit-ediff-resolve-all",
-		"magit-git-mergetool", "magit-reflog-current", "magit-shortlog",
+		"magit-git-mergetool", "magit-wip-log-index", "magit-wip-log-worktree", "magit-log-merged",
 	} {
 		if inspectSuffixes[upstream] != nil {
 			t.Errorf("unsupported operation %s was connected", upstream)

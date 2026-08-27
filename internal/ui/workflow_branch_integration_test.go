@@ -5,8 +5,40 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richard/lazymagit/internal/git"
 )
+
+func TestBranchCheckoutSearchFiltersAndSwitchesByKeys(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base.txt", "base\n")
+	r.git("add", ".")
+	r.git("commit", "-m", "base")
+	r.git("branch", "feature/login")
+	r.git("branch", "release")
+	m := newE2EModel(t, r)
+	m.scheme = schemeMagit
+
+	sendE2EKey(t, m, keyMsg("b"))
+	sendE2EKey(t, m, keyMsg("b"))
+	if m.workflow == nil || len(m.workflow.dialog.Fields) != 1 || m.workflow.dialog.Fields[0].Kind != WorkflowSearch {
+		t.Fatalf("b b did not open searchable checkout: %+v", m.workflow)
+	}
+	plain := ansi.Strip(m.renderWorkflowOverlay(100, 24))
+	for _, want := range []string{"main (current)", "feature/login", "release", "Checkout"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("branch search omitted %q:\n%s", want, plain)
+		}
+	}
+	sendE2EKey(t, m, keyMsg("login"))
+	if got := m.workflow.dialog.Fields[0].Value; got != "feature/login" {
+		t.Fatalf("branch filter selected %q", got)
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
+	if got := r.git("branch", "--show-current"); got != "feature/login" {
+		t.Fatalf("search checkout selected %q", got)
+	}
+}
 
 func TestBranchWorkflowIntegrationCreateSwitchRenameResetDelete(t *testing.T) {
 	r := newUIE2ERepo(t)

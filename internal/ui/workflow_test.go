@@ -9,9 +9,40 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richard/lazymagit/internal/git"
 	"github.com/richard/lazymagit/internal/keymap"
 )
+
+func TestWorkflowSearchFiltersSelectsAndAllowsCustomValues(t *testing.T) {
+	field := WorkflowField{Kind: WorkflowSearch, Choices: []WorkflowChoice{{Value: "main", Label: "main (current)"}, {Value: "feature/login", Label: "feature/login"}, {Value: "release", Label: "release"}}, AllowCustom: true}
+	field.Search = "log"
+	updateWorkflowSearch(&field, 0)
+	if field.Value != "feature/login" || len(workflowSearchChoices(field)) != 1 {
+		t.Fatalf("filtered search field = %+v", field)
+	}
+	field.Search = "HEAD~2"
+	updateWorkflowSearch(&field, 0)
+	if field.Value != "HEAD~2" || len(workflowSearchChoices(field)) != 0 {
+		t.Fatalf("custom search field = %+v", field)
+	}
+}
+
+func TestWorkflowSearchKeyboardAndStyledActions(t *testing.T) {
+	m := New(nil)
+	m.width, m.height = 100, 24
+	m.loading = false
+	m.OpenWorkflow(WorkflowDialog{Title: "Checkout", ActionLabel: "Checkout", Fields: []WorkflowField{{Name: "revision", Label: "Search", Kind: WorkflowSearch, Choices: []WorkflowChoice{{Value: "main", Label: "main"}, {Value: "feature", Label: "feature"}}, Required: true}}, Run: func(WorkflowValues) tea.Cmd { return nil }})
+	_, _ = m.Update(keyMsg("f"))
+	if got := m.workflow.dialog.Fields[0].Value; got != "feature" {
+		t.Fatalf("typed search selected %q", got)
+	}
+	rendered := m.renderWorkflowOverlay(100, 20)
+	plain := ansi.Strip(rendered)
+	if !strings.Contains(plain, "feature") || !strings.Contains(plain, "Checkout") || !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("search/action overlay = %q", plain)
+	}
+}
 
 func TestUIHandlerAndInfixInvariants(t *testing.T) {
 	m := New(&gitbackend.Repository{})

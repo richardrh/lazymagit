@@ -21,6 +21,8 @@ var connectedBranchCommands = []string{
 	"magit-branch-rename",
 	"magit-branch-reset",
 	"magit-branch-delete",
+	"magit-checkout-remote-ref",
+	"magit-update-default-branch",
 }
 
 func branchBinding(t *testing.T, upstream string) keymap.Binding {
@@ -36,6 +38,7 @@ func branchBinding(t *testing.T, upstream string) keymap.Binding {
 
 func TestBranchWorkflowExactHandlerRegistrationAndAvailability(t *testing.T) {
 	m := New(&gitbackend.Repository{})
+	m.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
 	catalog, ok := m.transientCatalog(branchPrefix)
 	if !ok {
 		t.Fatal("branch transient is missing")
@@ -52,8 +55,7 @@ func TestBranchWorkflowExactHandlerRegistrationAndAvailability(t *testing.T) {
 	}
 
 	for _, upstream := range []string{
-		"magit-update-default-branch",
-		"magit-checkout-remote-ref", "magit-branch-spinoff", "magit-branch-spinout",
+		"magit-branch-spinoff", "magit-branch-spinout",
 		"magit-branch-shelve", "magit-branch-unshelve",
 	} {
 		binding := branchBinding(t, upstream)

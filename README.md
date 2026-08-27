@@ -12,10 +12,13 @@ prefixes with an optional Vim navigation layer.
 - Porcelain-v2 status parsing with separate staged and unstaged state
 - Safe handling of spaces, Unicode, leading dashes, and Git pathspec magic
 - Stable, foldable sections for untracked, unstaged, staged, upstream, and log
-- Whole-file stage, unstage, aggregate tracked staging, and confirmed discard
-- Commit creation, revision inspection, local branch switching, remote add, fetch, and push
-- Side-by-side status and change-colored diff views on wide terminals
-- Responsive stacked view on narrow terminals
+- Whole-file and reviewed file/hunk/changed-line stage, unstage, and discard
+- Stale-safe interactive patch reviews that revalidate the exact source diff before mutation
+- Commit creation, revision inspection, searchable branch switching, remote add, fetch, and push
+- Standard side-by-side and optional compact borderless status/diff layouts
+- Universal status-row search with `/`, then `n` / `N` navigation
+- Searchable worktree and branch browsers
+- Bundled default, Tokyo Night, Catppuccin Mocha, Nord, Dracula, Gruvbox Dark, and Solarized Dark themes
 - Responsive Magit-style command transients with explicit unavailable actions
 - Asynchronous Git operations with stale-result protection
 - Bounded Magit-style Git process transcript with terminal-safe clipboard copy
@@ -28,7 +31,7 @@ Requirements: Go 1.25 or newer and Git available on `PATH`.
 ```sh
 go test ./...
 CGO_ENABLED=0 go build -o lazymagit ./cmd/lazymagit
-./lazymagit [--init] [repository]
+./lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]
 ```
 
 The resulting executable contains the Go application and TUI dependencies in
@@ -56,6 +59,9 @@ Magit scheme. This explicit mode is necessary because Vim's `k` (move up) and
 | Toggle section | `Tab` | `Tab` |
 | Show depth | `1`, `2`, `3` | `1`, `2`, `3` |
 | Stage / unstage | `s` / `u` | `s` / `u` |
+| Focus previous / next hunk | `[` / `]` | `[` / `]` |
+| Select changed-line range | `v`, then `j` / `k` | `v`, then `n` / `p` |
+| Search status / next / previous | `/`, then `n` / `N` | `/`, then `n` / `N` |
 | Stage modified / unstage all | `S` / `U` | `S` / `U` |
 | Confirmed discard | `x` | `k` |
 | Commit | `c c` | `c c` |
@@ -109,15 +115,6 @@ There is not yet a separate prompt for configuring repository-wide
 
 ## Compatibility scope
 
-This is not yet a behavior-exact port of all Magit. The implemented first wave
-covers the core status workflow and common commands. Hunk/region operations,
-interactive rebase, stashes, conflict resolution, submodule/worktree
-management, executable full transient option sets, and Emacs extension APIs remain out of
-scope. See [docs/compatibility.md](docs/compatibility.md) for upstream test
-traceability and [docs/parity.md](docs/parity.md) for the feature-by-feature
-parity matrix and [docs/keybindings.md](docs/keybindings.md) for the complete
-98-key status ledger.
+This is not yet a behavior-exact port of all Magit. The implemented wave now covers the core status workflow, reviewed hunk/changed-line mutations, searchable branch and worktree browsers, compact layout, and common commands. Interactive rebase, complete conflict resolution, arbitrary disjoint patch selection, executable full transient option sets, and Emacs extension APIs remain out of scope. See [docs/compatibility.md](docs/compatibility.md) for upstream test traceability and [docs/parity.md](docs/parity.md) for the feature-by-feature parity matrix and [docs/keybindings.md](docs/keybindings.md) for the complete 98-key status ledger.
 
-Destructive actions operate on whole files, require confirmation, treat paths
-literally, and reject mixed staged/unstaged discard when preserving one side
-cannot be guaranteed.
+Whole-file destructive actions require confirmation and reject unsafe mixed-state cases. Focused hunk and changed-line mutations use a two-phase Review/Execute flow, reconstruct patches inside the backend, revalidate the exact source diff immediately before execution, and fail closed with a stale-plan error if repository state changed.
