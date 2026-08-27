@@ -232,7 +232,7 @@ func (m *Model) renderFooter() string {
 			primary = append(primary, workflow(binding.Display, binding.Label))
 		}
 		left = strings.Join(primary, "  ")
-		optional := []string{"$ Processes", "? Commands"}
+		optional := []string{"↑/↓ detail  [/ ] hunks", "$ Processes", "? Commands"}
 		if m.scheme == schemeMagit {
 			optional = append(optional, "[Magit] F2 Vim", "n/p move")
 		} else {

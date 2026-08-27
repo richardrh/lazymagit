@@ -21,6 +21,24 @@ const (
 // Occurrence-specific IDs remain owned by keymap; this file only associates
 // upstream behavior names with typed repository operations.
 func init() {
+	submoduleOptions := []string{"transient:magit-submodule:--force", "transient:magit-submodule:--recursive", "transient:magit-submodule:--no-fetch", "transient:magit-submodule:--checkout", "transient:magit-submodule:--rebase", "transient:magit-submodule:--merge", "transient:magit-submodule:--remote"}
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-submodule", map[string][]string{
+		"magit-submodule-add":         {"transient:magit-submodule:--force"},
+		"magit-submodule-populate":    submoduleOptions,
+		"magit-submodule-update":      submoduleOptions,
+		"magit-submodule-synchronize": {"transient:magit-submodule:--recursive"},
+		"magit-submodule-unpopulate":  {"transient:magit-submodule:--force"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-subtree-import", map[string][]string{
+		"magit-subtree-add":        {"magit-subtree:--prefix", "magit-subtree:--message", "transient:magit-subtree-import:--squash"},
+		"magit-subtree-add-commit": {"magit-subtree:--prefix", "magit-subtree:--message", "transient:magit-subtree-import:--squash"},
+		"magit-subtree-merge":      {"magit-subtree:--prefix", "magit-subtree:--message", "transient:magit-subtree-import:--squash"},
+		"magit-subtree-pull":       {"magit-subtree:--prefix", "magit-subtree:--message", "transient:magit-subtree-import:--squash"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-subtree-export", map[string][]string{
+		"magit-subtree-push":  {"magit-subtree:--prefix", "magit-subtree:--branch"},
+		"magit-subtree-split": {"magit-subtree:--prefix", "magit-subtree:--branch"},
+	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		byUpstream := map[string]WorkflowHandler{
 			"magit-submodule-add": submoduleAddWorkflow, "magit-submodule-register": submoduleInitWorkflow,

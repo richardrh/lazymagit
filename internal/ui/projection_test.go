@@ -66,6 +66,44 @@ func TestProjectionMagitCommitRowsUpstreamHeadingsAndFallback(t *testing.T) {
 	}
 }
 
+func TestProjectionStashesUseStableOIDIdentity(t *testing.T) {
+	stash := gitbackend.Stash{Ref: "stash@{0}", ID: "1234567890abcdef", ShortID: "1234567", Subject: "On main: subject\x1b[2J"}
+	sections, rows := project(snapshot{stashes: []gitbackend.Stash{stash}})
+	m := sectionmodel.New(sections)
+	want := []sectionmodel.SectionID{"status/stashes", "status/stashes/stash/1234567890abcdef"}
+	if got := m.VisibleSectionIDs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("stash rows = %v, want %v", got, want)
+	}
+	if got := m.Section("status/stashes").Title(); got != "Stashes (1)" {
+		t.Fatalf("stash heading = %q", got)
+	}
+	id := sectionmodel.SectionID("status/stashes/stash/1234567890abcdef")
+	if got := m.Section(id).Title(); got != "1234567 On main: subject␛[2J" {
+		t.Fatalf("stash title = %q", got)
+	}
+	if rows[id].kind != rowStash || rows[id].stash.ID != stash.ID {
+		t.Fatalf("stash row = %#v", rows[id])
+	}
+
+	stash.Ref = "stash@{1}"
+	refreshed, _ := project(snapshot{stashes: []gitbackend.Stash{stash}})
+	if got := sectionmodel.New(refreshed).VisibleSectionIDs(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("reflog movement changed stash identity: %v", got)
+	}
+}
+
+func TestProjectionDeduplicatesRepeatedStashOIDs(t *testing.T) {
+	stash := gitbackend.Stash{ID: "same", ShortID: "same123", Subject: "same tree"}
+	sections, _ := project(snapshot{stashes: []gitbackend.Stash{stash, stash}})
+	m := sectionmodel.New(sections)
+	if got := m.VisibleSectionIDs(); !reflect.DeepEqual(got, []sectionmodel.SectionID{"status/stashes", "status/stashes/stash/same"}) {
+		t.Fatalf("duplicate stash rows = %v", got)
+	}
+	if got := m.Section("status/stashes").Title(); got != "Stashes (1)" {
+		t.Fatalf("deduplicated heading = %q", got)
+	}
+}
+
 func TestProjectionUsesRecentOnlyWithoutAheadCommits(t *testing.T) {
 	sections, _ := project(snapshot{recent: []gitbackend.Commit{{ID: "123456789", Subject: "recent"}}})
 	m := sectionmodel.New(sections)

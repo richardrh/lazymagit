@@ -27,6 +27,13 @@ const (
 )
 
 func init() {
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-am", map[string][]string{
+		"magit-am-apply-maildir": {"transient:magit-am:--3way", "transient:magit-am:--scissors", "magit:--signoff"},
+		"magit-am-apply-patches": {"transient:magit-am:--3way", "transient:magit-am:--scissors", "magit:--signoff"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-patch-apply", map[string][]string{
+		"magit-patch-apply": {"transient:magit-patch-apply:--index", "transient:magit-patch-apply:--cached", "transient:magit-patch-apply:--3way"},
+	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := map[keymap.CommandID]WorkflowHandler{
 			amApplyMaildirID: amStartWorkflow,
@@ -87,13 +94,15 @@ func amStartWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 }
 
 func applyPatchWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
-	threeWay := optionEnabled(command.Options, "transient:magit-am:--3way")
+	index := optionEnabled(command.Options, "transient:magit-patch-apply:--index")
+	cached := optionEnabled(command.Options, "transient:magit-patch-apply:--cached")
+	threeWay := optionEnabled(command.Options, "transient:magit-patch-apply:--3way") || optionEnabled(command.Options, "transient:magit-am:--3way")
 	return m.OpenWorkflow(WorkflowDialog{
 		Title: "Apply patch", Operation: "apply patch", Confirmation: "Apply this file without creating a commit",
 		Fields: []WorkflowField{
 			{Name: "path", Label: "Patch file", Kind: WorkflowText, Required: true},
-			{Name: "index", Label: "Apply to worktree and index", Kind: WorkflowBool},
-			{Name: "cached", Label: "Apply to index only", Kind: WorkflowBool},
+			{Name: "index", Label: "Apply to worktree and index", Kind: WorkflowBool, Bool: index},
+			{Name: "cached", Label: "Apply to index only", Kind: WorkflowBool, Bool: cached},
 			{Name: "three-way", Label: "Use three-way merge", Kind: WorkflowBool, Bool: threeWay},
 		},
 		Validate: func(values WorkflowValues) error {
@@ -226,7 +235,7 @@ func optionEnabled(options map[keymap.CommandID]OptionValue, upstream string) bo
 
 func patchOptionUpstream(id keymap.CommandID) (string, bool) {
 	for _, binding := range keymap.Registry() {
-		if binding.Command == id && binding.Context == keymap.ContextTransient+"w" && binding.Kind == keymap.KindInfix {
+		if binding.Command == id && binding.Kind == keymap.KindInfix {
 			return binding.UpstreamCommand, true
 		}
 	}

@@ -39,6 +39,36 @@ const (
 	commandCopyBufferRevision keymap.CommandID = "status.copy-revision"
 )
 
+var statusJumpSections = map[string]sectionmodel.SectionID{
+	"magit-jump-to-stashes":                "status/stashes",
+	"magit-jump-to-untracked":              "status/untracked",
+	"magit-jump-to-unstaged":               "status/unstaged",
+	"magit-jump-to-staged":                 "status/staged",
+	"magit-jump-to-unpulled-from-upstream": "status/unpulled",
+	"magit-jump-to-unpushed-to-upstream":   "status/unpushed",
+}
+
+func init() {
+	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
+		out := map[keymap.CommandID]WorkflowHandler{}
+		for _, binding := range keymap.Registry() {
+			section, ok := statusJumpSections[binding.UpstreamCommand]
+			if !ok || binding.Transient != "magit-status-jump" {
+				continue
+			}
+			targetSection := section
+			out[binding.Command] = func(m *Model, _ WorkflowCommand) tea.Cmd {
+				if m.tree.Section(targetSection) == nil {
+					m.setMessage("Status section is not present")
+					return nil
+				}
+				return m.finishNavigationMove(m.tree.SetCursor(targetSection))
+			}
+		}
+		return out
+	})
+}
+
 // handleNavigationKey is the raw-key side of the navigation domain. Keeping
 // this separate from handleKey allows the central dispatcher to call it before
 // the generic resolver while retaining Vim's j/k/g/G collisions. Multi-key
@@ -57,9 +87,6 @@ func (m *Model) handleNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 		"+": commandDiffMoreContext, "-": commandDiffLessContext, "0": commandDiffDefaultContext,
 		"H": commandDescribeSection, "J": commandDisplayRepository,
 		"ctrl+w": commandCopySectionValue, "alt+w": commandCopyBufferRevision,
-	}
-	if m.scheme == schemeMagit && key == "j" {
-		return m.performNavigationCommand(commandStatusJump)
 	}
 	command, ok := commands[key]
 	if !ok {
@@ -239,6 +266,8 @@ func (m *Model) copySelectedSection() tea.Cmd {
 			value = r.path
 		case r.kind == rowCommit:
 			value = r.commit.ID
+		case r.kind == rowStash:
+			value = r.stash.ID
 		}
 	}
 	if value == "" {

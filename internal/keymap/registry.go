@@ -147,6 +147,9 @@ type Binding struct {
 	UpstreamCommand     string
 	UpstreamKey         string
 	Kind                EntryKind
+	InfixClass          string
+	Argument            string
+	TakesValue          bool
 	Domain              string
 	Layer               string
 	Source              Source
@@ -413,9 +416,17 @@ func transientBindings(m manifest) []Binding {
 					reason = "availability is resolved from installed TUI consumers"
 				}
 			}
-			b := Binding{Occurrence: fmt.Sprintf("%s:%02d", tr.Name, occurrence), Sequence: seq, LocalSequence: local, Transient: tr.Name, ChildTransient: childTransient, Display: displaySequence(seq), Command: command, Label: transientLabel(entry.Description, entry.Command), Scheme: SchemeMagit, Context: ContextTransient + prefix, Parity: parity, UpstreamCommand: entry.Command, UpstreamKey: entry.Key, Kind: kind, Domain: entry.Domain, Source: tr.Source, Handler: handler, Availability: availability, Unavailable: reason, UnavailableCategory: category, Group: group, Conditions: conditions}
+			b := Binding{Occurrence: fmt.Sprintf("%s:%02d", tr.Name, occurrence), Sequence: seq, LocalSequence: local, Transient: tr.Name, ChildTransient: childTransient, Display: displaySequence(seq), Command: command, Label: transientLabel(entry.Description, entry.Command), Scheme: SchemeMagit, Context: ContextTransient + prefix, Parity: parity, UpstreamCommand: entry.Command, UpstreamKey: entry.Key, Kind: kind, InfixClass: entry.Class, Domain: entry.Domain, Source: tr.Source, Handler: handler, Availability: availability, Unavailable: reason, UnavailableCategory: category, Group: group, Conditions: conditions}
+			if entry.Argument != nil {
+				b.Argument = *entry.Argument
+			}
+			b.TakesValue = kind == KindInfix && entry.Class != "transient-switch"
 			out = append(out, b)
 			b.Scheme = SchemeVim
+			if tr.Name == "magit-status-jump" && b.Handler == HandlerExecute {
+				b.Handler, b.Availability, b.Parity = HandlerUnsupported, AvailabilityNever, ParityMissing
+				b.Unavailable, b.UnavailableCategory = "status jump uses Magit keys", UnavailableContext
+			}
 			out = append(out, b)
 		}
 	}
@@ -563,6 +574,7 @@ var transientCapability = map[string]map[string]bool{
 	"magit-remote":        setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
 	"magit-stash":         setOf("magit-stash-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),
 	"magit-stash-push":    setOf("magit-stash-push"),
+	"magit-status-jump":   setOf("magit-jump-to-stashes", "magit-jump-to-untracked", "magit-jump-to-unstaged", "magit-jump-to-staged", "magit-jump-to-unpulled-from-upstream", "magit-jump-to-unpushed-to-upstream"),
 }
 
 func setOf(values ...string) map[string]bool {
@@ -634,16 +646,24 @@ func transientLabel(raw json.RawMessage, command string) string {
 
 func canonicalSequence(value string) []string {
 	parts := strings.Fields(value)
-	// Transient's compact argument keys (for example -n, --, +s and =s) are
-	// Emacs key sequences, not one terminal key event. Expand them so the trie
-	// consumes the literal keystrokes emitted by a terminal.
-	if len(parts) == 1 && len(parts[0]) > 1 && strings.ContainsRune("-+=", rune(parts[0][0])) {
+	// Transient's compact argument keys (for example -n, --, +s and =s) and
+	// status-jump pairs are Emacs key sequences, not one terminal key event.
+	if len(parts) == 1 && len(parts[0]) > 1 && (strings.ContainsRune("-+=", rune(parts[0][0])) || compactStatusJumpKey(parts[0])) {
 		parts = strings.Split(parts[0], "")
 	}
 	for i, part := range parts {
 		parts[i] = canonicalToken(part)
 	}
 	return parts
+}
+
+func compactStatusJumpKey(value string) bool {
+	switch value {
+	case "fp", "fu", "pp", "pu":
+		return true
+	default:
+		return false
+	}
 }
 
 func canonicalToken(token string) string {

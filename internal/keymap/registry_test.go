@@ -117,6 +117,47 @@ func TestTransientCatalogIsExactCompleteOccurrenceMultiset(t *testing.T) {
 	}
 }
 
+func TestCompactStatusJumpSuffixesAreTerminalKeySequences(t *testing.T) {
+	for key, want := range map[string][]string{"fp": {"f", "p"}, "fu": {"f", "u"}, "pp": {"p", "p"}, "pu": {"p", "u"}} {
+		var found bool
+		for _, binding := range Registry() {
+			if binding.Scheme == SchemeMagit && binding.Transient == "magit-status-jump" && binding.UpstreamKey == key {
+				found = true
+				if !reflect.DeepEqual(binding.LocalSequence, want) {
+					t.Errorf("%s local sequence = %v, want %v", key, binding.LocalSequence, want)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("status jump %s missing", key)
+		}
+	}
+}
+
+func TestStatusJumpExecutableOccurrenceIdentities(t *testing.T) {
+	want := map[string]string{
+		"magit-status-jump:00": "magit-jump-to-stashes",
+		"magit-status-jump:02": "magit-jump-to-untracked",
+		"magit-status-jump:04": "magit-jump-to-unstaged",
+		"magit-status-jump:05": "magit-jump-to-staged",
+		"magit-status-jump:06": "magit-jump-to-unpulled-from-upstream",
+		"magit-status-jump:08": "magit-jump-to-unpushed-to-upstream",
+	}
+	for _, binding := range Registry() {
+		command, ok := want[binding.Occurrence]
+		if binding.Scheme != SchemeMagit || !ok {
+			continue
+		}
+		if binding.UpstreamCommand != command || binding.Handler != HandlerExecute || binding.Parity != ParityPartial {
+			t.Errorf("%s = %+v, want executable %s", binding.Occurrence, binding, command)
+		}
+		delete(want, binding.Occurrence)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing executable status-jump occurrences: %v", want)
+	}
+}
+
 func TestOccurrencesHaveStableUniqueDomainIdentity(t *testing.T) {
 	seen := map[string]bool{}
 	count := 0

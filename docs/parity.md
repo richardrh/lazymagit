@@ -26,7 +26,7 @@ not.
 | Push | Partial | `P p` preserves plain push with an existing upstream; otherwise uses the configured push remote or a **Push and set upstream** destination chooser without pre-writing push-remote config | Arbitrary destination/upstream prompts, repository-wide push-default prompt, tags, force-with-lease transient |
 | Diff/log | Partial | File diffs and structured status logs | General `d`/`l` views, ranges, graph, filters |
 | Conflicts | Missing workflow | Unmerged state parses | Ours/theirs/base, resolve, continue/abort |
-| Stash | Missing | — | `z` transient and status section |
+| Stash | Partial | `z` transient workflows plus folded status section, `j z` jump, stable OID rows, and bounded lazy patch detail | Remaining stash suffixes and exact section presentation edge cases |
 | Merge/rebase/cherry-pick | Missing | — | Start, sequence status, continue/skip/abort |
 | Reset | Missing | Magit `x`/`X` are recognized and report their upstream missing status; Vim `x` remains the adapted discard key | Quick reset and `X` transient |
 | Tags | Partial | Decorations display | `t` create/delete/prune/push |

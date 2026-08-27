@@ -15,6 +15,15 @@ import (
 // contains no copied command IDs and remains correct for conditional duplicate
 // rows in the Magit 4.7 manifest.
 func init() {
+	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "magit:--signoff"}
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-cherry-pick", map[string][]string{
+		"magit-cherry-copy":  pickOptions,
+		"magit-cherry-apply": pickOptions,
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-revert", map[string][]string{
+		"magit-revert-and-commit": {"magit-cherry-pick:--mainline", "transient:magit-revert:--no-edit", "magit-merge:--strategy", "magit:--signoff"},
+		"magit-revert-no-commit":  {"magit-cherry-pick:--mainline", "transient:magit-revert:--no-edit", "magit-merge:--strategy", "magit:--signoff"},
+	})...)
 	RegisterWorkflowDomain(func(m *Model) map[keymap.CommandID]WorkflowHandler {
 		out := make(map[keymap.CommandID]WorkflowHandler)
 		for _, binding := range keymap.Registry() {
@@ -89,6 +98,8 @@ func historyTransientHandler(transient, upstream string) WorkflowHandler {
 			return openRebaseWorkflow
 		case "magit-rebase-onto-upstream":
 			return openRebaseUpstream
+		case "magit-rebase-onto-pushremote":
+			return openRebasePushRemote
 		case "magit-rebase-continue":
 			return reviewedHistoryAction(gitbackend.HistoryUIRebaseContinue)
 		case "magit-rebase-skip":
@@ -265,6 +276,40 @@ func openRebaseUpstream(m *Model, c WorkflowCommand) tea.Cmd {
 	return openReviewedHistoryDialog(m, "Review rebase onto upstream", nil, func(WorkflowValues) gitbackend.HistoryUIRequest {
 		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: gitbackend.RebaseOptions{Upstream: m.snapshot.summary.Upstream}}
 	})
+}
+
+func openRebasePushRemote(m *Model, _ WorkflowCommand) tea.Cmd {
+	return m.LoadWorkflow("push remote", func(ctx context.Context) (WorkflowDialog, error) {
+		remote, err := m.repo.PushRemote(ctx)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		branch := m.snapshot.summary.Branch
+		if branch == "" || m.snapshot.summary.Detached {
+			return WorkflowDialog{}, errors.New("rebase onto push remote requires a current local branch")
+		}
+		target := remote + "/" + branch
+		return reviewedHistoryWorkflowDialog(m, "Review rebase onto push remote", gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: gitbackend.RebaseOptions{Upstream: target}}), nil
+	})
+}
+
+func reviewedHistoryWorkflowDialog(m *Model, title string, request gitbackend.HistoryUIRequest) WorkflowDialog {
+	return WorkflowDialog{Title: title, Operation: string(request.Action),
+		ReviewPreflight: func(ctx context.Context, _ WorkflowValues) (WorkflowReview, error) {
+			review, err := m.repo.ReviewHistoryUIAction(ctx, request)
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			plan := append([]string(nil), review.Plan...)
+			plan = append(plan, "HEAD "+review.State.HEAD, "Index "+review.State.Index, "Worktree "+review.State.Worktree, "Operation "+review.State.Operation)
+			return WorkflowReview{Plan: plan, Confirmation: "Execute only if the exact reviewed repository state is unchanged", Data: review}, nil
+		}, SubmitReview: func(ctx context.Context, _ WorkflowValues, transported WorkflowReview) error {
+			review, ok := transported.Data.(gitbackend.ReviewedHistoryUIAction)
+			if !ok {
+				return errors.New("invalid reviewed history token")
+			}
+			return m.repo.ExecuteReviewedHistoryUIAction(ctx, review)
+		}}
 }
 
 func openResetWorkflow(m *Model, mode gitbackend.ResetMode, pathMode bool) tea.Cmd {

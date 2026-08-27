@@ -90,6 +90,33 @@ func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
 	}
 }
 
+func TestHistoryE2ERebaseOntoPushRemoteByKeys(t *testing.T) {
+	local, _, _ := newPushWorkflowE2E(t)
+	local.git("push", "-u", "origin", "main")
+	local.git("config", "remote.pushDefault", "origin")
+	local.write("local.txt", "local\n")
+	local.git("add", "local.txt")
+	local.git("commit", "-m", "local change")
+	head := local.git("rev-parse", "HEAD")
+	m := newE2EModel(t, local)
+	sendE2EKey(t, m, keyMsg("f2"))
+
+	sendE2EKey(t, m, keyMsg("r"))
+	sendE2EKey(t, m, keyMsg("p"))
+	if m.workflow == nil {
+		t.Fatalf("push-remote rebase did not open: %q", m.message)
+	}
+	historyE2ESubmit(t, m)
+	originMain := local.git("rev-parse", "origin/main")
+	if m.workflow == nil || m.workflow.review == nil || !strings.Contains(strings.Join(m.workflow.review.Plan, "\n"), originMain) {
+		t.Fatalf("push-remote rebase review = %#v", m.workflow)
+	}
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if m.isError || local.git("rev-parse", "HEAD") != head || local.git("status", "--porcelain") != "" {
+		t.Fatalf("push-remote rebase result: error=%v message=%q", m.isError, m.message)
+	}
+}
+
 func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 	for _, finish := range []string{"continue", "abort"} {
 		t.Run(finish, func(t *testing.T) {

@@ -65,6 +65,60 @@ func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 	}
 }
 
+func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
+	m := newInspectE2EModel(t)
+
+	sendInspectSequence(t, m, "l", "o")
+	if m.workflow == nil {
+		t.Fatalf("log-other prompt did not open: %q", m.message)
+	}
+	historyE2EReplaceField(t, m, "HEAD~1")
+	historyE2ESubmit(t, m)
+	assertInspectDetail(t, m, "Log HEAD~1", "inspection first")
+
+	sendInspectSequence(t, m, "l", "B")
+	if m.workflow == nil {
+		t.Fatalf("matching-branches prompt did not open: %q", m.message)
+	}
+	historyE2EReplaceField(t, m, "main")
+	historyE2ESubmit(t, m)
+	assertInspectDetail(t, m, "Log matching branches", "inspection second")
+
+	sendInspectSequence(t, m, "y", "o")
+	if m.workflow == nil {
+		t.Fatalf("refs-other prompt did not open: %q", m.message)
+	}
+	historyE2EReplaceField(t, m, "HEAD~1")
+	historyE2ESubmit(t, m)
+	assertInspectDetail(t, m, "References for HEAD~1", "Local branches")
+}
+
+func TestInspectReflogShortlogAndMergedRefsThroughModelUpdate(t *testing.T) {
+	m := newInspectE2EModel(t)
+
+	sendInspectSequence(t, m, "l", "r")
+	assertInspectDetail(t, m, "Reflog main", "commit: inspection second")
+
+	sendInspectSequence(t, m, "l", "O")
+	if m.workflow == nil {
+		t.Fatalf("reflog-other prompt did not open: %q", m.message)
+	}
+	historyE2EReplaceField(t, m, "HEAD")
+	historyE2ESubmit(t, m)
+	assertInspectDetail(t, m, "Reflog HEAD", "commit: inspection second")
+
+	sendInspectSequence(t, m, "l", "s", "-", "s", "s")
+	if m.workflow == nil {
+		t.Fatalf("shortlog prompt did not open: %q", m.message)
+	}
+	historyE2EReplaceField(t, m, "HEAD")
+	historyE2ESubmit(t, m)
+	assertInspectDetail(t, m, "Shortlog HEAD", "UI E2E Test")
+
+	sendInspectSequence(t, m, "y", "-", "m", "y")
+	assertInspectDetail(t, m, "References", "Local branches", "main")
+}
+
 func TestInspectLogRefreshPropagatesLimitOptionThroughModelUpdate(t *testing.T) {
 	m := newInspectE2EModel(t)
 	sendInspectSequence(t, m, "L", "-", "n", "1")

@@ -18,6 +18,7 @@ const (
 	rowUnstaged
 	rowStaged
 	rowCommit
+	rowStash
 )
 
 type row struct {
@@ -25,6 +26,7 @@ type row struct {
 	kind    rowKind
 	path    string
 	commit  gitbackend.Commit
+	stash   gitbackend.Stash
 	depth   int
 	section string
 }
@@ -34,14 +36,17 @@ type row struct {
 type snapshot struct {
 	summary                         gitbackend.Summary
 	status                          gitbackend.Status
+	stashes                         []gitbackend.Stash
 	recent                          []gitbackend.Commit
 	upstream                        gitbackend.UpstreamRanges
 	remotes                         []gitbackend.Remote
 	pushRemote                      string
+	operations                      gitbackend.OperationState
+	sparse                          gitbackend.SparseCheckoutState
 	aheadTruncated, behindTruncated bool
 }
 
-var sectionIDs = []string{"untracked", "unstaged", "staged", "unpushed", "unpulled", "recent"}
+var sectionIDs = []string{"untracked", "unstaged", "staged", "stashes", "unpushed", "unpulled", "recent"}
 
 func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]row) {
 	s = normalizeUpstreamSnapshot(s)
@@ -69,12 +74,22 @@ func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]ro
 	}
 	addCommits("unpushed", s.upstream.Ahead)
 	addCommits("unpulled", s.upstream.Behind)
+	seenStashes := make(map[string]bool, len(s.stashes))
+	for _, stash := range s.stashes {
+		if seenStashes[stash.ID] {
+			continue
+		}
+		seenStashes[stash.ID] = true
+		id := sectionmodel.SectionID("status/stashes/stash/" + stash.ID)
+		children["stashes"] = append(children["stashes"], sectionmodel.NewSection(id, stashTitle(stash)))
+		rows[id] = row{id: id, kind: rowStash, stash: stash, depth: 2, section: "stashes"}
+	}
 	if len(s.upstream.Ahead) == 0 {
 		addCommits("recent", s.recent)
 	}
 
 	titles := map[string]string{
-		"untracked": "Untracked files", "unstaged": "Unstaged changes", "staged": "Staged changes",
+		"untracked": "Untracked files", "unstaged": "Unstaged changes", "staged": "Staged changes", "stashes": "Stashes",
 		"unpushed": "Unmerged into " + sanitizeSingleLine(s.summary.Upstream),
 		"unpulled": "Unpulled from " + sanitizeSingleLine(s.summary.Upstream),
 		"recent":   "Recent commits",
@@ -126,6 +141,21 @@ func changeWord(c gitbackend.Change) string {
 	default:
 		return "modified"
 	}
+}
+
+func stashTitle(stash gitbackend.Stash) string {
+	id := sanitizeSingleLine(stash.ShortID)
+	if id == "" {
+		idRunes := []rune(sanitizeSingleLine(stash.ID))
+		if len(idRunes) > 7 {
+			idRunes = idRunes[:7]
+		}
+		id = string(idRunes)
+	}
+	if subject := sanitizeSingleLine(strings.TrimSpace(stash.Subject)); subject != "" {
+		return strings.TrimSpace(id + " " + subject)
+	}
+	return id
 }
 
 func commitTitle(c gitbackend.Commit) string {

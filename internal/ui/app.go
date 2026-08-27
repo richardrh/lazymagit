@@ -71,7 +71,20 @@ type diffMsg struct {
 	text     string
 	err      error
 	revision bool
+	stash    bool
 }
+
+func (m diffMsg) detailKind() string {
+	if m.stash {
+		return "stash"
+	}
+	if m.revision {
+		return "commit/revision"
+	}
+	return "diff"
+}
+
+func (m diffMsg) emptyDetail() string { return "No " + m.detailKind() + " output." }
 
 type branchesMsg struct {
 	request  uint64
@@ -128,6 +141,7 @@ type Model struct {
 	transientEditOriginal OptionValue
 
 	showCommit      func(context.Context, string) (string, error)
+	showStash       func(context.Context, string) (gitbackend.StashDetails, error)
 	addRemote       func(context.Context, string, string, bool) error
 	fetch           func(context.Context, ...string) error
 	fetchUpstream   func(context.Context) error
@@ -158,12 +172,13 @@ func New(repo *gitbackend.Repository) *Model {
 		message: "Loading repository…",
 		appCtx:  appCtx, appCancel: appCancel,
 		foldPreferences: map[sectionmodel.SectionID]bool{
-			"status/untracked": true, "status/unpulled": true, "status/recent": true,
+			"status/untracked": true, "status/stashes": true, "status/unpulled": true, "status/recent": true,
 		},
 		transientOptions: make(map[keymap.CommandID]OptionValue),
 	}
 	if repo != nil {
 		m.showCommit = repo.ShowCommit
+		m.showStash = repo.ShowStash
 		m.addRemote = repo.AddRemote
 		m.fetch = repo.Fetch
 		m.fetchUpstream = repo.FetchUpstream
@@ -186,9 +201,10 @@ func New(repo *gitbackend.Repository) *Model {
 		m.unstageAll = repo.UnstageAll
 		m.snapshotLoader = func(ctx context.Context) (snapshot, error) {
 			return loadSnapshotWith(ctx, snapshotQueries{
-				summary: repo.Summary, status: repo.Status, remotes: repo.Remotes,
+				summary: repo.Summary, status: repo.Status, stashes: repo.Stashes, remotes: repo.Remotes,
 				recentLog: repo.RecentLog, upstreamLogLimit: repo.UpstreamLogLimit,
-				pushRemote: m.pushRemote,
+				pushRemote: m.pushRemote, operations: repo.QueryOperationState,
+				sparse: repo.SparseCheckoutState,
 			})
 		}
 	}
@@ -315,17 +331,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		m.detailID = msg.id
 		m.detailOffset = 0
 		if msg.err != nil {
-			what := "diff"
-			if msg.revision {
-				what = "commit/revision"
-			}
-			m.detail = "Unable to load " + what + ":\n" + sanitizeSingleLine(msg.err.Error())
+			m.detail = "Unable to load " + msg.detailKind() + ":\n" + sanitizeSingleLine(msg.err.Error())
 		} else if msg.text == "" {
-			if msg.revision {
-				m.detail = "No commit/revision output."
-			} else {
-				m.detail = "No diff output."
-			}
+			m.detail = msg.emptyDetail()
 		} else {
 			m.detail = sanitizeDiff(msg.text)
 		}
@@ -590,6 +598,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.cancelPrefix()
 		return m, cmd
 	}
+	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
+		if cmd, handled := m.handleNavigationKey(msg); handled {
+			m.cancelPrefix()
+			return m, cmd
+		}
+	}
 	prefix := m.resolver.PendingPrefix()
 	hadPrefix := prefix != ""
 	result := m.resolver.Feed(m.keyContext(), key)
@@ -718,7 +732,7 @@ func (m *Model) validateTransientOptions(prefix string, suffix keymap.CommandID)
 }
 
 func (m *Model) editTransientOption(entry menuEntry) {
-	if !strings.HasPrefix(entry.UpstreamCommand, "transient:") || strings.Contains(entry.UpstreamCommand, "push-option") {
+	if entry.TakesValue {
 		copy := entry
 		m.transientEdit = &copy
 		m.transientEditOriginal = m.transientOptions[entry.Command]
@@ -891,6 +905,18 @@ func (m *Model) handleDetailScroll(key string) (tea.Cmd, bool) {
 	page := viewport
 	halfPage := max(1, viewport/2)
 	switch key {
+	case "down":
+		m.scrollDetail(1)
+	case "up":
+		m.scrollDetail(-1)
+	case "home":
+		m.detailOffset = 0
+	case "end":
+		m.detailOffset = m.detailMaximumOffset()
+	case "]":
+		m.scrollDetailHunk(1)
+	case "[":
+		m.scrollDetailHunk(-1)
 	case "pgdown":
 		m.scrollDetail(page)
 	case "ctrl+d":
@@ -910,11 +936,37 @@ func (m *Model) scrollDetail(delta int) {
 	m.clampDetailOffset()
 }
 
-func (m *Model) clampDetailOffset() {
+func (m *Model) detailMaximumOffset() int {
 	viewport := m.detailViewportHeight()
-	lineCount := len(strings.Split(strings.TrimSuffix(sanitizeDiff(m.detail), "\n"), "\n"))
-	maximum := max(0, lineCount-viewport)
-	m.detailOffset = min(max(0, m.detailOffset), maximum)
+	lineCount := len(m.detailLines())
+	return max(0, lineCount-viewport)
+}
+
+func (m *Model) detailLines() []string {
+	return strings.Split(strings.TrimSuffix(sanitizeDiff(m.detail), "\n"), "\n")
+}
+
+func (m *Model) scrollDetailHunk(direction int) {
+	lines := m.detailLines()
+	if direction > 0 {
+		for i := m.detailOffset + 1; i < len(lines); i++ {
+			if strings.HasPrefix(lines[i], "@@") {
+				m.detailOffset = min(i, m.detailMaximumOffset())
+				return
+			}
+		}
+		return
+	}
+	for i := min(m.detailOffset-1, len(lines)-1); i >= 0; i-- {
+		if strings.HasPrefix(lines[i], "@@") {
+			m.detailOffset = i
+			return
+		}
+	}
+}
+
+func (m *Model) clampDetailOffset() {
+	m.detailOffset = min(max(0, m.detailOffset), m.detailMaximumOffset())
 }
 
 func (m *Model) detailViewportHeight() int {
@@ -1230,17 +1282,21 @@ func (m *Model) loadSnapshotCmd() tea.Cmd {
 type snapshotQueries struct {
 	summary          func(context.Context) (gitbackend.Summary, error)
 	status           func(context.Context) (gitbackend.Status, error)
+	stashes          func(context.Context) ([]gitbackend.Stash, error)
 	remotes          func(context.Context) ([]gitbackend.Remote, error)
 	recentLog        func(context.Context, int) ([]gitbackend.Commit, error)
 	upstreamLogLimit func(context.Context, int) (gitbackend.UpstreamRanges, error)
 	pushRemote       func(context.Context) (string, error)
+	operations       func(context.Context) (gitbackend.OperationState, error)
+	sparse           func(context.Context) (gitbackend.SparseCheckoutState, error)
 }
 
 func loadSnapshot(ctx context.Context, repo *gitbackend.Repository) (snapshot, error) {
 	return loadSnapshotWith(ctx, snapshotQueries{
-		summary: repo.Summary, status: repo.Status, remotes: repo.Remotes,
+		summary: repo.Summary, status: repo.Status, stashes: repo.Stashes, remotes: repo.Remotes,
 		recentLog: repo.RecentLog, upstreamLogLimit: repo.UpstreamLogLimit,
-		pushRemote: repo.PushRemote,
+		pushRemote: repo.PushRemote, operations: repo.QueryOperationState,
+		sparse: repo.SparseCheckoutState,
 	})
 }
 
@@ -1253,11 +1309,26 @@ func loadSnapshotWith(ctx context.Context, queries snapshotQueries) (snapshot, e
 	if s.status, err = queries.status(ctx); err != nil {
 		return s, fmt.Errorf("status: %w", err)
 	}
+	if queries.stashes != nil {
+		if s.stashes, err = queries.stashes(ctx); err != nil {
+			return s, fmt.Errorf("stashes: %w", err)
+		}
+	}
 	if s.remotes, err = queries.remotes(ctx); err != nil {
 		return s, fmt.Errorf("remotes: %w", err)
 	}
 	if s.pushRemote, err = queries.pushRemote(ctx); err != nil && !errors.Is(err, gitbackend.ErrNoFetchRemote) {
 		return s, fmt.Errorf("push remote: %w", err)
+	}
+	if queries.operations != nil {
+		if s.operations, err = queries.operations(ctx); err != nil {
+			return s, fmt.Errorf("operation state: %w", err)
+		}
+	}
+	if queries.sparse != nil {
+		if s.sparse, err = queries.sparse(ctx); err != nil {
+			return s, fmt.Errorf("sparse checkout state: %w", err)
+		}
 	}
 	if s.recent, err = queries.recentLog(ctx, 10); err != nil {
 		return s, fmt.Errorf("recent log: %w", err)
@@ -1331,6 +1402,19 @@ func (m *Model) loadDetailCmd() tea.Cmd {
 		return func() tea.Msg {
 			text, err := m.showCommit(ctx, r.commit.ID)
 			return diffMsg{id: r.id, request: request, text: text, err: err, revision: true}
+		}
+	}
+	if r.kind == rowStash {
+		m.detailID, m.detail = r.id, "Loading stash…"
+		ctx, cancel := context.WithCancel(m.appCtx)
+		m.detailCtx, m.detailCancel = ctx, cancel
+		return func() tea.Msg {
+			details, err := m.showStash(ctx, r.stash.ID)
+			text := ""
+			if err == nil {
+				text = stashDetailsText(details)
+			}
+			return diffMsg{id: r.id, request: request, text: text, err: err, stash: true}
 		}
 	}
 	if r.kind == rowUntracked {

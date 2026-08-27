@@ -3,7 +3,46 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
+
+func TestStashStatusSectionJumpAndDetailUsesStableOID(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("file", "base\n")
+	r.git("add", "--", "file")
+	r.git("commit", "-m", "base")
+	r.write("file", "stashed\n")
+	r.git("stash", "push", "-m", "status stash")
+	m := newE2EModel(t, r)
+	stashes, err := m.repo.Stashes(m.appCtx)
+	if err != nil || len(stashes) != 1 {
+		t.Fatalf("stashes = %#v, %v", stashes, err)
+	}
+	wantID := "status/stashes/stash/" + stashes[0].ID
+	if m.tree.Section(sectionmodel.SectionID(wantID)) == nil {
+		t.Fatalf("status tree omitted stable stash row %q", wantID)
+	}
+
+	sendE2EKey(t, m, keyMsg("f2"))
+	sendE2EKey(t, m, keyMsg("j"))
+	sendE2EKey(t, m, keyMsg("z"))
+	if got := string(m.tree.Cursor()); got != "status/stashes" {
+		t.Fatalf("j z cursor = %q", got)
+	}
+	if m.tree.IsFolded("status/stashes") {
+		m.tree.ToggleFold("status/stashes")
+	}
+	if !m.tree.SetCursor(sectionmodel.SectionID(wantID)) {
+		t.Fatalf("could not select visible stash row %q", wantID)
+	}
+	runE2ECmd(t, m, m.loadDetailCmd())
+	for _, want := range []string{stashes[0].ID, "status stash", "+stashed"} {
+		if !strings.Contains(m.detail, want) {
+			t.Fatalf("stash detail omitted %q: %q", want, m.detail)
+		}
+	}
+}
 
 func TestStashE2EPushRoutesSelectionAndCancellation(t *testing.T) {
 	r := newUIE2ERepo(t)

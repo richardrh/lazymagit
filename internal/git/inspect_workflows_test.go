@@ -112,6 +112,78 @@ func TestInspectionRefsCherryAndRevisionNavigation(t *testing.T) {
 	}
 }
 
+func TestInspectionReflogShortlogAndMergedRefs(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	base := r.commitAll("base")
+	r.git("branch", "merged", base)
+	r.git("switch", "-c", "unmerged")
+	r.write("topic.txt", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("next.txt", "next\n")
+	r.commitAll("next")
+	repo, _ := Discover(r.dir)
+
+	reflog, err := repo.QueryReflog(ctx, ReflogQuery{Revision: "HEAD", Limit: 2, OutputLimit: 512})
+	if err != nil || len(reflog.Items) != 2 || reflog.Items[0].ID == "" || reflog.Items[0].Selector == "" {
+		t.Fatalf("QueryReflog = %#v, %v", reflog, err)
+	}
+	if all, err := repo.QueryReflog(ctx, ReflogQuery{All: true, Limit: 2, OutputLimit: 512}); err != nil || len(all.Items) == 0 {
+		t.Fatalf("all reflogs = %#v, %v", all, err)
+	}
+	if _, err := repo.QueryReflog(ctx, ReflogQuery{All: true, Revision: "HEAD"}); err == nil {
+		t.Fatal("ambiguous reflog selectors were accepted")
+	}
+	if _, err := repo.QueryReflog(ctx, ReflogQuery{Revision: "--all"}); err == nil {
+		t.Fatal("option-like reflog revision was accepted")
+	}
+
+	shortlog, err := repo.QueryShortlog(ctx, ShortlogQuery{Revision: "HEAD", Summary: true, Numbered: true, Email: true, WrapWidth: 80, WrapIndent1: 4, WrapIndent2: 8, WrapIndent1Set: true, WrapIndent2Set: true, OutputLimit: 512})
+	if err != nil || shortlog.Detail == "" || !strings.Contains(shortlog.Detail, "backend-test@example.invalid") {
+		t.Fatalf("QueryShortlog = %#v, %v", shortlog, err)
+	}
+	if _, err := repo.QueryShortlog(ctx, ShortlogQuery{Revision: "HEAD", WrapWidth: 80, WrapIndent2: 4, WrapIndent2Set: true}); err == nil {
+		t.Fatal("shortlog accepted a second indent without the first")
+	}
+	if _, err := repo.QueryShortlog(ctx, ShortlogQuery{Range: base + "..HEAD", OutputLimit: 512}); err != nil {
+		t.Fatalf("shortlog range: %v", err)
+	}
+	if _, err := repo.QueryShortlog(ctx, ShortlogQuery{Range: "--all..HEAD"}); err == nil {
+		t.Fatal("option-like shortlog range endpoint was accepted")
+	}
+	if _, err := repo.QueryShortlog(ctx, ShortlogQuery{Revision: "--all"}); err == nil {
+		t.Fatal("option-like shortlog revision was accepted")
+	}
+
+	merged, err := repo.QueryRefs(ctx, RefQuery{Focus: "main", MergedTo: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refResultHasName(merged, "merged") || refResultHasName(merged, "unmerged") {
+		t.Fatalf("merged refs = %#v", merged)
+	}
+	notMerged, err := repo.QueryRefs(ctx, RefQuery{Focus: "main", NoMergedTo: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refResultHasName(notMerged, "unmerged") || refResultHasName(notMerged, "merged") {
+		t.Fatalf("not-merged refs = %#v", notMerged)
+	}
+}
+
+func refResultHasName(result RefResult, name string) bool {
+	for _, refs := range [][]Ref{result.Local, result.Remote, result.Tags} {
+		for _, ref := range refs {
+			if ref.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestInspectionOperationStateUsesStableSentinels(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)
