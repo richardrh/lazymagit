@@ -93,8 +93,8 @@ func TestFooterPrioritizesWorkflowsAndUsesUppercasePush(t *testing.T) {
 		t.Fatalf("modal footer misleadingly exposed intercepted globals: %q", footer)
 	}
 	m.mode = modeStatus
-	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") {
-		t.Fatalf("wide status footer omitted processes: %q", footer)
+	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") || !strings.Contains(footer, "[/ ] hunks") {
+		t.Fatalf("wide status footer omitted process or pager controls: %q", footer)
 	}
 }
 
@@ -153,6 +153,40 @@ func TestDetailScrollingIsIndependentAndClamped(t *testing.T) {
 	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " ", Mod: tea.ModShift}))
 	if m.detailOffset != 0 {
 		t.Fatal("Shift-Space did not clamp detail scrolling at the top")
+	}
+}
+
+func TestDetailLineAndHunkNavigation(t *testing.T) {
+	m := New(&gitbackend.Repository{})
+	m.width, m.height = 100, 12
+	m.detail = strings.Join([]string{
+		"diff --git a/a b/a", "--- a/a", "+++ b/a", "@@ -1,2 +1,2 @@", "-old", "+new", " context",
+		"@@ -10,2 +10,2 @@", "-before", "+after", " tail", "end", "more", "last",
+	}, "\n")
+
+	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.detailOffset != 1 {
+		t.Fatalf("Down offset = %d, want 1", m.detailOffset)
+	}
+	_, _ = m.Update(keyMsg("]"))
+	if m.detailOffset != 3 {
+		t.Fatalf("first hunk offset = %d, want 3", m.detailOffset)
+	}
+	_, _ = m.Update(keyMsg("]"))
+	if m.detailOffset != 7 {
+		t.Fatalf("next hunk offset = %d, want 7", m.detailOffset)
+	}
+	_, _ = m.Update(keyMsg("["))
+	if m.detailOffset != 3 {
+		t.Fatalf("previous hunk offset = %d, want 3", m.detailOffset)
+	}
+	_, _ = m.Update(keyMsg("home"))
+	if m.detailOffset != 0 {
+		t.Fatalf("Home offset = %d, want 0", m.detailOffset)
+	}
+	_, _ = m.Update(keyMsg("end"))
+	if maximum := m.detailMaximumOffset(); m.detailOffset != maximum {
+		t.Fatalf("End offset = %d, want %d", m.detailOffset, maximum)
 	}
 }
 

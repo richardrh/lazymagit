@@ -106,6 +106,20 @@ func workflowHandlersFor(m *Model) map[keymap.CommandID]WorkflowHandler {
 	return handlers
 }
 
+func capabilitiesForTransient(transient string, consumers map[string][]string) []WorkflowCapability {
+	seen := map[keymap.CommandID]bool{}
+	var out []WorkflowCapability
+	for _, binding := range keymap.Registry() {
+		consumes, ok := consumers[binding.UpstreamCommand]
+		if !ok || binding.Scheme != keymap.SchemeMagit || binding.Transient != transient || binding.Kind != keymap.KindSuffix || seen[binding.Command] {
+			continue
+		}
+		seen[binding.Command] = true
+		out = append(out, WorkflowCapability{ID: binding.Command, Transient: transient, UpstreamCommand: binding.UpstreamCommand, Consumes: append([]string(nil), consumes...)})
+	}
+	return out
+}
+
 func workflowCapabilitiesFor() map[keymap.CommandID]WorkflowCapability {
 	workflowRegistrations.RLock()
 	defer workflowRegistrations.RUnlock()

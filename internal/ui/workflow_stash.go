@@ -259,6 +259,14 @@ func stashListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 	})
 }
 
+func stashDetailsText(details gitbackend.StashDetails) string {
+	metadata := fmt.Sprintf("%s  %s\n%s\n%s  %s", details.Stash.ShortID, details.Stash.ID, details.Stash.Subject, details.Stash.Author, details.Stash.Date.Format("2006-01-02 15:04:05 -0700"))
+	if details.PatchTruncated {
+		metadata += "\n\n[patch output truncated]"
+	}
+	return metadata + "\n\n" + details.Patch
+}
+
 func stashShowWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 	return loadStashDialog(m, "stash show", func(choices []WorkflowChoice) WorkflowDialog {
 		return WorkflowDialog{Title: "Show stash", Fields: []WorkflowField{stashSelect(choices)}, Run: func(v WorkflowValues) tea.Cmd {
@@ -268,11 +276,7 @@ func stashShowWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 				if err != nil {
 					return "", err
 				}
-				metadata := fmt.Sprintf("%s  %s\n%s\n%s  %s", details.Stash.ShortID, details.Stash.ID, details.Stash.Subject, details.Stash.Author, details.Stash.Date.Format("2006-01-02 15:04:05 -0700"))
-				if details.PatchTruncated {
-					metadata += "\n\n[patch output truncated]"
-				}
-				return metadata + "\n\n" + details.Patch, nil
+				return stashDetailsText(details), nil
 			})
 		}}
 	})

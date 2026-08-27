@@ -21,7 +21,8 @@ func navigationUIModel() *Model {
 			{Path: "one.txt", Unstaged: gitbackend.ChangeModified},
 			{Path: "two.txt", Staged: gitbackend.ChangeModified},
 		}},
-		recent: []gitbackend.Commit{{ID: "abcdef0123456789", ShortID: "abcdef0", Subject: "subject"}},
+		stashes: []gitbackend.Stash{{Ref: "stash@{0}", ID: "stash-one", ShortID: "stash01", Subject: "On main: saved"}},
+		recent:  []gitbackend.Commit{{ID: "abcdef0123456789", ShortID: "abcdef0", Subject: "subject"}},
 	})
 	return m
 }
@@ -51,8 +52,12 @@ func TestNavigationKeysDriveTreeAndPreserveVimJ(t *testing.T) {
 		t.Fatal("navigation domain stole Vim j collision")
 	}
 	m.scheme = schemeMagit
-	if _, handled := m.handleNavigationKey(keyMsg("j")); !handled || m.rows[m.tree.Cursor()].kind != rowHeading {
-		t.Fatal("Magit j did not jump to a top-level status section")
+	if cmd, handled := m.handleNavigationKey(keyMsg("j")); handled || cmd != nil {
+		t.Fatal("navigation domain stole Magit j transient prefix")
+	}
+	_, _ = m.Update(keyMsg("j"))
+	if m.resolver.ActiveTransient() != "magit-status-jump" {
+		t.Fatalf("Magit j did not open status-jump transient: %q", m.resolver.ActiveTransient())
 	}
 }
 
@@ -104,6 +109,50 @@ func TestDetailContextScrollAndOSC52ClipboardPayloads(t *testing.T) {
 	cmd, handled = m.handleNavigationKey(keyMsg("alt+w"))
 	if !handled || cmd == nil || clipboardPayload(cmd) != "0123456789abcdef" {
 		t.Fatalf("revision copy handled=%v payload=%q", handled, clipboardPayload(cmd))
+	}
+}
+
+func TestNavigationKeysRouteThroughModelUpdate(t *testing.T) {
+	m := navigationUIModel()
+	m.tree.SetCursor("status/unstaged/file/one.txt")
+	_, _ = m.Update(keyMsg("^"))
+	if m.tree.Cursor() != "status/unstaged" {
+		t.Fatalf("Model.Update did not route parent navigation: %q", m.tree.Cursor())
+	}
+	_, _ = m.Update(keyMsg("ctrl+tab"))
+	if !m.tree.IsFolded("status/unstaged") {
+		t.Fatal("Model.Update did not route section cycling")
+	}
+	_, _ = m.Update(keyMsg("ctrl+tab"))
+	m.tree.SetCursor("status/unstaged/file/one.txt")
+	_, cmd := m.Update(keyMsg("ctrl+w"))
+	if cmd == nil || clipboardPayload(cmd) != "one.txt" {
+		t.Fatalf("Model.Update did not route copy command: %q", clipboardPayload(cmd))
+	}
+}
+
+func TestStatusJumpTransientRoutesExactProjectedSections(t *testing.T) {
+	for key, section := range map[string]string{"z": "status/stashes", "n": "status/untracked", "u": "status/unstaged", "s": "status/staged", "fu": "status/unpulled", "pu": "status/unpushed"} {
+		m := navigationUIModel()
+		m.repo = &gitbackend.Repository{}
+		m.scheme = schemeMagit
+		_, _ = m.Update(keyMsg("j"))
+		if m.resolver.ActiveTransient() != "magit-status-jump" {
+			t.Fatalf("j did not open status jump transient")
+		}
+		for _, token := range strings.Split(key, "") {
+			_, _ = m.Update(keyMsg(token))
+		}
+		sectionID := sectionmodel.SectionID(section)
+		if m.tree.Section(sectionID) == nil {
+			if !strings.Contains(m.message, "not present") {
+				t.Errorf("%s missing section message = %q", key, m.message)
+			}
+			continue
+		}
+		if got := string(m.tree.Cursor()); got != section {
+			t.Errorf("%s cursor = %q, want %q", key, got, section)
+		}
 	}
 }
 

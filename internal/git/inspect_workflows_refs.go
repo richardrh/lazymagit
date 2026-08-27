@@ -32,6 +32,8 @@ type RefQuery struct {
 	// Focus accepts a revision and defaults to the current HEAD. Ahead/Behind
 	// compare it with its upstream, when Focus names a local branch.
 	Focus       string
+	MergedTo    string
+	NoMergedTo  string
 	Limit       int
 	OutputLimit int
 }
@@ -63,7 +65,23 @@ func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, erro
 		return RefResult{}, fmt.Errorf("ref output limit must be between 0 and %d", inspectionOutputLimit)
 	}
 	format := "%00%(HEAD)%00%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(push:short)%00%(symref)%00%(subject)%00"
-	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, "for-each-ref", "--count="+strconv.Itoa(limit+1), "--sort=refname", "--format="+format, "refs/heads", "refs/remotes", "refs/tags")
+	args := []string{"for-each-ref", "--count=" + strconv.Itoa(limit+1), "--sort=refname", "--format=" + format}
+	if q.MergedTo != "" {
+		oid, resolveErr := r.resolveCommitOID(ctx, q.MergedTo)
+		if resolveErr != nil {
+			return RefResult{}, resolveErr
+		}
+		args = append(args, "--merged="+oid)
+	}
+	if q.NoMergedTo != "" {
+		oid, resolveErr := r.resolveCommitOID(ctx, q.NoMergedTo)
+		if resolveErr != nil {
+			return RefResult{}, resolveErr
+		}
+		args = append(args, "--no-merged="+oid)
+	}
+	args = append(args, "refs/heads", "refs/remotes", "refs/tags")
+	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
 	if err != nil {
 		return RefResult{}, err
 	}

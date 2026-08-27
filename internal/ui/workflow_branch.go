@@ -18,17 +18,19 @@ const branchPrefix = "b"
 func init() {
 	RegisterWorkflowDomain(func(m *Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := map[string]WorkflowHandler{
-			"magit-checkout":            branchCheckoutRevision,
-			"magit-branch-checkout":     branchCheckoutLocal,
-			"magit-branch-orphan":       branchOrphan,
-			"magit-branch-and-checkout": branchCreateAndCheckout,
-			"magit-worktree-checkout":   branchWorktreeExisting,
-			"magit-branch-create":       branchCreateOnly,
-			"magit-worktree-branch":     branchWorktreeNew,
-			"magit-branch-configure":    branchConfigure,
-			"magit-branch-rename":       branchRename,
-			"magit-branch-reset":        branchReset,
-			"magit-branch-delete":       branchDelete,
+			"magit-checkout":              branchCheckoutRevision,
+			"magit-checkout-remote-ref":   branchCheckoutRemote,
+			"magit-update-default-branch": remoteDefaultBranchWorkflow,
+			"magit-branch-checkout":       branchCheckoutLocal,
+			"magit-branch-orphan":         branchOrphan,
+			"magit-branch-and-checkout":   branchCreateAndCheckout,
+			"magit-worktree-checkout":     branchWorktreeExisting,
+			"magit-branch-create":         branchCreateOnly,
+			"magit-worktree-branch":       branchWorktreeNew,
+			"magit-branch-configure":      branchConfigure,
+			"magit-branch-rename":         branchRename,
+			"magit-branch-reset":          branchReset,
+			"magit-branch-delete":         branchDelete,
 		}
 		registered := make(map[keymap.CommandID]WorkflowHandler, len(handlers))
 		var recurseOption keymap.CommandID
@@ -136,6 +138,36 @@ func branchCheckoutRevision(m *Model, _ WorkflowCommand) tea.Cmd {
 						return m.repo.CheckoutBranch(ctx, branch.Name)
 					}
 				}
+				return m.repo.CheckoutRevision(ctx, values["revision"])
+			},
+		}, nil
+	})
+}
+
+func branchCheckoutRemote(m *Model, _ WorkflowCommand) tea.Cmd {
+	return loadBranchWorkflow(m, "remote branches", func(ctx context.Context) (WorkflowDialog, error) {
+		choices, _, err := branchChoices(ctx, m.repo, true, true)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		remoteChoices := choices[:0]
+		branches, err := m.repo.Branches(ctx)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		for _, branch := range branches {
+			if branch.Remote {
+				remoteChoices = append(remoteChoices, WorkflowChoice{Value: branch.Name, Label: branch.Name})
+			}
+		}
+		if err := requireChoices(remoteChoices, "remote-tracking branches"); err != nil {
+			return WorkflowDialog{}, err
+		}
+		return WorkflowDialog{
+			Title: "Checkout remote ref", Operation: "checkout remote ref",
+			Plan:   []string{"Checkout the exact selected remote-tracking ref with detached HEAD"},
+			Fields: []WorkflowField{{Name: "revision", Label: "Remote ref", Kind: WorkflowSelect, Value: remoteChoices[0].Value, Choices: remoteChoices, Required: true}},
+			Submit: func(ctx context.Context, values WorkflowValues) error {
 				return m.repo.CheckoutRevision(ctx, values["revision"])
 			},
 		}, nil

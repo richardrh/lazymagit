@@ -30,6 +30,16 @@ const (
 )
 
 func init() {
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-tag", map[string][]string{
+		"magit-tag-create":  {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign"},
+		"magit-tag-release": {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-notes", map[string][]string{
+		"magit-notes-edit":   {"magit-notes:--ref"},
+		"magit-notes-remove": {"magit-notes:--ref"},
+		"magit-notes-merge":  {"magit-notes:--ref"},
+		"magit-notes-prune":  {"transient:magit-notes:--dry-run", "magit-notes:--ref"},
+	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		return map[keymap.CommandID]WorkflowHandler{
 			tagCreateID: tagCreateWorkflow(false), tagReleaseID: tagCreateWorkflow(true),

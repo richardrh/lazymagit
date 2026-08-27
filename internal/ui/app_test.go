@@ -256,16 +256,48 @@ func TestCommitDetailIsAsyncAndStaleRevisionCannotWin(t *testing.T) {
 	}
 }
 
+func TestStashDetailIsAsyncUsesOIDAndStaleResultCannotWin(t *testing.T) {
+	m := New(nil)
+	var requested string
+	m.showStash = func(_ context.Context, id string) (gitbackend.StashDetails, error) {
+		requested = id
+		return gitbackend.StashDetails{Stash: gitbackend.Stash{ID: id, ShortID: "1234567", Subject: "subject", Author: "Test"}, Patch: "diff --git a/file b/file\n+stashed"}, nil
+	}
+	m.install(snapshot{stashes: []gitbackend.Stash{{Ref: "stash@{0}", ID: "one", ShortID: "1234567", Subject: "subject"}, {Ref: "stash@{1}", ID: "two", ShortID: "7654321", Subject: "older"}}})
+	m.tree.ToggleFold("status/stashes")
+	m.tree.SetCursor("status/stashes/stash/one")
+	cmd := m.loadDetailCmd()
+	if cmd == nil || m.detail != "Loading stash…" {
+		t.Fatalf("stash detail was not asynchronous: cmd=%v detail=%q", cmd != nil, m.detail)
+	}
+	_, _ = m.Update(cmd())
+	if requested != "one" || !strings.Contains(m.detail, "1234567  one") || !strings.Contains(m.detail, "+stashed") {
+		t.Fatalf("stash detail requested=%q detail=%q", requested, m.detail)
+	}
+	oldRequest := m.detailRequest
+	m.tree.SetCursor("status/stashes/stash/two")
+	_ = m.loadDetailCmd()
+	_, _ = m.Update(diffMsg{id: "status/stashes/stash/one", request: oldRequest, text: "stale stash", stash: true})
+	if strings.Contains(m.detail, "stale stash") {
+		t.Fatal("stale stash result replaced current detail")
+	}
+	_, _ = m.Update(diffMsg{id: m.tree.Cursor(), request: m.detailRequest, err: errors.New("bad"), stash: true})
+	if !strings.Contains(m.detail, "Unable to load stash") {
+		t.Fatalf("stash error wording = %q", m.detail)
+	}
+}
+
 func TestInitialMagitFoldsAndLaterUserFoldIsPreserved(t *testing.T) {
 	m := New(nil)
 	s := snapshot{
 		status:   gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "u", Unstaged: gitbackend.ChangeUntracked}, {Path: "m", Unstaged: gitbackend.ChangeModified}, {Path: "s", Staged: gitbackend.ChangeModified}}},
+		stashes:  []gitbackend.Stash{{ID: "stash", ShortID: "stash01"}},
 		recent:   []gitbackend.Commit{{ID: "recent"}},
 		upstream: gitbackend.UpstreamRanges{Ahead: []gitbackend.Commit{{ID: "ahead"}}, Behind: []gitbackend.Commit{{ID: "behind"}}},
 		summary:  gitbackend.Summary{Upstream: "origin/main", Ahead: 1, Behind: 1},
 	}
 	m.install(s)
-	for _, id := range []sectionmodel.SectionID{"status/untracked", "status/unpulled"} {
+	for _, id := range []sectionmodel.SectionID{"status/untracked", "status/stashes", "status/unpulled"} {
 		if !m.tree.IsFolded(id) {
 			t.Errorf("%s should initially be folded", id)
 		}
@@ -395,7 +427,7 @@ func TestExactFetchActionsAndFFDoesNothing(t *testing.T) {
 }
 
 func TestSnapshotLoadUsesMagitLimitsPushRemoteAndTruncationProbe(t *testing.T) {
-	var recentLimit, upstreamLimit int
+	var recentLimit, upstreamLimit, stashCalls int
 	commits := make([]gitbackend.Commit, 257)
 	for i := range commits {
 		commits[i].ID = fmt.Sprintf("%040d", i)
@@ -404,7 +436,11 @@ func TestSnapshotLoadUsesMagitLimitsPushRemoteAndTruncationProbe(t *testing.T) {
 		summary: func(context.Context) (gitbackend.Summary, error) {
 			return gitbackend.Summary{Upstream: "origin/main", Ahead: 300}, nil
 		},
-		status:  func(context.Context) (gitbackend.Status, error) { return gitbackend.Status{}, nil },
+		status: func(context.Context) (gitbackend.Status, error) { return gitbackend.Status{}, nil },
+		stashes: func(context.Context) ([]gitbackend.Stash, error) {
+			stashCalls++
+			return []gitbackend.Stash{{ID: "stash"}}, nil
+		},
 		remotes: func(context.Context) ([]gitbackend.Remote, error) { return nil, nil },
 		recentLog: func(_ context.Context, limit int) ([]gitbackend.Commit, error) {
 			recentLimit = limit
@@ -419,11 +455,27 @@ func TestSnapshotLoadUsesMagitLimitsPushRemoteAndTruncationProbe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load snapshot: %v", err)
 	}
-	if recentLimit != 10 || upstreamLimit != 257 || s.pushRemote != "publish" {
-		t.Fatalf("load calls recent=%d upstream=%d push=%q", recentLimit, upstreamLimit, s.pushRemote)
+	if recentLimit != 10 || upstreamLimit != 257 || stashCalls != 1 || len(s.stashes) != 1 || s.pushRemote != "publish" {
+		t.Fatalf("load calls recent=%d upstream=%d stashes=%d retained=%d push=%q", recentLimit, upstreamLimit, stashCalls, len(s.stashes), s.pushRemote)
 	}
 	if len(s.upstream.Ahead) != 256 || !s.aheadTruncated {
 		t.Fatalf("probe normalization retained=%d truncated=%v", len(s.upstream.Ahead), s.aheadTruncated)
+	}
+}
+
+func TestSnapshotLoadWrapsStashErrors(t *testing.T) {
+	_, err := loadSnapshotWith(context.Background(), snapshotQueries{
+		summary:   func(context.Context) (gitbackend.Summary, error) { return gitbackend.Summary{}, nil },
+		status:    func(context.Context) (gitbackend.Status, error) { return gitbackend.Status{}, nil },
+		stashes:   func(context.Context) ([]gitbackend.Stash, error) { return nil, errors.New("bad stash list") },
+		remotes:   func(context.Context) ([]gitbackend.Remote, error) { return nil, nil },
+		recentLog: func(context.Context, int) ([]gitbackend.Commit, error) { return nil, nil },
+		pushRemote: func(context.Context) (string, error) {
+			return "", gitbackend.ErrNoFetchRemote
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "stashes: bad stash list") {
+		t.Fatalf("stash load error = %v", err)
 	}
 }
 

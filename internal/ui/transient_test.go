@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -96,6 +98,212 @@ func TestAllManifestTransientsProduceExactRuntimeCatalogs(t *testing.T) {
 	}
 	if occurrences != 554 {
 		t.Fatalf("runtime catalog occurrences=%d, want 554", occurrences)
+	}
+}
+
+func TestEveryManifestOccurrenceHasExplicitRuntimeContract(t *testing.T) {
+	m := New(&gitbackend.Repository{})
+	m.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
+	m.snapshot.summary.Branch, m.snapshot.summary.Upstream = "main", "origin/main"
+	counts := map[string]int{}
+	for _, tr := range keymap.Transients() {
+		catalog, ok := m.transientCatalog(tr.Name)
+		if !ok {
+			t.Fatalf("%s has no runtime catalog", tr.Name)
+		}
+		for _, group := range catalog.Groups {
+			for _, entry := range group.Entries {
+				counts[string(entry.Kind)]++
+				switch entry.Kind {
+				case keymap.KindInfix:
+					if entry.Available && len(m.optionConsumers(strings.Join(tr.Sequence, " "), keymapBindingForOccurrence(t, entry.Occurrence))) == 0 {
+						t.Errorf("%s %s exposes an infix without a consumer", tr.Name, entry.Key)
+					}
+				case keymap.KindSuffix:
+					_, installed := m.workflowHandlers[entry.Command]
+					builtin := builtinUICommands[entry.Command]
+					if entry.Available && !entry.Prefix && !installed && !builtin {
+						t.Errorf("%s %s is available without executable behavior: %+v", tr.Name, entry.Key, entry)
+					}
+					if !entry.Available && entry.Reason == "" {
+						t.Errorf("%s %s has no unavailable reason", tr.Name, entry.Key)
+					}
+				}
+			}
+		}
+	}
+	if counts[string(keymap.KindSuffix)]+counts[string(keymap.KindInfix)] != 554 {
+		t.Fatalf("classified %d transient occurrences, want 554", counts[string(keymap.KindSuffix)]+counts[string(keymap.KindInfix)])
+	}
+}
+
+func keymapBindingForOccurrence(t *testing.T, occurrence string) keymap.Binding {
+	t.Helper()
+	for _, binding := range keymap.Registry() {
+		if binding.Scheme == keymap.SchemeVim && binding.Occurrence == occurrence {
+			return binding
+		}
+	}
+	t.Fatalf("missing occurrence %s", occurrence)
+	return keymap.Binding{}
+}
+
+func TestOperationConditionsFollowRepositoryState(t *testing.T) {
+	tests := []struct {
+		name      string
+		predicate string
+		prepare   func(*testing.T, *uiE2ERepo)
+	}{
+		{name: "merge", predicate: "magit-merge-in-progress-p", prepare: func(t *testing.T, r *uiE2ERepo) {
+			writeAdminFile(t, r, "MERGE_HEAD", r.git("rev-parse", "HEAD")+"\n")
+		}},
+		{name: "rebase", predicate: "magit-rebase-in-progress-p", prepare: func(t *testing.T, r *uiE2ERepo) {
+			writeAdminFile(t, r, "rebase-merge/head-name", "refs/heads/main\n")
+		}},
+		{name: "bisect", predicate: "magit-bisect-in-progress-p", prepare: func(t *testing.T, r *uiE2ERepo) {
+			writeAdminFile(t, r, "BISECT_START", "main\n")
+		}},
+		{name: "notes", predicate: "magit-notes-merging-p", prepare: func(t *testing.T, r *uiE2ERepo) {
+			writeAdminFile(t, r, "NOTES_MERGE_REF", "refs/notes/commits\n")
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newUIE2ERepo(t)
+			r.write("base", "base\n")
+			r.git("add", "base")
+			r.git("commit", "-m", "base")
+			tt.prepare(t, r)
+			m := newE2EModel(t, r)
+			if active, reason := m.bindingCondition(keymap.Binding{Conditions: []string{"if: " + tt.predicate}}); !active || reason != "" {
+				t.Fatalf("active condition = %v, %q", active, reason)
+			}
+			if active, reason := m.bindingCondition(keymap.Binding{Conditions: []string{"if-not: " + tt.predicate}}); active || reason == "" {
+				t.Fatalf("negated condition = %v, %q", active, reason)
+			}
+		})
+	}
+}
+
+func TestStatusJumpAvailabilityFollowsProjectedSections(t *testing.T) {
+	m := New(nil)
+	m.scheme = schemeMagit
+	catalog, ok := m.transientCatalog("magit-status-jump")
+	if !ok {
+		t.Fatal("status-jump catalog is missing")
+	}
+	entry, found := catalog.entry("z")
+	if !found || entry.Available || entry.Category != menuEntryContext || !strings.Contains(entry.Reason, "not present") {
+		t.Fatalf("absent stash jump = %+v, found=%v", entry, found)
+	}
+	m.install(snapshot{stashes: []gitbackend.Stash{{ID: "stash", ShortID: "stash01"}}})
+	catalog, _ = m.transientCatalog("magit-status-jump")
+	entry, found = catalog.entry("z")
+	if !found || !entry.Available || entry.Reason != "" {
+		t.Fatalf("present stash jump = %+v, found=%v", entry, found)
+	}
+}
+
+func TestSparseCheckoutConditionsFollowRepositoryState(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base", "base\n")
+	r.git("add", "base")
+	r.git("commit", "-m", "base")
+	m := newE2EModel(t, r)
+	condition := keymap.Binding{Conditions: []string{"if: magit-sparse-checkout-enabled-p"}}
+	if active, _ := m.bindingCondition(condition); active {
+		t.Fatal("sparse checkout condition active before enable")
+	}
+	r.git("sparse-checkout", "init", "--cone")
+	runE2ECmd(t, m, m.loadSnapshotCmd())
+	if active, reason := m.bindingCondition(condition); !active || reason != "" {
+		t.Fatalf("sparse checkout condition = %v, %q", active, reason)
+	}
+}
+
+func writeAdminFile(t *testing.T, r *uiE2ERepo, name, contents string) {
+	t.Helper()
+	path := filepath.Join(r.dir, ".git", filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEveryAvailableTransientSequenceRoutesWithoutFrontendFallback(t *testing.T) {
+	tested := map[string]bool{}
+	for _, tr := range keymap.Transients() {
+		probe := New(nil)
+		probe.loading = false
+		probe.scheme = schemeMagit
+		probe.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+		probe.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
+		probe.snapshot.summary.Branch, probe.snapshot.summary.Upstream = "main", "origin/main"
+		catalog, ok := probe.transientCatalog(tr.Name)
+		if !ok {
+			t.Fatalf("%s has no runtime catalog", tr.Name)
+		}
+		adaptedTerminalRoute := false
+		for _, token := range tr.Sequence {
+			_, cmd := probe.Update(keyMsg(token))
+			if cmd != nil || probe.mode == modeWorkflow || probe.workflowLoading {
+				adaptedTerminalRoute = true
+				break
+			}
+		}
+		if adaptedTerminalRoute {
+			allowed := map[string]bool{
+				"magit-fetch-modules": true,
+				"magit-patch-apply":   true,
+				"magit-patch-create":  true,
+			}
+			if !allowed[tr.Name] {
+				t.Errorf("%s route executed a terminal workflow instead of opening its catalog", tr.Name)
+			}
+			continue
+		}
+		for _, group := range catalog.Groups {
+			for _, entry := range group.Entries {
+				if !entry.Available || entry.Kind != keymap.KindSuffix || entry.Prefix {
+					continue
+				}
+				identity := tr.Name + "\x00" + entry.Key
+				if tested[identity] {
+					continue
+				}
+				tested[identity] = true
+				m := New(nil)
+				m.loading = false
+				m.scheme = schemeMagit
+				m.message = ""
+				m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+				m.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
+				m.snapshot.summary.Branch, m.snapshot.summary.Upstream = "main", "origin/main"
+				for _, token := range tr.Sequence {
+					_, _ = m.Update(keyMsg(token))
+				}
+				if m.resolver.ActiveTransient() != tr.Name {
+					t.Errorf("route %v opened %q, want %q", tr.Sequence, m.resolver.ActiveTransient(), tr.Name)
+					continue
+				}
+				var cmd tea.Cmd
+				for _, token := range strings.Fields(entry.Key) {
+					_, cmd = m.Update(keyMsg(token))
+				}
+				lower := strings.ToLower(m.message)
+				if strings.Contains(lower, "not implemented") || strings.Contains(lower, " unavailable:") {
+					t.Errorf("%s %s hit frontend fallback: %q", tr.Name, entry.Key, m.message)
+				}
+				if cmd == nil && m.mode == modeStatus && !m.workflowLoading && m.message == "" {
+					t.Errorf("%s %s produced no command, workflow, or message", tr.Name, entry.Key)
+				}
+			}
+		}
+	}
+	if len(tested) < 100 {
+		t.Fatalf("only exercised %d unique executable suffix routes", len(tested))
 	}
 }
 

@@ -34,6 +34,24 @@ func TestInspectLogOptionsMapToTypedBoundedQuery(t *testing.T) {
 	}
 }
 
+func TestInspectShortlogOptionsMapToTypedQuery(t *testing.T) {
+	command := WorkflowCommand{Options: map[keymap.CommandID]OptionValue{
+		inspectOptionID(t, "transient:magit-shortlog:--summary"): {Enabled: true},
+		inspectOptionID(t, "transient:magit-shortlog:-w"):        {Value: "80,4,8"},
+	}}
+	query, err := shortlogQueryFromCommand(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !query.Summary || query.WrapWidth != 80 || query.WrapIndent1 != 4 || query.WrapIndent2 != 8 || !query.WrapIndent1Set || !query.WrapIndent2Set {
+		t.Fatalf("mapped shortlog query = %+v", query)
+	}
+	command.Options[inspectOptionID(t, "transient:magit-shortlog:-w")] = OptionValue{Value: "80,4,8,12"}
+	if _, err := shortlogQueryFromCommand(command); err == nil {
+		t.Fatal("shortlog accepted more than two indents")
+	}
+}
+
 func TestInspectionRegistrationCoversSafeExpandedOccurrences(t *testing.T) {
 	m := New(nil)
 	for _, binding := range keymap.Registry() {

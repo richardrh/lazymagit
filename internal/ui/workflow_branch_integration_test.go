@@ -72,6 +72,43 @@ func TestBranchWorkflowIntegrationCreateSwitchRenameResetDelete(t *testing.T) {
 	}
 }
 
+func TestBranchRemoteCheckoutAndDefaultBranchAliases(t *testing.T) {
+	remote := newUIE2ERepo(t)
+	remote.write("base.txt", "base\n")
+	remote.git("add", ".")
+	remote.git("commit", "-m", "base")
+	remote.git("switch", "-c", "topic")
+	remote.write("topic.txt", "topic\n")
+	remote.git("add", ".")
+	remote.git("commit", "-m", "topic")
+	topic := remote.git("rev-parse", "HEAD")
+	remote.git("switch", "main")
+
+	local := newUIE2ERepo(t)
+	local.git("remote", "add", "origin", remote.dir)
+	local.git("fetch", "origin")
+	m := newE2EModel(t, local)
+
+	openBranchWorkflow(t, m, "magit-checkout-remote-ref")
+	setBranchWorkflowValue(t, m, "revision", "origin/topic")
+	executeBranchWorkflow(t, m)
+	if got := local.git("rev-parse", "HEAD"); got != topic {
+		t.Fatalf("remote checkout HEAD = %q, want %q", got, topic)
+	}
+	if got := local.git("branch", "--show-current"); got != "" {
+		t.Fatalf("remote checkout created/selected local branch %q", got)
+	}
+
+	local.git("switch", "-C", "main", "origin/main")
+	remote.git("symbolic-ref", "HEAD", "refs/heads/main")
+	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("b"))
+	sendE2EKey(t, m, keyMsg("B"))
+	if m.workflow == nil {
+		t.Fatalf("branch default-branch alias did not open: %q", m.message)
+	}
+}
+
 func TestBranchWorkflowIntegrationDeleteRejectsCurrentAndStaleOIDToken(t *testing.T) {
 	r := newUIE2ERepo(t)
 	r.write("base.txt", "base\n")

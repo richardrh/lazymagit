@@ -36,6 +36,7 @@ type menuEntry struct {
 	Kind            keymap.EntryKind
 	Conditions      []string
 	Option          OptionValue
+	TakesValue      bool
 	Active          bool
 	Prefix          bool
 }
@@ -169,7 +170,7 @@ func (m *Model) transientCatalog(prefix string) (menuCatalog, bool) {
 		if m.transientEdit != nil && m.transientEdit.Command == binding.Command {
 			value.Value += "█"
 		}
-		catalog.Groups[index].Entries = append(catalog.Groups[index].Entries, menuEntry{Occurrence: binding.Occurrence, Key: key, Display: keymapDisplayFor(binding.LocalSequence), Label: binding.Label, Available: available, Command: command, UpstreamCommand: binding.UpstreamCommand, Reason: reason, Category: category, Kind: binding.Kind, Conditions: append([]string(nil), binding.Conditions...), Option: value, Active: active, Prefix: binding.Handler == keymap.HandlerPrefix})
+		catalog.Groups[index].Entries = append(catalog.Groups[index].Entries, menuEntry{Occurrence: binding.Occurrence, Key: key, Display: keymapDisplayFor(binding.LocalSequence), Label: binding.Label, Available: available, Command: command, UpstreamCommand: binding.UpstreamCommand, Reason: reason, Category: category, Kind: binding.Kind, Conditions: append([]string(nil), binding.Conditions...), Option: value, TakesValue: binding.TakesValue, Active: active, Prefix: binding.Handler == keymap.HandlerPrefix})
 	}
 	return catalog, true
 }
@@ -188,8 +189,19 @@ func keymapDisplayFor(sequence []string) string {
 }
 
 func (m *Model) bindingCondition(binding keymap.Binding) (bool, string) {
+	if binding.Transient == "magit-status-jump" {
+		if target := statusJumpSections[binding.UpstreamCommand]; target != "" && m.tree.Section(target) == nil {
+			return false, "status section is not present"
+		}
+	}
 	for _, condition := range binding.Conditions {
 		if matched, active, reason := m.operationBindingCondition(condition); matched {
+			if !active {
+				return false, reason
+			}
+			continue
+		}
+		if matched, active, reason := m.sparseCheckoutBindingCondition(condition); matched {
 			if !active {
 				return false, reason
 			}
@@ -211,38 +223,67 @@ func (m *Model) bindingCondition(binding keymap.Binding) (bool, string) {
 	return true, ""
 }
 
-func (m *Model) operationBindingCondition(condition string) (matched, active bool, reason string) {
-	if !strings.Contains(condition, "magit-am-in-progress-p") && !strings.Contains(condition, "magit-sequencer-in-progress-p") {
+func (m *Model) sparseCheckoutBindingCondition(condition string) (matched, active bool, reason string) {
+	if !strings.Contains(condition, "magit-sparse-checkout-enabled-p") {
 		return false, false, ""
 	}
 	if m.repo == nil {
 		return true, true, ""
 	}
+	state := m.snapshot.sparse
 	negated := strings.Contains(condition, "if-not:")
-	inProgress := false
-	if strings.Contains(condition, "magit-am-in-progress-p") {
-		state, err := m.repo.AMStatus(m.appCtx)
-		if err != nil {
-			return true, false, "cannot determine git am state"
+	if negated == state.Enabled {
+		if negated {
+			return true, false, "requires sparse checkout to be disabled"
 		}
-		inProgress = state.InProgress
-		if negated == inProgress {
-			return true, false, map[bool]string{true: "requires no git am operation", false: "requires git am in progress"}[negated]
+		return true, false, "requires sparse checkout to be enabled"
+	}
+	return true, true, ""
+}
+
+func (m *Model) operationBindingCondition(condition string) (matched, active bool, reason string) {
+	predicates := map[string]gitbackend.OperationKind{
+		"magit-am-in-progress-p":        gitbackend.OperationApplyMailbox,
+		"magit-bisect-in-progress-p":    gitbackend.OperationBisect,
+		"magit-merge-in-progress-p":     gitbackend.OperationMerge,
+		"magit-notes-merging-p":         gitbackend.OperationNotesMerge,
+		"magit-rebase-in-progress-p":    gitbackend.OperationRebase,
+		"magit-sequencer-in-progress-p": 0,
+	}
+	var predicate string
+	var kind gitbackend.OperationKind
+	for candidate, operationKind := range predicates {
+		if strings.Contains(condition, candidate) {
+			predicate, kind = candidate, operationKind
+			break
 		}
+	}
+	if predicate == "" {
+		return false, false, ""
+	}
+	if m.repo == nil {
 		return true, true, ""
 	}
-	state, err := m.repo.QueryOperationState(m.appCtx)
-	if err != nil {
-		return true, false, "cannot determine sequencer state"
-	}
+	state := m.snapshot.operations
+	inProgress := false
 	for _, operation := range state.Items {
-		if operation.Kind == gitbackend.OperationCherryPick || operation.Kind == gitbackend.OperationRevert {
+		if predicate == "magit-sequencer-in-progress-p" {
+			if operation.Kind == gitbackend.OperationCherryPick || operation.Kind == gitbackend.OperationRevert {
+				inProgress = true
+				break
+			}
+		} else if operation.Kind == kind {
 			inProgress = true
 			break
 		}
 	}
+	negated := strings.Contains(condition, "if-not:")
 	if negated == inProgress {
-		return true, false, map[bool]string{true: "requires no sequencer operation", false: "requires sequencer in progress"}[negated]
+		name := strings.TrimSuffix(strings.TrimPrefix(predicate, "magit-"), "-p")
+		if negated {
+			return true, false, "requires no " + name
+		}
+		return true, false, "requires " + name
 	}
 	return true, true, ""
 }
