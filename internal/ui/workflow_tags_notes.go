@@ -11,13 +11,14 @@ import (
 )
 
 const (
-	tagCreateID   keymap.CommandID = "tag.tag-create"
-	tagReleaseID  keymap.CommandID = "tag.tag-release"
-	tagDeleteID   keymap.CommandID = "tag.tag-delete"
-	tagPruneID    keymap.CommandID = "tag.tag-prune"
-	tagForceID    keymap.CommandID = "tag.--force"
-	tagAnnotateID keymap.CommandID = "tag.--annotate"
-	tagSignID     keymap.CommandID = "tag.--sign"
+	tagCreateID    keymap.CommandID = "tag.tag-create"
+	tagReleaseID   keymap.CommandID = "tag.tag-release"
+	tagDeleteID    keymap.CommandID = "tag.tag-delete"
+	tagPruneID     keymap.CommandID = "tag.tag-prune"
+	tagForceID     keymap.CommandID = "tag.--force"
+	tagAnnotateID  keymap.CommandID = "tag.--annotate"
+	tagSignID      keymap.CommandID = "tag.--sign"
+	tagLocalUserID keymap.CommandID = "tag.--local-user"
 
 	notesEditID          keymap.CommandID = "notes.notes-edit"
 	notesRemoveID        keymap.CommandID = "notes.notes-remove"
@@ -27,17 +28,18 @@ const (
 	notesMergeAbortID    keymap.CommandID = "notes.notes-merge-abort"
 	notesRefID           keymap.CommandID = "notes.--ref"
 	notesDryRunID        keymap.CommandID = "notes.--dry-run"
+	notesStrategyID      keymap.CommandID = "notes.--strategy"
 )
 
 func init() {
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-tag", map[string][]string{
-		"magit-tag-create":  {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign"},
-		"magit-tag-release": {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign"},
+		"magit-tag-create":  {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign", "magit-tag:--local-user"},
+		"magit-tag-release": {"transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign", "magit-tag:--local-user"},
 	})...)
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-notes", map[string][]string{
 		"magit-notes-edit":   {"magit-notes:--ref"},
 		"magit-notes-remove": {"magit-notes:--ref"},
-		"magit-notes-merge":  {"magit-notes:--ref"},
+		"magit-notes-merge":  {"magit-notes:--ref", "magit-notes:--strategy"},
 		"magit-notes-prune":  {"transient:magit-notes:--dry-run", "magit-notes:--ref"},
 	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
@@ -57,7 +59,8 @@ func tagCreateWorkflow(release bool) WorkflowHandler {
 		if release || command.Options[tagAnnotateID].Enabled {
 			kind = "annotated"
 		}
-		if command.Options[tagSignID].Enabled {
+		localUser := command.Options[tagLocalUserID].Value
+		if command.Options[tagSignID].Enabled || localUser != "" {
 			kind = "signed"
 		}
 		force := command.Options[tagForceID].Enabled
@@ -67,10 +70,17 @@ func tagCreateWorkflow(release bool) WorkflowHandler {
 				{Name: "name", Label: "Tag name", Kind: WorkflowText, Required: true},
 				{Name: "target", Label: "Target", Kind: WorkflowText, Value: "HEAD", Required: true},
 				{Name: "kind", Label: "Tag kind", Kind: WorkflowEnum, Value: kind, Choices: []WorkflowChoice{{Value: "lightweight", Label: "lightweight"}, {Value: "annotated", Label: "annotated"}, {Value: "signed", Label: "signed"}}},
+				{Name: "local-user", Label: "Signing identity (-u, optional)", Kind: WorkflowText, Value: localUser},
 				{Name: "message", Label: "Message (internal editor)", Kind: WorkflowText},
 				{Name: "sign-consent", Label: "Allow interactive signing", Kind: WorkflowBool},
 			},
 			Validate: func(v WorkflowValues) error {
+				if strings.ContainsAny(v["local-user"], "\x00\r\n") {
+					return errors.New("tag signing identity must be single-line")
+				}
+				if v["local-user"] != "" && v["kind"] != "signed" {
+					return errors.New("a signing identity requires a signed tag")
+				}
 				if strings.ContainsAny(v["name"], "\x00\r\n") || strings.ContainsAny(v["target"], "\x00\r\n") {
 					return errors.New("tag name and target must be single-line values")
 				}
@@ -92,6 +102,9 @@ func tagCreateWorkflow(release bool) WorkflowHandler {
 					return WorkflowReview{}, err
 				}
 				plan := []string{"tag: " + args.Name, "target: " + args.Target, "kind: " + v["kind"]}
+				if args.LocalUser != "" {
+					plan = append(plan, "signing identity: "+args.LocalUser)
+				}
 				if review.PreviousID != "" {
 					plan = append(plan, "replace object: "+review.PreviousID)
 				}
@@ -109,7 +122,7 @@ func tagCreateWorkflow(release bool) WorkflowHandler {
 }
 
 func tagArgs(v WorkflowValues, force bool) gitbackend.CreateTagArgs {
-	return gitbackend.CreateTagArgs{Name: strings.TrimSpace(v["name"]), Target: strings.TrimSpace(v["target"]), Annotated: v["kind"] != "lightweight", Sign: v["kind"] == "signed", Message: v["message"], Force: force}
+	return gitbackend.CreateTagArgs{Name: strings.TrimSpace(v["name"]), Target: strings.TrimSpace(v["target"]), Annotated: v["kind"] != "lightweight", Sign: v["kind"] == "signed", Message: v["message"], LocalUser: strings.TrimSpace(v["local-user"]), Force: force}
 }
 
 func tagChoices(ctx context.Context, m *Model) ([]WorkflowChoice, error) {
@@ -254,8 +267,9 @@ func notesPruneWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 }
 
 func notesMergeWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
-	return m.OpenWorkflow(WorkflowDialog{Title: "Merge notes", Operation: "merge notes", Fields: []WorkflowField{{Name: "ref", Label: "Destination notes ref (blank = commits)", Kind: WorkflowText, Value: command.Options[notesRefID].Value}, {Name: "source", Label: "Source notes ref", Kind: WorkflowText, Required: true}}, Submit: func(ctx context.Context, v WorkflowValues) error {
-		return m.repo.NotesMergeStart(ctx, strings.TrimSpace(v["ref"]), strings.TrimSpace(v["source"]))
+	strategy := command.Options[notesStrategyID].Value
+	return m.OpenWorkflow(WorkflowDialog{Title: "Merge notes", Operation: "merge notes", Fields: []WorkflowField{{Name: "ref", Label: "Destination notes ref (blank = commits)", Kind: WorkflowText, Value: command.Options[notesRefID].Value}, {Name: "source", Label: "Source notes ref", Kind: WorkflowText, Required: true}, {Name: "strategy", Label: "Merge strategy (blank = Git default)", Kind: WorkflowEnum, Value: strategy, Choices: []WorkflowChoice{{Value: "", Label: "Git default"}, {Value: "manual", Label: "manual"}, {Value: "ours", Label: "ours"}, {Value: "theirs", Label: "theirs"}, {Value: "union", Label: "union"}, {Value: "cat_sort_uniq", Label: "cat_sort_uniq"}}}}, Submit: func(ctx context.Context, v WorkflowValues) error {
+		return m.repo.NotesMergeStart(ctx, strings.TrimSpace(v["ref"]), strings.TrimSpace(v["source"]), v["strategy"])
 	}})
 }
 

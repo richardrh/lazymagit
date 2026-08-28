@@ -344,6 +344,8 @@ func branchConfigure(m *Model, _ WorkflowCommand) tea.Cmd {
 			upstreamActions = append(upstreamActions, WorkflowChoice{Value: choice.Value, Label: "Set to " + choice.Value})
 		}
 		rebaseModes := []string{"false", "true", "merges", "interactive"}
+		autoSetupMergeModes := []string{"false", "true", "always", "simple", "inherit"}
+		autoSetupRebaseModes := []string{"never", "local", "remote", "always"}
 		d := WorkflowDialog{
 			Title: "Configure branch and branch defaults", Operation: "configure branch",
 			Plan: []string{"Select a branch and desired changes; review loads that branch's current values", "Each setting defaults to Keep; only explicit Set/Unset choices mutate configuration"},
@@ -356,6 +358,8 @@ func branchConfigure(m *Model, _ WorkflowCommand) tea.Cmd {
 				{Name: "push_remote", Label: "Branch pushRemote action", Kind: WorkflowEnum, Value: "keep", Choices: actionChoices(remoteNames...)},
 				{Name: "pull_rebase", Label: "pull.rebase action", Kind: WorkflowEnum, Value: "keep", Choices: actionChoices(rebaseModes...)},
 				{Name: "push_default", Label: "remote.pushDefault action", Kind: WorkflowEnum, Value: "keep", Choices: actionChoices(remoteNames...)},
+				{Name: "auto_setup_merge", Label: "branch.autoSetupMerge action", Kind: WorkflowEnum, Value: "keep", Choices: actionChoices(autoSetupMergeModes...)},
+				{Name: "auto_setup_rebase", Label: "branch.autoSetupRebase action", Kind: WorkflowEnum, Value: "keep", Choices: actionChoices(autoSetupRebaseModes...)},
 			},
 		}
 		d.ReviewPreflight = func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
@@ -392,7 +396,7 @@ func branchConfigRequest(values WorkflowValues) gitbackend.BranchConfigUpdate {
 	if description.Action == gitbackend.ConfigSet {
 		description.Value = values["description"]
 	}
-	return gitbackend.BranchConfigUpdate{Branch: values["branch"], Description: description, Upstream: choice(values["upstream"]), Rebase: choice(values["rebase"]), PushRemote: choice(values["push_remote"]), PullRebase: choice(values["pull_rebase"]), RemotePushDefault: choice(values["push_default"])}
+	return gitbackend.BranchConfigUpdate{Branch: values["branch"], Description: description, Upstream: choice(values["upstream"]), Rebase: choice(values["rebase"]), PushRemote: choice(values["push_remote"]), PullRebase: choice(values["pull_rebase"]), RemotePushDefault: choice(values["push_default"]), AutoSetupMerge: choice(values["auto_setup_merge"]), AutoSetupRebase: choice(values["auto_setup_rebase"])}
 }
 
 func applyBranchConfiguration(ctx context.Context, repo *gitbackend.Repository, values WorkflowValues) error {

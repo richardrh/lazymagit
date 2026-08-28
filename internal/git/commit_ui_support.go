@@ -33,6 +33,13 @@ func (r *Repository) ExecuteCommitUI(ctx context.Context, variant CommitUIVarian
 		return Commit{}, ErrCommitSigningConsentRequired
 	}
 	options.AllowInteractiveSigning = signingRequested && signingConsent
+	if options.ReeditMessage != "" {
+		switch variant {
+		case CommitUICreate, CommitUIExtend, CommitUIAmend, CommitUIReword:
+		default:
+			return Commit{}, &CommitOptionError{Message: string(variant) + " commit cannot reedit another commit message"}
+		}
+	}
 
 	var args []string
 	var editorMessage string
@@ -43,19 +50,36 @@ func (r *Repository) ExecuteCommitUI(ctx context.Context, variant CommitUIVarian
 		if err == nil {
 			err = requireCommitMessage("create commit", message, options)
 		}
-		args = appendMessage(args, message)
+		if options.ReeditMessage == "" {
+			args = appendMessage(args, message)
+		} else {
+			editorMessage = message
+		}
 	case CommitUIExtend:
 		if options.ReuseMessage != "" {
 			err = &CommitOptionError{Message: "extend commit cannot reuse another message"}
 			break
 		}
-		args, err = r.commitArgs(ctx, "extend", []string{"--amend", "--no-edit"}, options)
+		if options.ReeditMessage != "" && message == "" {
+			err = &EditorRequiredError{Operation: "extend commit with reedit-message"}
+			break
+		}
+		initial := []string{"--amend", "--no-edit"}
+		if options.ReeditMessage != "" {
+			initial = []string{"--amend"}
+			editorMessage = message
+		}
+		args, err = r.commitArgs(ctx, "extend", initial, options)
 	case CommitUIAmend:
 		args, err = r.commitArgs(ctx, "amend", []string{"--amend"}, options)
 		if err == nil {
 			err = requireCommitMessage("amend commit", message, options)
 		}
-		args = appendMessage(args, message)
+		if options.ReeditMessage == "" {
+			args = appendMessage(args, message)
+		} else {
+			editorMessage = message
+		}
 	case CommitUIReword:
 		if options.All {
 			err = &CommitOptionError{Message: "reword commit cannot use all while preserving the staged tree"}
@@ -65,7 +89,11 @@ func (r *Repository) ExecuteCommitUI(ctx context.Context, variant CommitUIVarian
 		if err == nil {
 			err = requireCommitMessage("reword commit", message, options)
 		}
-		args = appendMessage(args, message)
+		if options.ReeditMessage == "" {
+			args = appendMessage(args, message)
+		} else {
+			editorMessage = message
+		}
 	case CommitUIFixup, CommitUISquash, CommitUIAlter, CommitUIAugment, CommitUIRevise:
 		var oid string
 		oid, err = r.resolveCommitForCommitWorkflow(ctx, target)

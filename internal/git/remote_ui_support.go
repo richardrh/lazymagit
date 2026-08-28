@@ -86,6 +86,7 @@ type RemoteConfiguration struct {
 	PushURLConfigured           bool
 	FetchRefspecs, PushRefspecs []string
 	TagOpt                      *RemoteTagOpt
+	FollowRemoteHEAD            *RemoteFollowRemoteHEAD
 }
 
 type ReviewedRemoteConfiguration struct {
@@ -135,6 +136,16 @@ func (r *Repository) RemoteConfiguration(ctx context.Context, remote string) (Re
 			return c, fmt.Errorf("unsupported remote tag option %q", v)
 		}
 		c.TagOpt = &opt
+	}
+	if v, ok, err := r.configValue(ctx, "remote."+remote+".followRemoteHEAD"); err != nil {
+		return c, err
+	} else if ok {
+		modes := map[string]RemoteFollowRemoteHEAD{"never": RemoteFollowRemoteHEADNever, "create": RemoteFollowRemoteHEADCreate, "warn": RemoteFollowRemoteHEADWarn, "always": RemoteFollowRemoteHEADAlways}
+		mode, valid := modes[v]
+		if !valid {
+			return c, fmt.Errorf("unsupported remote followRemoteHEAD option %q", v)
+		}
+		c.FollowRemoteHEAD = &mode
 	}
 	return c, nil
 }
@@ -204,6 +215,9 @@ func (r *Repository) validateRemoteConfigurationRequest(ctx context.Context, in 
 	if in.TagOpt != nil && *in.TagOpt != RemoteTagsDefault && *in.TagOpt != RemoteTagsAll && *in.TagOpt != RemoteTagsNone {
 		return errors.New("invalid remote tag option")
 	}
+	if in.FollowRemoteHEAD != nil && (*in.FollowRemoteHEAD < RemoteFollowRemoteHEADDefault || *in.FollowRemoteHEAD > RemoteFollowRemoteHEADAlways) {
+		return errors.New("invalid remote followRemoteHEAD option")
+	}
 	return nil
 }
 
@@ -229,6 +243,10 @@ func cloneRemoteConfigArgs(in RemoteConfigArgs) RemoteConfigArgs {
 		v := *in.TagOpt
 		out.TagOpt = &v
 	}
+	if in.FollowRemoteHEAD != nil {
+		v := *in.FollowRemoteHEAD
+		out.FollowRemoteHEAD = &v
+	}
 	return out
 }
 
@@ -247,6 +265,10 @@ func cloneRemoteConfiguration(in RemoteConfiguration) RemoteConfiguration {
 	if in.TagOpt != nil {
 		v := *in.TagOpt
 		out.TagOpt = &v
+	}
+	if in.FollowRemoteHEAD != nil {
+		v := *in.FollowRemoteHEAD
+		out.FollowRemoteHEAD = &v
 	}
 	return out
 }
@@ -294,6 +316,13 @@ func remoteConfigurationChanges(before RemoteConfiguration, in RemoteConfigArgs)
 			old = fmt.Sprint(*before.TagOpt)
 		}
 		show("remote."+in.Remote+".tagopt", old, fmt.Sprint(*in.TagOpt))
+	}
+	if in.FollowRemoteHEAD != nil {
+		old := "<unset>"
+		if before.FollowRemoteHEAD != nil {
+			old = fmt.Sprint(*before.FollowRemoteHEAD)
+		}
+		show("remote."+in.Remote+".followRemoteHEAD", old, fmt.Sprint(*in.FollowRemoteHEAD))
 	}
 	if len(out) == 0 {
 		out = append(out, "No configuration changes")

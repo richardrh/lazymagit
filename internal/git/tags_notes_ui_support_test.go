@@ -15,6 +15,9 @@ func TestReviewedTagMutationsRejectStaleObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	if _, err := repo.CreateTagWithArgs(ctx, CreateTagArgs{Name: "bad", Target: first, LocalUser: "key\nunsafe"}); err == nil {
+		t.Fatal("tag signing identity with newline was accepted")
+	}
 	if _, err := repo.CreateTagWithArgs(ctx, CreateTagArgs{Name: "v1", Target: first}); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +78,27 @@ func TestReviewedRemoteTagPruneBindsRemoteAndObjects(t *testing.T) {
 	}
 	if got := local.git("rev-parse", "stale"); got != second {
 		t.Fatalf("stale prune changed tag to %q", got)
+	}
+}
+
+func TestNotesMergeStrategyIsValidatedAndPassedToGit(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "one\n")
+	oid := r.commitAll("one")
+	r.git("notes", "--ref=source", "add", "-m", "source note", oid)
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := repo.NotesMergeStart(ctx, "dest", "refs/notes/source", "union"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("notes", "--ref=dest", "show", oid); got != "source note" {
+		t.Fatalf("merged note = %q", got)
+	}
+	if err := repo.NotesMergeStart(ctx, "dest", "refs/notes/source", "--unsafe"); err == nil {
+		t.Fatal("option-like merge strategy was accepted")
 	}
 }
 

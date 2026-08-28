@@ -92,9 +92,13 @@ func TestRemoteWorkflowIntegrationAddConfigureRenamePruneRemoveAndCancel(t *test
 	setRemoteWorkflowValue(t, m, "U", `["+refs/heads/*:refs/remotes/origin/*"]`)
 	setRemoteWorkflowValue(t, m, "S-mode", "clear")
 	setRemoteWorkflowValue(t, m, "O", "none")
+	setRemoteWorkflowValue(t, m, "h", "always")
 	reviewAndSubmitRemoteWorkflow(t, m)
 	if got := local.git("config", "--get", "remote.origin.tagopt"); got != "--no-tags" {
 		t.Fatalf("tagopt = %q", got)
+	}
+	if got := local.git("config", "--get", "remote.origin.followRemoteHEAD"); got != "always" {
+		t.Fatalf("followRemoteHEAD = %q", got)
 	}
 
 	loadRemoteWorkflow(t, m, commandRemoteRename)

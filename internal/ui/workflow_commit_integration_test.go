@@ -7,7 +7,44 @@ import (
 	"testing"
 
 	gitbackend "github.com/richard/lazymagit/internal/git"
+	"github.com/richard/lazymagit/internal/keymap"
 )
+
+func TestCommitWorkflowReeditMessageUsesInternalEditorIntegration(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base", "base\n")
+	r.git("add", "base")
+	r.git("commit", "-m", "source message")
+	source := r.git("rev-parse", "HEAD")
+	r.write("next", "next\n")
+	r.git("add", "next")
+
+	repo, err := gitbackend.Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(repo)
+	id, _ := commitCommandID("magit-commit-create")
+	load, handled := m.performWorkflow(WorkflowCommand{ID: id, Options: map[keymap.CommandID]OptionValue{commitInfixID(t, "magit-commit:--reedit-message"): {Value: source}}})
+	if !handled || load == nil {
+		t.Fatalf("reedit workflow did not load: handled=%v", handled)
+	}
+	_, _ = m.Update(load())
+	if m.workflow == nil {
+		t.Fatalf("reedit dialog missing: %s", m.message)
+	}
+	values := m.workflowValues()
+	if values[commitMessageField] != "source message\n\n" {
+		t.Fatalf("prefilled reedit message = %q", values[commitMessageField])
+	}
+	values[commitMessageField] = "edited internally"
+	if err := m.workflow.dialog.Submit(context.Background(), values); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("log", "-1", "--format=%B"); got != "edited internally" {
+		t.Fatalf("reedit message = %q", got)
+	}
+}
 
 func TestCommitWorkflowNineVariantsIntegration(t *testing.T) {
 	for _, spec := range commitWorkflowSpecs {

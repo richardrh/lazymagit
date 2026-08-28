@@ -187,7 +187,7 @@ func remoteUnshallowWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 
 var configureModeChoices = []WorkflowChoice{{Value: "unchanged", Label: "unchanged"}, {Value: "replace", Label: "replace"}, {Value: "clear", Label: "clear"}}
 
-func remoteConfigureWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
+func remoteConfigureWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 	return m.LoadWorkflow("remote configuration", func(ctx context.Context) (WorkflowDialog, error) {
 		choices, err := remoteChoices(ctx, m)
 		if err != nil {
@@ -195,6 +195,7 @@ func remoteConfigureWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 		}
 		// Choices are asynchronous; configuration itself is loaded during reviewed
 		// preflight so changing the selected remote cannot retain stale defaults.
+		follow := command.Options["remote.remote.followremotehead"].Value
 		return WorkflowDialog{
 			Title: "Configure remote", Operation: "configure remote",
 			Fields: []WorkflowField{
@@ -208,6 +209,7 @@ func remoteConfigureWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 				{Name: "S-mode", Label: "S Push refspec action", Kind: WorkflowEnum, Value: "unchanged", Choices: configureModeChoices},
 				{Name: "S", Label: "S Push refspecs (JSON array)", Kind: WorkflowText, Value: "[]"},
 				{Name: "O", Label: "O Tag behavior", Kind: WorkflowEnum, Value: "unchanged", Choices: []WorkflowChoice{{Value: "unchanged", Label: "unchanged"}, {Value: "default", Label: "default"}, {Value: "all", Label: "all tags"}, {Value: "none", Label: "no tags"}}},
+				{Name: "h", Label: "h Follow remote HEAD", Kind: WorkflowEnum, Value: follow, Choices: []WorkflowChoice{{Value: "unchanged", Label: "unchanged"}, {Value: "default", Label: "default"}, {Value: "never", Label: "never"}, {Value: "create", Label: "create"}, {Value: "warn", Label: "warn"}, {Value: "always", Label: "always"}}},
 			},
 			Validate: func(v WorkflowValues) error { _, err := remoteConfigArgs(v); return err },
 			ReviewPreflight: func(ctx context.Context, v WorkflowValues) (WorkflowReview, error) {
@@ -274,6 +276,14 @@ func remoteConfigArgs(v WorkflowValues) (gitbackend.RemoteConfigArgs, error) {
 		args.TagOpt = &value
 	default:
 		return args, errors.New("invalid O tag behavior")
+	}
+	followModes := map[string]gitbackend.RemoteFollowRemoteHEAD{"default": gitbackend.RemoteFollowRemoteHEADDefault, "never": gitbackend.RemoteFollowRemoteHEADNever, "create": gitbackend.RemoteFollowRemoteHEADCreate, "warn": gitbackend.RemoteFollowRemoteHEADWarn, "always": gitbackend.RemoteFollowRemoteHEADAlways}
+	if v["h"] != "" && v["h"] != "unchanged" {
+		mode, ok := followModes[v["h"]]
+		if !ok {
+			return args, errors.New("invalid h follow remote HEAD behavior")
+		}
+		args.FollowRemoteHEAD = &mode
 	}
 	return args, nil
 }

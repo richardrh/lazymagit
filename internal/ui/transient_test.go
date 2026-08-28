@@ -927,7 +927,7 @@ func TestRuntimeOptionCapabilitiesNeverExposeIgnoredInfixes(t *testing.T) {
 	commit, _ := m.transientCatalog("c")
 	for upstream, available := range map[string]bool{
 		"transient:magit-commit:--verbose": false,
-		"magit-commit:--reedit-message":    false,
+		"magit-commit:--reedit-message":    true,
 		"magit:--gpg-sign":                 true,
 	} {
 		var found bool

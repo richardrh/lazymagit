@@ -640,6 +640,8 @@ var transientCapability = map[string]map[string]bool{
 	"magit-patch-create":  setOf("magit-patch-create"),
 	"magit-push":          setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),
 	"magit-remote":        setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
+	"magit-tag":           setOf("magit-tag-create", "magit-tag-release"),
+	"magit-notes":         setOf("magit-notes-edit", "magit-notes-remove", "magit-notes-merge", "magit-notes-prune"),
 	"magit-stash":         setOf("magit-stash-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),
 	"magit-stash-push":    setOf("magit-stash-push"),
 	"magit-status-jump":   setOf("magit-jump-to-stashes", "magit-jump-to-untracked", "magit-jump-to-unstaged", "magit-jump-to-staged", "magit-jump-to-unpulled-from-upstream", "magit-jump-to-unpushed-to-upstream"),
@@ -669,7 +671,7 @@ func OptionConsumerCommands(prefix, option string) []string {
 	}
 	switch prefix {
 	case "c":
-		if option == "transient:magit-commit:--verbose" || option == "magit-commit:--reedit-message" {
+		if option == "transient:magit-commit:--verbose" {
 			return nil
 		}
 		return all("magit-commit")
@@ -680,6 +682,20 @@ func OptionConsumerCommands(prefix, option string) []string {
 	case "M":
 		if option == "transient:magit-remote:-f" {
 			return []string{"magit-remote-add"}
+		}
+	case "t":
+		switch option {
+		case "transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign", "magit-tag:--local-user":
+			return all("magit-tag")
+		}
+	case "T":
+		switch option {
+		case "magit-notes:--ref":
+			return all("magit-notes")
+		case "transient:magit-notes:--dry-run":
+			return []string{"magit-notes-prune"}
+		case "magit-notes:--strategy":
+			return []string{"magit-notes-merge"}
 		}
 	case "z":
 		return []string{"magit-stash-both", "magit-stash-keep-index"}

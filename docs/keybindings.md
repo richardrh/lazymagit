@@ -256,7 +256,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-S` | `magit:--gpg-sign` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `+s` | `magit:--signoff` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `-C` | `magit-commit:--reuse-message` | **infix** | Arguments |  | `partial` | actionable TUI option |
-| `-c` | `magit-commit:--reedit-message` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
+| `-c` | `magit-commit:--reedit-message` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `c` | `magit-commit-create` | **suffix** | Create |  | `partial` | TUI workflow handler (startup-validated) |
 | `e` | `magit-commit-extend` | **suffix** | Edit HEAD |  | `partial` | TUI workflow handler (startup-validated) |
 | `a` | `magit-commit-amend` | **suffix** | Edit HEAD |  | `partial` | TUI workflow handler (startup-validated) |
@@ -511,13 +511,13 @@ All manifest transients are generated from effective status bindings and transie
 | `d` | `magit-notes.displayRef` | **infix** | Configure local settings |  | `missing` | infix: argument editing is not implemented |
 | `C` | `magit-global-core.notesRef` | **infix** | Configure global settings |  | `missing` | infix: argument editing is not implemented |
 | `D` | `magit-global-notes.displayRef` | **infix** | Configure global settings |  | `missing` | infix: argument editing is not implemented |
-| `-n` | `transient:magit-notes:--dry-run` | **infix** | Arguments for prune | if-not: magit-notes-merging-p | `missing` | infix: argument editing is not implemented |
-| `-r` | `magit-notes:--ref` | **infix** | Arguments for edit and remove | if-not: magit-notes-merging-p | `missing` | infix: argument editing is not implemented |
-| `-s` | `magit-notes:--strategy` | **infix** | Arguments for merge | if-not: magit-notes-merging-p | `missing` | infix: argument editing is not implemented |
-| `T` | `magit-notes-edit` | **suffix** | Actions | if-not: magit-notes-merging-p | `missing` | suffix: not implemented |
-| `r` | `magit-notes-remove` | **suffix** | Actions | if-not: magit-notes-merging-p | `missing` | suffix: not implemented |
-| `m` | `magit-notes-merge` | **suffix** | Actions | if-not: magit-notes-merging-p | `missing` | suffix: not implemented |
-| `p` | `magit-notes-prune` | **suffix** | Actions | if-not: magit-notes-merging-p | `missing` | suffix: not implemented |
+| `-n` | `transient:magit-notes:--dry-run` | **infix** | Arguments for prune | if-not: magit-notes-merging-p | `partial` | actionable TUI option |
+| `-r` | `magit-notes:--ref` | **infix** | Arguments for edit and remove | if-not: magit-notes-merging-p | `partial` | actionable TUI option |
+| `-s` | `magit-notes:--strategy` | **infix** | Arguments for merge | if-not: magit-notes-merging-p | `partial` | actionable TUI option |
+| `T` | `magit-notes-edit` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
+| `r` | `magit-notes-remove` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
+| `m` | `magit-notes-merge` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
+| `p` | `magit-notes-prune` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
 | `c` | `magit-notes-merge-commit` | **suffix** | Actions | if: magit-notes-merging-p | `missing` | suffix: not implemented |
 | `a` | `magit-notes-merge-abort` | **suffix** | Actions | if: magit-notes-merging-p | `missing` | suffix: not implemented |
 
@@ -870,13 +870,13 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-f` | `transient:magit-tag:--force` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
+| `-f` | `transient:magit-tag:--force` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `-e` | `transient:magit-tag:--edit` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-a` | `transient:magit-tag:--annotate` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-s` | `transient:magit-tag:--sign` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `-u` | `magit-tag:--local-user` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `t` | `magit-tag-create` | **suffix** | Create |  | `missing` | suffix: not implemented |
-| `r` | `magit-tag-release` | **suffix** | Create |  | `missing` | suffix: not implemented |
+| `-a` | `transient:magit-tag:--annotate` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-s` | `transient:magit-tag:--sign` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `-u` | `magit-tag:--local-user` | **infix** | Arguments |  | `partial` | actionable TUI option |
+| `t` | `magit-tag-create` | **suffix** | Create |  | `partial` | TUI workflow handler (startup-validated) |
+| `r` | `magit-tag-release` | **suffix** | Create |  | `partial` | TUI workflow handler (startup-validated) |
 | `k` | `magit-tag-delete` | **suffix** | Do |  | `missing` | suffix: not implemented |
 | `p` | `magit-tag-prune` | **suffix** | Do |  | `missing` | suffix: not implemented |
 

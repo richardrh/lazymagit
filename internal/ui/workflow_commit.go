@@ -96,7 +96,7 @@ func commitOptionsFromWorkflow(values map[keymap.CommandID]OptionValue) (gitback
 		case "magit:--gpg-sign":
 			out.Sign, out.SigningKey = value.Value == "", value.Value
 		case "magit-commit:--reedit-message":
-			return out, errors.New("reedit-message requires an external editor and is unavailable")
+			out.ReeditMessage = value.Value
 		case "transient:magit-commit:--verbose":
 			return out, errors.New("verbose commit preview is unavailable")
 		}
@@ -126,9 +126,17 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 			}
 			fields = append(fields, WorkflowField{Name: commitTargetField, Label: "Target", Kind: WorkflowSelect, Value: choices[0].Value, Choices: choices, Required: true})
 		}
-		if spec.message {
-			required := spec.required && options.ReuseMessage == ""
-			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Message", Kind: WorkflowText, Required: required})
+		if spec.message || options.ReeditMessage != "" {
+			required := (spec.required || options.ReeditMessage != "") && options.ReuseMessage == ""
+			message := ""
+			if options.ReeditMessage != "" {
+				var err error
+				message, err = m.repo.CommitMessageForUI(ctx, options.ReeditMessage)
+				if err != nil {
+					return WorkflowDialog{}, fmt.Errorf("load reedit message: %w", err)
+				}
+			}
+			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Message", Kind: WorkflowText, Value: message, Required: required})
 		}
 		signing := options.Sign || options.SigningKey != ""
 		if signing {

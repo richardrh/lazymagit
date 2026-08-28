@@ -103,6 +103,20 @@ func TestTransferWorkflowPullAndRemoteConfiguration(t *testing.T) {
 	if got := local.git("config", "--get", "remote.origin.tagOpt"); got != "--no-tags" {
 		t.Fatalf("tagOpt = %q", got)
 	}
+	allTags := RemoteTagsAll
+	if err := repo.ConfigureRemote(ctx, RemoteConfigArgs{Remote: "origin", TagOpt: &allTags}); err != nil {
+		t.Fatal(err)
+	}
+	if got := local.git("config", "--get", "remote.origin.tagOpt"); got != "--tags" {
+		t.Fatalf("all tagOpt = %q", got)
+	}
+	defaultTags := RemoteTagsDefault
+	if err := repo.ConfigureRemote(ctx, RemoteConfigArgs{Remote: "origin", TagOpt: &defaultTags}); err != nil {
+		t.Fatal(err)
+	}
+	if _, set, err := repo.configValue(ctx, "remote.origin.tagOpt"); err != nil || set {
+		t.Fatalf("default tagOpt remained set: %v, %v", set, err)
+	}
 	p, err := repo.RenameRemote(ctx, RenameRemoteArgs{Old: "origin", New: "mirror"})
 	if err != nil {
 		t.Fatalf("rename remote: %v", err)

@@ -57,11 +57,11 @@ func TestCommitWorkflowOptionConversion(t *testing.T) {
 		t.Fatalf("converted options = %+v", got)
 	}
 
-	_, err = commitOptionsFromWorkflow(map[keymap.CommandID]OptionValue{
+	reedit, err := commitOptionsFromWorkflow(map[keymap.CommandID]OptionValue{
 		commitInfixID(t, "magit-commit:--reedit-message"): {Value: "HEAD"},
 	})
-	if err == nil {
-		t.Fatal("reedit-message became executable")
+	if err != nil || reedit.ReeditMessage != "HEAD" {
+		t.Fatalf("reedit-message conversion = %+v, %v", reedit, err)
 	}
 }
 

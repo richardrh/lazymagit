@@ -297,16 +297,46 @@ const (
 	RemoteTagsNone
 )
 
+// RemoteFollowRemoteHEAD controls whether fetch updates the remote HEAD
+// symbolic ref. The default leaves Git's configuration unset.
+type RemoteFollowRemoteHEAD uint8
+
+const (
+	RemoteFollowRemoteHEADDefault RemoteFollowRemoteHEAD = iota
+	RemoteFollowRemoteHEADNever
+	RemoteFollowRemoteHEADCreate
+	RemoteFollowRemoteHEADWarn
+	RemoteFollowRemoteHEADAlways
+)
+
+func (o RemoteFollowRemoteHEAD) String() string {
+	switch o {
+	case RemoteFollowRemoteHEADDefault:
+		return "default"
+	case RemoteFollowRemoteHEADNever:
+		return "never"
+	case RemoteFollowRemoteHEADCreate:
+		return "create"
+	case RemoteFollowRemoteHEADWarn:
+		return "warn"
+	case RemoteFollowRemoteHEADAlways:
+		return "always"
+	default:
+		return "invalid"
+	}
+}
+
 // RemoteConfigArgs replaces the selected settings. Nil slices leave a setting
 // unchanged; an empty non-nil slice removes all values. FetchURL and PushURL
 // use pointers for the same reason.
 type RemoteConfigArgs struct {
-	Remote        string
-	FetchURL      *string
-	PushURL       *string
-	FetchRefspecs []string
-	PushRefspecs  []string
-	TagOpt        *RemoteTagOpt
+	Remote           string
+	FetchURL         *string
+	PushURL          *string
+	FetchRefspecs    []string
+	PushRefspecs     []string
+	TagOpt           *RemoteTagOpt
+	FollowRemoteHEAD *RemoteFollowRemoteHEAD
 }
 
 func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) error {
@@ -331,6 +361,9 @@ func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) e
 	}
 	if in.TagOpt != nil && *in.TagOpt != RemoteTagsDefault && *in.TagOpt != RemoteTagsAll && *in.TagOpt != RemoteTagsNone {
 		return errors.New("invalid remote tag option")
+	}
+	if in.FollowRemoteHEAD != nil && (*in.FollowRemoteHEAD < RemoteFollowRemoteHEADDefault || *in.FollowRemoteHEAD > RemoteFollowRemoteHEADAlways) {
+		return errors.New("invalid remote followRemoteHEAD option")
 	}
 	commonOut, err := r.output(ctx, "rev-parse", "--git-common-dir")
 	if err != nil {
@@ -418,6 +451,24 @@ func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) e
 		default:
 			return errors.New("invalid remote tag option")
 		}
+	}
+	return r.configureRemoteFollowRemoteHEAD(ctx, in.Remote, in.FollowRemoteHEAD, rollback)
+}
+
+func (r *Repository) configureRemoteFollowRemoteHEAD(ctx context.Context, remote string, follow *RemoteFollowRemoteHEAD, rollback func(error) error) error {
+	if follow == nil {
+		return nil
+	}
+	key := "remote." + remote + ".followRemoteHEAD"
+	if *follow == RemoteFollowRemoteHEADDefault {
+		if err := r.run(ctx, "config", "--unset-all", key); err != nil && commandExitCode(err) != 5 {
+			return rollback(err)
+		}
+		return nil
+	}
+	values := map[RemoteFollowRemoteHEAD]string{RemoteFollowRemoteHEADNever: "never", RemoteFollowRemoteHEADCreate: "create", RemoteFollowRemoteHEADWarn: "warn", RemoteFollowRemoteHEADAlways: "always"}
+	if err := r.run(ctx, "config", key, values[*follow]); err != nil {
+		return rollback(err)
 	}
 	return nil
 }

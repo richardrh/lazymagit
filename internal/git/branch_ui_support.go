@@ -23,10 +23,11 @@ type ConfigUpdate struct {
 }
 
 type BranchConfigSnapshot struct {
-	OID                           string
-	Configuration                 BranchConfiguration
-	UpstreamRemote, UpstreamMerge ConfiguredValue
-	PullRebase, RemotePushDefault ConfiguredValue
+	OID                             string
+	Configuration                   BranchConfiguration
+	UpstreamRemote, UpstreamMerge   ConfiguredValue
+	PullRebase, RemotePushDefault   ConfiguredValue
+	AutoSetupMerge, AutoSetupRebase ConfiguredValue
 }
 
 // BranchConfigUpdate is both the typed request and, after review, the immutable
@@ -35,6 +36,7 @@ type BranchConfigUpdate struct {
 	Branch                                    string
 	Description, Upstream, Rebase, PushRemote ConfigUpdate
 	PullRebase, RemotePushDefault             ConfigUpdate
+	AutoSetupMerge, AutoSetupRebase           ConfigUpdate
 	Before                                    BranchConfigSnapshot
 	Plan                                      []string
 	Token                                     ConfirmationToken
@@ -46,7 +48,7 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 		return BranchConfigUpdate{}, err
 	}
 	request.Before = before
-	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault} {
+	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault, "branch.autoSetupMerge": request.AutoSetupMerge, "branch.autoSetupRebase": request.AutoSetupRebase} {
 		if update.Action != ConfigKeep && update.Action != ConfigSet && update.Action != ConfigUnset {
 			return BranchConfigUpdate{}, fmt.Errorf("invalid %s action", name)
 		}
@@ -56,6 +58,12 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 	}
 	if request.PullRebase.Action == ConfigSet && !validRebaseMode(RebaseMode(request.PullRebase.Value)) {
 		return BranchConfigUpdate{}, fmt.Errorf("invalid pull rebase mode %q", request.PullRebase.Value)
+	}
+	if request.AutoSetupMerge.Action == ConfigSet && !validAutoSetupMerge(request.AutoSetupMerge.Value) {
+		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupMerge mode %q", request.AutoSetupMerge.Value)
+	}
+	if request.AutoSetupRebase.Action == ConfigSet && !validAutoSetupRebase(request.AutoSetupRebase.Value) {
+		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupRebase mode %q", request.AutoSetupRebase.Value)
 	}
 	if request.PushRemote.Action == ConfigSet {
 		if err := r.validateRemote(ctx, request.PushRemote.Value); err != nil {
@@ -130,6 +138,12 @@ func (r *Repository) ExecuteBranchConfigUpdate(ctx context.Context, reviewed Bra
 	if err = apply(reviewed.RemotePushDefault, func(v string) error { return r.SetRemotePushDefault(ctx, v) }, func() error { return r.UnsetRemotePushDefault(ctx) }); err != nil {
 		return rollback(err)
 	}
+	if err = apply(reviewed.AutoSetupMerge, func(v string) error { return r.run(ctx, "config", "branch.autoSetupMerge", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupMerge") }); err != nil {
+		return rollback(err)
+	}
+	if err = apply(reviewed.AutoSetupRebase, func(v string) error { return r.run(ctx, "config", "branch.autoSetupRebase", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupRebase") }); err != nil {
+		return rollback(err)
+	}
 	return nil
 }
 
@@ -151,16 +165,22 @@ func (r *Repository) branchConfigSnapshot(ctx context.Context, branch string) (B
 	if s.PullRebase, err = r.PullRebase(ctx); err != nil {
 		return s, err
 	}
-	s.RemotePushDefault, err = r.RemotePushDefault(ctx)
+	if s.RemotePushDefault, err = r.RemotePushDefault(ctx); err != nil {
+		return s, err
+	}
+	if s.AutoSetupMerge, err = r.workflowConfigValue(ctx, "branch.autoSetupMerge"); err != nil {
+		return s, err
+	}
+	s.AutoSetupRebase, err = r.workflowConfigValue(ctx, "branch.autoSetupRebase")
 	return s, err
 }
 
 func branchConfigIdentity(update BranchConfigUpdate) string {
 	b, _ := json.Marshal(struct {
-		Branch                                                                   string
-		Description, Upstream, Rebase, PushRemote, PullRebase, RemotePushDefault ConfigUpdate
-		Before                                                                   BranchConfigSnapshot
-	}{update.Branch, update.Description, update.Upstream, update.Rebase, update.PushRemote, update.PullRebase, update.RemotePushDefault, update.Before})
+		Branch                                                                                                    string
+		Description, Upstream, Rebase, PushRemote, PullRebase, RemotePushDefault, AutoSetupMerge, AutoSetupRebase ConfigUpdate
+		Before                                                                                                    BranchConfigSnapshot
+	}{update.Branch, update.Description, update.Upstream, update.Rebase, update.PushRemote, update.PullRebase, update.RemotePushDefault, update.AutoSetupMerge, update.AutoSetupRebase, update.Before})
 	return string(b)
 }
 
@@ -190,10 +210,30 @@ func branchConfigPlan(update BranchConfigUpdate) []string {
 	add("branch."+update.Branch+".pushRemote", update.Before.Configuration.PushRemote, update.PushRemote)
 	add("pull.rebase", update.Before.PullRebase, update.PullRebase)
 	add("remote.pushDefault", update.Before.RemotePushDefault, update.RemotePushDefault)
+	add("branch.autoSetupMerge", update.Before.AutoSetupMerge, update.AutoSetupMerge)
+	add("branch.autoSetupRebase", update.Before.AutoSetupRebase, update.AutoSetupRebase)
 	if len(out) == 0 {
 		out = append(out, "No configuration changes")
 	}
 	return out
+}
+
+func validAutoSetupMerge(value string) bool {
+	switch value {
+	case "false", "true", "always", "simple", "inherit":
+		return true
+	default:
+		return false
+	}
+}
+
+func validAutoSetupRebase(value string) bool {
+	switch value {
+	case "never", "local", "remote", "always":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Repository) snapshotConfigFile(ctx context.Context) (string, []byte, bool, error) {

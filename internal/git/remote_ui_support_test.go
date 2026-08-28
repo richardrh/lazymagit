@@ -64,15 +64,36 @@ func TestReviewedRemoteConfigurationPreservesNilEmptyAndRejectsStalePlan(t *test
 		t.Fatalf("stale configuration cleared push refspec: %q", got)
 	}
 
-	plan, err = repo.ReviewRemoteConfiguration(ctx, RemoteConfigArgs{Remote: "origin", PushRefspecs: []string{}})
+	follow := RemoteFollowRemoteHEADAlways
+	plan, err = repo.ReviewRemoteConfiguration(ctx, RemoteConfigArgs{Remote: "origin", PushRefspecs: []string{}, FollowRemoteHEAD: &follow})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(plan.Changes, "\n"), "followRemoteHEAD: <unset> -> always") {
+		t.Fatalf("followRemoteHEAD review = %#v", plan.Changes)
 	}
 	if err := repo.ConfigureRemoteReviewed(ctx, plan); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := repo.configValues(ctx, "remote.origin.push"); err != nil || out != nil {
 		t.Fatalf("clear result = %#v, %v", out, err)
+	}
+	if got, err := repo.RemoteConfiguration(ctx, "origin"); err != nil || got.FollowRemoteHEAD == nil || *got.FollowRemoteHEAD != RemoteFollowRemoteHEADAlways {
+		t.Fatalf("followRemoteHEAD = %#v, %v", got.FollowRemoteHEAD, err)
+	}
+	defaultFollow := RemoteFollowRemoteHEADDefault
+	if err := repo.ConfigureRemote(ctx, RemoteConfigArgs{Remote: "origin", FollowRemoteHEAD: &defaultFollow}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repo.RemoteConfiguration(ctx, "origin"); err != nil || got.FollowRemoteHEAD != nil {
+		t.Fatalf("cleared followRemoteHEAD = %#v, %v", got.FollowRemoteHEAD, err)
+	}
+	invalidFollow := RemoteFollowRemoteHEAD(99)
+	if err := repo.ConfigureRemote(ctx, RemoteConfigArgs{Remote: "origin", FollowRemoteHEAD: &invalidFollow}); err == nil {
+		t.Fatal("invalid followRemoteHEAD was accepted")
+	}
+	if _, err := repo.ReviewRemoteConfiguration(ctx, RemoteConfigArgs{Remote: "origin", FollowRemoteHEAD: &invalidFollow}); err == nil {
+		t.Fatal("review accepted invalid followRemoteHEAD")
 	}
 }
 

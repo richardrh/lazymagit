@@ -32,7 +32,6 @@
     "github.com/richard/lazymagit/internal/git/Repository/SaveDiffPatch": 45.198552,
     "github.com/richard/lazymagit/internal/git/Repository/Summary": 56,
     "github.com/richard/lazymagit/internal/git/Repository/WorktreePrunePreflight": 42,
-    "github.com/richard/lazymagit/internal/git/Repository/branchConfigSnapshot": 42,
     "github.com/richard/lazymagit/internal/git/Repository/canonicalHistoryUIRequest": 151.21256258534368,
     "github.com/richard/lazymagit/internal/git/Repository/commitArgs": 39.06088810529337,
     "github.com/richard/lazymagit/internal/git/Repository/historyUIState": 41.7475735854543,

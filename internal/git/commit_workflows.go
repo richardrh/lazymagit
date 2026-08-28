@@ -172,6 +172,9 @@ func (r *Repository) ReviseCommit(ctx context.Context, revision, message string,
 }
 
 func requireCommitMessage(operation, message string, options CommitOptions) error {
+	if options.ReuseMessage != "" && options.ReeditMessage != "" {
+		return &CommitOptionError{Message: operation + " cannot combine reuse-message and reedit-message"}
+	}
 	if message != "" && options.ReuseMessage != "" {
 		return &CommitOptionError{Message: operation + " cannot combine message text and reuse-message"}
 	}
@@ -189,8 +192,8 @@ func appendMessage(args []string, message string) []string {
 }
 
 func (r *Repository) commitArgs(ctx context.Context, operation string, initial []string, options CommitOptions) ([]string, error) {
-	if options.ReeditMessage != "" {
-		return nil, &EditorRequiredError{Operation: operation + " with reedit-message"}
+	if options.ReuseMessage != "" && options.ReeditMessage != "" {
+		return nil, &CommitOptionError{Message: operation + " cannot combine reuse-message and reedit-message"}
 	}
 	if (options.Sign || options.SigningKey != "") && !options.AllowInteractiveSigning {
 		return nil, fmt.Errorf("%w: commit signing", ErrInteractiveRequired)
@@ -224,12 +227,36 @@ func (r *Repository) commitArgs(ctx context.Context, operation string, initial [
 		}
 		args = append(args, "--reuse-message="+reuse)
 	}
+	if options.ReeditMessage != "" {
+		reedit, err := r.resolveCommitForCommitWorkflow(ctx, options.ReeditMessage)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, "--reedit-message="+reedit)
+	}
 	if options.SigningKey != "" {
 		args = append(args, "--gpg-sign="+options.SigningKey)
 	} else if options.Sign {
 		args = append(args, "--gpg-sign")
 	}
 	return args, nil
+}
+
+// CommitMessageForUI loads a bounded editable message after resolving the
+// exact source commit used by --reedit-message.
+func (r *Repository) CommitMessageForUI(ctx context.Context, revision string) (string, error) {
+	oid, err := r.resolveCommitForCommitWorkflow(ctx, revision)
+	if err != nil {
+		return "", err
+	}
+	out, truncated, err := r.outputLimited(ctx, 64<<10, "show", "-s", "--format=%B", oid)
+	if err != nil {
+		return "", err
+	}
+	if truncated {
+		return "", &TooLargeError{Resource: "commit message"}
+	}
+	return string(out), nil
 }
 
 func (r *Repository) resolveCommitForCommitWorkflow(ctx context.Context, revision string) (string, error) {

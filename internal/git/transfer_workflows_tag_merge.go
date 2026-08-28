@@ -76,6 +76,7 @@ type CreateTagArgs struct {
 	Annotated      bool
 	Message        string
 	Sign           bool
+	LocalUser      string
 	Force          bool
 	ConfirmReplace bool
 }
@@ -107,6 +108,12 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 	if p.Exists && (!in.Force || !in.ConfirmReplace) {
 		return p, errors.New("replacing a tag requires force and confirmation")
 	}
+	if strings.ContainsAny(in.LocalUser, "\x00\r\n") {
+		return p, errors.New("tag signing identity contains a control character")
+	}
+	if in.LocalUser != "" {
+		in.Sign = true
+	}
 	if in.Sign {
 		in.Annotated = true
 	}
@@ -129,6 +136,9 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 		args = append(args, "--force")
 	}
 	if in.Sign {
+		if in.LocalUser != "" {
+			args = append(args, "--local-user="+in.LocalUser)
+		}
 		args = append(args, "--sign", "--file=-")
 	} else if in.Annotated {
 		args = append(args, "--annotate", "--file=-")

@@ -29,6 +29,52 @@ func TestExecuteCommitUIRefusesSigningAndDisablesInheritedSigning(t *testing.T) 
 	}
 }
 
+func TestExecuteCommitUIReeditsWithPrivateEditor(t *testing.T) {
+	tr := newTestRepo(t)
+	tr.write("base", "base\n")
+	tr.git("add", "base")
+	tr.git("commit", "-m", "source message")
+	source := tr.git("rev-parse", "HEAD")
+	repo, err := Discover(tr.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if message, err := repo.CommitMessageForUI(ctx, source); err != nil || message != "source message\n\n" {
+		t.Fatalf("source message = %q, %v", message, err)
+	}
+	for _, test := range []struct {
+		variant CommitUIVariant
+		staged  bool
+	}{
+		{CommitUICreate, true},
+		{CommitUIExtend, true},
+		{CommitUIAmend, true},
+		{CommitUIReword, false},
+	} {
+		if test.staged {
+			tr.write(string(test.variant), string(test.variant)+"\n")
+			tr.git("add", string(test.variant))
+		}
+		message := "reedit " + string(test.variant)
+		if _, err := repo.ExecuteCommitUI(ctx, test.variant, "", message, CommitOptions{ReeditMessage: source}, false); err != nil {
+			t.Fatalf("%s: %v", test.variant, err)
+		}
+		if got := tr.git("log", "-1", "--format=%B"); got != message {
+			t.Fatalf("%s message = %q", test.variant, got)
+		}
+	}
+	if _, err := repo.ExecuteCommitUI(ctx, CommitUIFixup, source, "", CommitOptions{ReeditMessage: source}, false); err == nil {
+		t.Fatal("fixup accepted reedit-message")
+	}
+	if _, err := repo.ExecuteCommitUI(ctx, CommitUICreate, "", "conflict", CommitOptions{ReuseMessage: source, ReeditMessage: source}, false); err == nil {
+		t.Fatal("create combined reuse-message and reedit-message")
+	}
+	if _, err := repo.commitArgs(ctx, "test", nil, CommitOptions{ReeditMessage: "missing"}); err == nil {
+		t.Fatal("commit arguments accepted a missing reedit source")
+	}
+}
+
 func TestExecuteCommitUIHooksNoVerifyAndMessageRedaction(t *testing.T) {
 	tr := newTestRepo(t)
 	repo, err := Discover(tr.dir)

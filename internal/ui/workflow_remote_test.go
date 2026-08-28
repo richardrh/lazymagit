@@ -24,7 +24,7 @@ func TestRemoteTransientSafeSuffixesAreDomainConnected(t *testing.T) {
 	for _, key := range []string{"P", "h"} {
 		entry, found := catalog.entry(key)
 		if !found || entry.Available || entry.Reason == "" {
-			t.Errorf("M %s must remain typed unavailable: %+v", key, entry)
+			t.Errorf("M %s must be routed through Configure remote or remain unavailable: %+v", key, entry)
 		}
 	}
 	if entry, found := catalog.entry("d u"); !found || !entry.Available {
@@ -36,7 +36,7 @@ func TestRemoteConfigureValuesPreserveUnchangedClearAndReplace(t *testing.T) {
 	values := WorkflowValues{
 		"remote": "origin", "u-mode": "unchanged", "U-mode": "clear",
 		"s-mode": "replace", "s": "ssh://example/repo", "S-mode": "replace",
-		"S": `["refs/heads/main:refs/heads/release"]`, "O": "none",
+		"S": `["refs/heads/main:refs/heads/release"]`, "O": "none", "h": "always",
 	}
 	args, err := remoteConfigArgs(values)
 	if err != nil {
@@ -45,8 +45,8 @@ func TestRemoteConfigureValuesPreserveUnchangedClearAndReplace(t *testing.T) {
 	if args.FetchURL != nil || args.FetchRefspecs == nil || len(args.FetchRefspecs) != 0 {
 		t.Fatalf("u/U nil-empty semantics = %#v", args)
 	}
-	if args.PushURL == nil || *args.PushURL != "ssh://example/repo" || args.TagOpt == nil || *args.TagOpt != gitbackend.RemoteTagsNone {
-		t.Fatalf("s/O values = %#v", args)
+	if args.PushURL == nil || *args.PushURL != "ssh://example/repo" || args.TagOpt == nil || *args.TagOpt != gitbackend.RemoteTagsNone || args.FollowRemoteHEAD == nil || *args.FollowRemoteHEAD != gitbackend.RemoteFollowRemoteHEADAlways {
+		t.Fatalf("s/O/h values = %#v", args)
 	}
 	encoded, _ := json.Marshal(args.PushRefspecs)
 	if string(encoded) != values["S"] {

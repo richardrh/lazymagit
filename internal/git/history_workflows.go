@@ -564,13 +564,28 @@ func (r *Repository) NotesPrune(ctx context.Context, ref string, confirm Confirm
 	}
 	return r.run(ctx, historyNotesArgs(ref, "prune")...)
 }
-func (r *Repository) NotesMergeStart(ctx context.Context, ref, notesRef string) error {
+func (r *Repository) NotesMergeStart(ctx context.Context, ref, notesRef, strategy string) error {
 	if strings.TrimSpace(notesRef) == "" {
 		return errors.New("notes merge ref is empty")
 	}
+	if !validNotesMergeStrategy(strategy) {
+		return fmt.Errorf("invalid notes merge strategy %q", strategy)
+	}
 	args := historyNotesArgs(ref, "merge")
+	if strategy != "" {
+		args = append(args, "--strategy="+strategy)
+	}
 	args = append(args, "--", notesRef)
 	return r.run(ctx, args...)
+}
+
+func validNotesMergeStrategy(strategy string) bool {
+	switch strategy {
+	case "", "manual", "ours", "theirs", "union", "cat_sort_uniq":
+		return true
+	default:
+		return false
+	}
 }
 func (r *Repository) NotesMergeContinue(ctx context.Context, ref string) error {
 	if !r.historyNotesMergeActive() {
