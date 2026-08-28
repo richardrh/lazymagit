@@ -632,20 +632,20 @@ All manifest transients are generated from effective status bindings and transie
 | `-x` | `magit-rebase:--exec` | **infix** | Arguments | if-not: magit-rebase-in-progress-p | `missing` | infix: argument editing is not implemented |
 | `-S` | `magit:--gpg-sign` | **infix** | Arguments | if-not: magit-rebase-in-progress-p | `missing` | infix: argument editing is not implemented |
 | `+s` | `magit:--signoff` | **infix** | Arguments | if-not: magit-rebase-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `p` | `magit-rebase-onto-pushremote` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p; if: magit-get-current-branch | `missing` | suffix: not implemented |
-| `u` | `magit-rebase-onto-upstream` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p; if: magit-get-current-branch | `missing` | suffix: not implemented |
-| `e` | `magit-rebase-branch` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `i` | `magit-rebase-interactive` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `s` | `magit-rebase-subset` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `m` | `magit-rebase-edit-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `w` | `magit-rebase-reword-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `k` | `magit-rebase-remove-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
+| `p` | `magit-rebase-onto-pushremote` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p; if: magit-get-current-branch | `partial` | TUI workflow handler (startup-validated) |
+| `u` | `magit-rebase-onto-upstream` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p; if: magit-get-current-branch | `partial` | TUI workflow handler (startup-validated) |
+| `e` | `magit-rebase-branch` | **suffix** | #[nil ((format (propertize "Rebase %s onto" 'face 'transient-heading) (propertize (or (magit-get-current-branch) "HEAD") 'face 'magit-branch-local))) (t)] | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `i` | `magit-rebase-interactive` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-rebase-subset` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `m` | `magit-rebase-edit-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `w` | `magit-rebase-reword-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `k` | `magit-rebase-remove-commit` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 | `f` | `magit-rebase-autosquash` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
 | `t` | `magit-reshelve-since` | **suffix** | Rebase | if-not: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `r` | `magit-rebase-continue` | **suffix** | Actions | if: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `s` | `magit-rebase-skip` | **suffix** | Actions | if: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `e` | `magit-rebase-edit` | **suffix** | Actions | if: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
-| `a` | `magit-rebase-abort` | **suffix** | Actions | if: magit-rebase-in-progress-p | `missing` | suffix: not implemented |
+| `r` | `magit-rebase-continue` | **suffix** | Actions | if: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-rebase-skip` | **suffix** | Actions | if: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `e` | `magit-rebase-edit` | **suffix** | Actions | if: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `a` | `magit-rebase-abort` | **suffix** | Actions | if: magit-rebase-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 
 ### `M` — magit-remote (15 occurrences)
 

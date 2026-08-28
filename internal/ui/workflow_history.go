@@ -31,6 +31,14 @@ func init() {
 		"magit-rebase-subset":          rebaseOptions,
 		"magit-rebase-onto-upstream":   rebaseOptions,
 		"magit-rebase-onto-pushremote": rebaseOptions,
+		"magit-rebase-interactive":     rebaseOptions,
+		"magit-rebase-edit-commit":     rebaseOptions,
+		"magit-rebase-reword-commit":   rebaseOptions,
+		"magit-rebase-remove-commit":   rebaseOptions,
+		"magit-rebase-edit":            nil,
+		"magit-rebase-continue":        nil,
+		"magit-rebase-skip":            nil,
+		"magit-rebase-abort":           nil,
 	})...)
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-bisect", map[string][]string{
 		"magit-bisect-start": bisectOptions,
@@ -107,6 +115,8 @@ func historyTransientHandler(transient, upstream string) WorkflowHandler {
 		switch upstream {
 		case "magit-rebase-branch", "magit-rebase-subset":
 			return openRebaseWorkflow
+		case "magit-rebase-interactive", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit":
+			return openInteractiveRebaseWorkflow
 		case "magit-rebase-onto-upstream":
 			return openRebaseUpstream
 		case "magit-rebase-onto-pushremote":
@@ -117,8 +127,8 @@ func historyTransientHandler(transient, upstream string) WorkflowHandler {
 			return reviewedHistoryAction(gitbackend.HistoryUIRebaseSkip)
 		case "magit-rebase-abort":
 			return reviewedHistoryAction(gitbackend.HistoryUIRebaseAbort)
-		case "magit-rebase-interactive", "magit-rebase-edit", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit", "magit-rebase-autosquash":
-			return historyUnavailable("Interactive rebase is adapted out: the bounded TUI field cannot safely preserve Magit's multiline todo semantics")
+		case "magit-rebase-edit":
+			return openRebaseTodoWorkflow
 		}
 	case "magit-reset":
 		switch upstream {
@@ -271,6 +281,9 @@ func rebaseOptions(command WorkflowCommand) (gitbackend.RebaseOptions, error) {
 			opts.Autostash = true
 		case "transient:magit-rebase:--force-rebase":
 			opts.ForceRebase = true
+		case "transient:magit-rebase:--interactive":
+			// The suffix opens the bounded terminal todo editor; this infix is
+			// represented by choosing that suffix, not passed through as argv.
 		case "magit-merge:--strategy":
 			opts.Strategy = value.Value
 		case "magit:--signoff":
@@ -280,6 +293,64 @@ func rebaseOptions(command WorkflowCommand) (gitbackend.RebaseOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func openInteractiveRebaseWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
+	opts, err := rebaseOptions(command)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
+	upstream := m.snapshot.summary.Upstream
+	if upstream == "" {
+		upstream = "HEAD~1"
+	}
+	return m.LoadWorkflow("interactive rebase todo", func(ctx context.Context) (WorkflowDialog, error) {
+		todo, err := m.repo.DefaultRebaseTodo(ctx, upstream)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		return reviewedInteractiveRebaseDialog(m, "Review interactive rebase todo", []WorkflowField{
+			{Name: "upstream", Label: "Upstream revision", Kind: WorkflowText, Value: upstream, Required: true},
+			{Name: "onto", Label: "Onto revision (optional)", Kind: WorkflowText},
+			{Name: "todo", Label: "Todo", Kind: WorkflowMultiline, Value: todo, Required: true},
+		}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
+			rebase := opts
+			rebase.Upstream, rebase.Onto, rebase.Todo = values["upstream"], values["onto"], values["todo"]
+			return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseInteractive, Rebase: rebase}
+		}), nil
+	})
+}
+
+func openRebaseTodoWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
+	return m.LoadWorkflow("active rebase todo", func(ctx context.Context) (WorkflowDialog, error) {
+		todo, err := m.repo.ReadRebaseTodo(ctx)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		return reviewedInteractiveRebaseDialog(m, "Review active rebase todo", []WorkflowField{{Name: "todo", Label: "Todo", Kind: WorkflowMultiline, Value: todo, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
+			return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseTodo, Rebase: gitbackend.RebaseOptions{Todo: values["todo"]}}
+		}), nil
+	})
+}
+
+func reviewedInteractiveRebaseDialog(m *Model, title string, fields []WorkflowField, request func(WorkflowValues) gitbackend.HistoryUIRequest) WorkflowDialog {
+	return WorkflowDialog{Title: title, Operation: "interactive rebase", Fields: fields,
+		ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+			review, err := m.repo.ReviewHistoryUIAction(ctx, request(values))
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			plan := append([]string(nil), review.Plan...)
+			plan = append(plan, "HEAD "+review.State.HEAD, "Index "+review.State.Index, "Worktree "+review.State.Worktree, "Operation "+review.State.Operation)
+			return WorkflowReview{Plan: plan, Confirmation: "Execute only if the exact reviewed repository state is unchanged", Data: review}, nil
+		}, SubmitReview: func(ctx context.Context, _ WorkflowValues, transported WorkflowReview) error {
+			review, ok := transported.Data.(gitbackend.ReviewedHistoryUIAction)
+			if !ok {
+				return errors.New("invalid reviewed history token")
+			}
+			return m.repo.ExecuteReviewedHistoryUIAction(ctx, review)
+		}}
 }
 
 func openRebaseWorkflow(m *Model, command WorkflowCommand) tea.Cmd {

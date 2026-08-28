@@ -179,6 +179,10 @@ type RebaseOptions struct {
 	ForceRebase  bool
 	Strategy     string
 	Signoff      bool
+	// Todo is accepted only by RebaseInteractive. It is deliberately not an
+	// argv fragment: every line is parsed and its revision is resolved before
+	// Git sees it.
+	Todo string
 }
 
 // RebaseStart performs a non-interactive rebase. Upstream is required; Onto
@@ -254,8 +258,104 @@ func (r *Repository) rebaseAction(ctx context.Context, action string) error {
 	return r.run(ctx, "rebase", action)
 }
 
+// DefaultRebaseTodo returns the bounded, terminal-editable todo for replaying
+// the current branch above upstream. Subjects are intentionally omitted: Git
+// needs only the resolved object name, and the absence of free-form comments
+// makes the reviewed plan unambiguous.
+func (r *Repository) DefaultRebaseTodo(ctx context.Context, upstream string) (string, error) {
+	base, err := r.resolveHistoryCommit(ctx, upstream)
+	if err != nil {
+		return "", fmt.Errorf("rebase upstream: %w", err)
+	}
+	out, err := r.output(ctx, "rev-list", "--reverse", "--no-merges", base+"..HEAD")
+	if err != nil {
+		return "", fmt.Errorf("list rebase commits: %w", err)
+	}
+	var todo strings.Builder
+	for _, oid := range strings.Fields(string(out)) {
+		todo.WriteString("pick ")
+		todo.WriteString(oid)
+		todo.WriteByte('\n')
+	}
+	if todo.Len() == 0 {
+		return "", errors.New("interactive rebase has no non-merge commits to replay")
+	}
+	return todo.String(), nil
+}
+
+// RebaseInteractive starts Git's sequencer with a todo which has already been
+// parsed, revision-resolved, and reviewed by the TUI. Git requires a sequence
+// editor callback; this uses only lazymagit's sealed, one-shot helper rather
+// than an external editor or a user-controlled shell command.
 func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) error {
-	return &EditorRequiredError{Operation: "interactive rebase"}
+	if strings.TrimSpace(opts.Upstream) == "" {
+		return errors.New("rebase upstream is empty")
+	}
+	if opts.RebaseMerges {
+		return errors.New("interactive todo editor does not support merge topology commands")
+	}
+	if err := validateHistoryStrategy(opts.Strategy); err != nil {
+		return err
+	}
+	upstream, err := r.resolveHistoryCommit(ctx, opts.Upstream)
+	if err != nil {
+		return fmt.Errorf("rebase upstream: %w", err)
+	}
+	expected, err := r.rebaseTodoCommits(ctx, upstream)
+	if err != nil {
+		return err
+	}
+	todo, err := r.canonicalRebaseTodo(ctx, opts.Todo, expected)
+	if err != nil {
+		return err
+	}
+	editor, extraEnv, cleanup, err := newRebaseTodoEditor(todo, r.gitDir)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	args := []string{"rebase", "--interactive"}
+	if opts.KeepEmpty {
+		args = append(args, "--keep-empty")
+	}
+	if opts.UpdateRefs {
+		args = append(args, "--update-refs")
+	}
+	if opts.Autostash {
+		args = append(args, "--autostash")
+	}
+	if opts.ForceRebase {
+		args = append(args, "--force-rebase")
+	}
+	if opts.Strategy != "" {
+		args = append(args, "--strategy="+opts.Strategy)
+	}
+	if opts.Signoff {
+		args = append(args, "--signoff")
+	}
+	if opts.Onto != "" {
+		onto, e := r.resolveHistoryCommit(ctx, opts.Onto)
+		if e != nil {
+			return fmt.Errorf("rebase onto: %w", e)
+		}
+		args = append(args, "--onto", onto)
+	}
+	args = append(args, "--", upstream)
+	ctx = context.WithValue(ctx, gitSequenceEditorKey{}, editor)
+	ctx = context.WithValue(ctx, gitExtraEnvKey{}, extraEnv)
+	return r.run(ctx, args...)
+}
+
+func (r *Repository) rebaseTodoCommits(ctx context.Context, upstream string) ([]string, error) {
+	out, err := r.output(ctx, "rev-list", "--reverse", "--no-merges", upstream+"..HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("list rebase commits: %w", err)
+	}
+	commits := strings.Fields(string(out))
+	if len(commits) == 0 {
+		return nil, errors.New("interactive rebase has no non-merge commits to replay")
+	}
+	return commits, nil
 }
 
 func (r *Repository) historyRebaseAdminDir() (string, error) {
@@ -284,38 +384,183 @@ func (r *Repository) ReadRebaseTodo(ctx context.Context) (string, error) {
 	return string(b), nil
 }
 
+// ValidateRebaseTodo enforces the terminal editor's closed instruction set.
+// exec is deliberately rejected: Git executes its payload through a shell.
 func ValidateRebaseTodo(todo string) error {
+	if len(todo) > 1<<20 {
+		return &TooLargeError{Resource: "rebase todo"}
+	}
 	if strings.Count(todo, "\n") > 100000 {
 		return &TooLargeError{Resource: "rebase todo item count"}
 	}
-	for n, line := range strings.Split(todo, "\n") {
-		line = strings.TrimSpace(line)
+	for n, raw := range strings.Split(todo, "\n") {
+		if strings.ContainsRune(raw, '\x00') || strings.ContainsRune(raw, '\r') {
+			return fmt.Errorf("invalid rebase todo line %d: control character", n+1)
+		}
+		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		fields := strings.Fields(line)
-		verb := fields[0]
-		min := map[string]int{"pick": 2, "p": 2, "reword": 2, "r": 2, "edit": 2, "e": 2, "squash": 2, "s": 2, "fixup": 2, "f": 2, "drop": 2, "d": 2, "label": 2, "l": 2, "reset": 2, "t": 2, "merge": 2, "m": 2, "break": 1, "b": 1, "noop": 1}
-		want, ok := min[verb]
-		if !ok || len(fields) < want {
+		if len(fields) < 2 {
 			return fmt.Errorf("invalid rebase todo line %d: %q", n+1, line)
 		}
-		if strings.ContainsRune(line, '\x00') {
-			return fmt.Errorf("invalid rebase todo line %d: NUL", n+1)
+		switch fields[0] {
+		case "pick", "reword", "edit", "squash", "fixup", "drop":
+		default:
+			return fmt.Errorf("invalid rebase todo line %d: command %q is not permitted (exec is never permitted)", n+1, fields[0])
 		}
 	}
 	return nil
 }
 
-func (r *Repository) WriteRebaseTodo(ctx context.Context, todo string) error {
-	_ = ctx
-	if len(todo) > 1<<20 {
-		return &TooLargeError{Resource: "rebase todo"}
-	}
+func (r *Repository) canonicalRebaseTodo(ctx context.Context, todo string, expected []string) (string, error) {
 	if err := ValidateRebaseTodo(todo); err != nil {
+		return "", err
+	}
+	allowed := make(map[string]bool, len(expected))
+	for _, oid := range expected {
+		allowed[oid] = true
+	}
+	seen := make(map[string]bool, len(expected))
+	var out strings.Builder
+	applied := false
+	for lineNumber, raw := range strings.Split(todo, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		oid, err := r.resolveHistoryCommit(ctx, fields[1])
+		if err != nil || !allowed[oid] {
+			return "", fmt.Errorf("rebase todo line %d: revision %q is not a commit selected for this rebase", lineNumber+1, fields[1])
+		}
+		if seen[oid] {
+			return "", fmt.Errorf("rebase todo line %d: commit %s appears more than once", lineNumber+1, oid)
+		}
+		if (fields[0] == "squash" || fields[0] == "fixup") && !applied {
+			return "", fmt.Errorf("rebase todo line %d: %s requires an earlier replayed commit", lineNumber+1, fields[0])
+		}
+		seen[oid] = true
+		if fields[0] != "drop" {
+			applied = true
+		}
+		out.WriteString(fields[0])
+		out.WriteByte(' ')
+		out.WriteString(oid)
+		if len(fields) > 2 {
+			out.WriteByte(' ')
+			out.WriteString(strings.Join(fields[2:], " "))
+		}
+		out.WriteByte('\n')
+	}
+	if len(seen) != len(expected) {
+		return "", errors.New("rebase todo must contain every selected commit exactly once")
+	}
+	return out.String(), nil
+}
+
+func newRebaseTodoEditor(todo, gitDir string) (string, []string, func(), error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return "", nil, nil, fmt.Errorf("locate internal rebase editor: %w", err)
+	}
+	dir, err := os.MkdirTemp("", "lazymagit-rebase-todo-")
+	if err != nil {
+		return "", nil, nil, err
+	}
+	source := filepath.Join(dir, "todo")
+	if err := os.WriteFile(source, []byte(todo), 0o600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", nil, nil, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	if strings.HasSuffix(executable, ".test") {
+		// Go test binaries parse their arguments before TestMain. Use a normal
+		// test selector and a private environment transport for integration
+		// tests; production always uses the sealed helper argv below.
+		return shellQuoteArgs([]string{executable, "-test.run=^TestRebaseTodoEditorHelper$"}), []string{"LAZYMAGIT_REBASE_TODO_SOURCE=" + source, "LAZYMAGIT_REBASE_TODO_GIT_DIR=" + filepath.Clean(gitDir)}, cleanup, nil
+	}
+	args := []string{executable, "--lazymagit-rebase-todo-editor", source, filepath.Clean(gitDir)}
+	return shellQuoteArgs(args), nil, cleanup, nil
+}
+
+func shellQuoteArgs(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = "'" + strings.ReplaceAll(arg, "'", "'\\\"'\\\"'") + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+// RunRebaseTodoEditor is the sealed helper mode used by the running lazymagit
+// binary. It accepts only its private source and Git's exact todo destination.
+func RunRebaseTodoEditor(args []string) (bool, error) {
+	if len(args) == 0 || args[0] != "--lazymagit-rebase-todo-editor" {
+		return false, nil
+	}
+	if len(args) != 4 {
+		return true, errors.New("invalid internal rebase editor invocation")
+	}
+	source, admin, destination := args[1], args[2], args[3]
+	admin = filepath.Clean(admin)
+	expected := filepath.Join(admin, "rebase-merge", "git-rebase-todo")
+	// macOS commonly presents /var through the /private/var symlink to Git.
+	// Compare resolved paths, while retaining the supplied destination for the
+	// atomic replacement below.
+	if resolved, err := filepath.EvalSymlinks(expected); err == nil {
+		expected = resolved
+	}
+	actual := filepath.Clean(destination)
+	if resolved, err := filepath.EvalSymlinks(actual); err == nil {
+		actual = resolved
+	}
+	if actual != expected {
+		return true, errors.New("internal rebase editor refused an unexpected destination")
+	}
+	info, err := os.Lstat(source)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 1<<20 {
+		return true, errors.New("internal rebase editor source is unsafe")
+	}
+	contents, err := os.ReadFile(source)
+	if err != nil {
+		return true, err
+	}
+	if err := ValidateRebaseTodo(string(contents)); err != nil {
+		return true, err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(destination), "lazymagit-todo-")
+	if err != nil {
+		return true, err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err = tmp.Write(contents); err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(name, destination)
+	}
+	return true, err
+}
+
+func (r *Repository) WriteRebaseTodo(ctx context.Context, todo string) error {
+	dir, err := r.historyRebaseAdminDir()
+	if err != nil {
 		return err
 	}
-	dir, err := r.historyRebaseAdminDir()
+	current, err := r.ReadRebaseTodo(ctx)
+	if err != nil {
+		return err
+	}
+	expected, err := r.rebaseTodoIDs(ctx, current)
+	if err != nil {
+		return err
+	}
+	todo, err = r.canonicalRebaseTodo(ctx, todo, expected)
 	if err != nil {
 		return err
 	}

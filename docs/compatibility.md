@@ -59,8 +59,11 @@ management, worktree management, forge integration, and every transient option
 are not yet exact-compatible. The history transients provide reviewed merge,
 non-interactive rebase, cherry-pick/revert, reset, and bisect paths; revisions
 are resolved to object IDs and execution rejects stale repository state.
-Interactive rebase todo editing remains explicitly unavailable because a
-bounded TUI field cannot safely preserve Magit's multiline edit/reword/drop/
-autosquash semantics. `bisect run` likewise remains unavailable rather than
-accepting arbitrary command execution. Unsafe discard of mixed staged and
+Interactive rebase has a terminal-native multiline todo editor with reviewed,
+revision-bound pick/reword/edit/squash/fixup/drop instructions and active
+rebase todo editing plus continue/skip/abort. It never invokes `$EDITOR` or a
+user shell: a sealed lazymagit callback installs the reviewed todo. `exec`,
+merge-topology commands, aliases, and autosquash rewriting remain unavailable.
+`bisect run` likewise remains unavailable rather than accepting arbitrary
+command execution. Unsafe discard of mixed staged and
 unstaged content is intentionally rejected.

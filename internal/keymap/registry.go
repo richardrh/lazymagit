@@ -640,6 +640,7 @@ var transientCapability = map[string]map[string]bool{
 	"magit-patch-create":  setOf("magit-patch-create"),
 	"magit-push":          setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),
 	"magit-remote":        setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
+	"magit-rebase":        setOf("magit-rebase-branch", "magit-rebase-subset", "magit-rebase-onto-upstream", "magit-rebase-onto-pushremote", "magit-rebase-interactive", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit", "magit-rebase-edit", "magit-rebase-continue", "magit-rebase-skip", "magit-rebase-abort"),
 	"magit-tag":           setOf("magit-tag-create", "magit-tag-release", "magit-tag-delete", "magit-tag-prune"),
 	"magit-notes":         setOf("magit-notes-edit", "magit-notes-remove", "magit-notes-merge", "magit-notes-prune", "magit-notes-merge-commit", "magit-notes-merge-abort"),
 	"magit-stash":         setOf("magit-stash-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),

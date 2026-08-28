@@ -218,12 +218,13 @@ func cloneOptions(in map[keymap.CommandID]OptionValue) map[keymap.CommandID]Opti
 type WorkflowFieldKind string
 
 const (
-	WorkflowText    WorkflowFieldKind = "text"
-	WorkflowBool    WorkflowFieldKind = "bool"
-	WorkflowEnum    WorkflowFieldKind = "enum"
-	WorkflowSelect  WorkflowFieldKind = "select"
-	WorkflowSearch  WorkflowFieldKind = "search"
-	WorkflowConfirm WorkflowFieldKind = "confirm"
+	WorkflowText      WorkflowFieldKind = "text"
+	WorkflowMultiline WorkflowFieldKind = "multiline"
+	WorkflowBool      WorkflowFieldKind = "bool"
+	WorkflowEnum      WorkflowFieldKind = "enum"
+	WorkflowSelect    WorkflowFieldKind = "select"
+	WorkflowSearch    WorkflowFieldKind = "search"
+	WorkflowConfirm   WorkflowFieldKind = "confirm"
 )
 
 type WorkflowChoice struct{ Value, Label string }
@@ -599,6 +600,8 @@ func editWorkflowField(field *WorkflowField, msg tea.KeyPressMsg) bool {
 		return editWorkflowSearch(field, key, msg.Key().Text)
 	case WorkflowText, WorkflowConfirm:
 		return editWorkflowText(field, key, msg.Key().Text)
+	case WorkflowMultiline:
+		return editWorkflowMultiline(field, key, msg.Key().Text)
 	default:
 		return false
 	}
@@ -648,6 +651,14 @@ func editWorkflowSearch(field *WorkflowField, key, text string) bool {
 	field.Choice = 0
 	updateWorkflowSearch(field, 0)
 	return true
+}
+
+func editWorkflowMultiline(field *WorkflowField, key, text string) bool {
+	if key == "ctrl+j" || key == "shift+enter" {
+		field.Value += "\n"
+		return true
+	}
+	return editWorkflowText(field, key, text)
 }
 
 func editWorkflowText(field *WorkflowField, key, text string) bool {

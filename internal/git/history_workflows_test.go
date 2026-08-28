@@ -86,9 +86,12 @@ func TestRebaseNonInteractiveOntoAndLifecycleGuard(t *testing.T) {
 	if err := repo.RebaseAbort(context.Background()); !errors.Is(err, ErrWorkflowNotActive) {
 		t.Fatalf("abort outside rebase = %v", err)
 	}
-	var editorRequired *EditorRequiredError
-	if err := repo.RebaseInteractive(context.Background(), RebaseOptions{Upstream: base}); !errors.As(err, &editorRequired) {
-		t.Fatalf("interactive rebase error = %v", err)
+	todo, err := repo.DefaultRebaseTodo(context.Background(), base)
+	if err != nil {
+		t.Fatalf("DefaultRebaseTodo: %v", err)
+	}
+	if err := repo.RebaseInteractive(context.Background(), RebaseOptions{Upstream: base, Todo: todo}); err != nil {
+		t.Fatalf("RebaseInteractive: %v", err)
 	}
 }
 
@@ -132,7 +135,7 @@ func TestRebaseTodoValidationAndAtomicAdminWrite(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(admin, "git-rebase-todo"), []byte("pick "+oid+" base\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	want := "pick " + oid + " base\ndrop " + oid + " duplicate\n"
+	want := "drop " + oid + " base\n"
 	if err := repo.WriteRebaseTodo(context.Background(), want); err != nil {
 		t.Fatalf("WriteRebaseTodo: %v", err)
 	}
@@ -142,6 +145,12 @@ func TestRebaseTodoValidationAndAtomicAdminWrite(t *testing.T) {
 	}
 	if err := ValidateRebaseTodo("exec rm -rf .\n"); err == nil {
 		t.Fatal("shell-bearing exec todo was accepted")
+	}
+	if err := ValidateRebaseTodo("p " + oid + " alias\n"); err == nil {
+		t.Fatal("abbreviated todo command was accepted")
+	}
+	if err := ValidateRebaseTodo("pick " + oid + "\nreword " + oid + "\nedit " + oid + "\nsquash " + oid + "\nfixup " + oid + "\ndrop " + oid + "\n"); err != nil {
+		t.Fatalf("closed supported todo commands rejected: %v", err)
 	}
 }
 

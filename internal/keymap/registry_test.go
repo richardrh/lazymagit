@@ -249,6 +249,12 @@ func TestEveryAvailableCatalogSequenceResolvesToItsRegisteredCommand(t *testing.
 			if binding.Scheme != scheme || binding.Handler != HandlerExecute {
 				continue
 			}
+			// Conditional duplicate transient keys (notably rebase e/s) are
+			// selected by the UI's operation-aware transient catalog. The generic
+			// resolver deliberately has no repository-operation dependency.
+			if strings.Contains(strings.Join(binding.Conditions, " "), "if: magit-rebase-in-progress-p") {
+				continue
+			}
 			available, _ := binding.Available(ctx)
 			if !available && binding.Availability == AvailabilityStaged {
 				ctx.Section = SectionStaged

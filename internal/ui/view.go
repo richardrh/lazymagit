@@ -453,7 +453,7 @@ func (m *Model) renderWorkflowOverlay(width, height int) string {
 	lines := []string{lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" " + sanitizeSingleLine(w.dialog.Title) + " ")}
 	lines = append(lines, renderWorkflowFields(w)...)
 	lines = append(lines, renderWorkflowReview(w)...)
-	lines = append(lines, "", renderWorkflowAction(workflowActionLabel(w), w.field >= len(w.dialog.Fields), w.busy), "", "Tab field  •  ↑/↓ choose  •  Enter select/submit  •  Esc cancel")
+	lines = append(lines, "", renderWorkflowAction(workflowActionLabel(w), w.field >= len(w.dialog.Fields), w.busy), "", "Tab field  •  ↑/↓ choose  •  Enter select/submit  •  Ctrl-J todo line  •  Esc cancel")
 	if w.error != "" {
 		lines = append(lines, lipgloss.NewStyle().Foreground(colorRed).Bold(true).Render(sanitizeSingleLine(w.error)))
 	}
@@ -478,6 +478,16 @@ func renderWorkflowField(field WorkflowField, selected bool) []string {
 		return renderWorkflowSearchField(field, mark, selected)
 	}
 	value := workflowFieldValue(field)
+	if field.Kind == WorkflowMultiline {
+		lines := []string{mark + sanitizeSingleLine(field.Label) + " (Ctrl-J new line):"}
+		for _, line := range strings.Split(value, "\n") {
+			lines = append(lines, "    "+sanitizeSingleLine(line))
+		}
+		if selected {
+			lines[len(lines)-1] += "█"
+		}
+		return lines
+	}
 	if selected && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
 		value += "█"
 	}

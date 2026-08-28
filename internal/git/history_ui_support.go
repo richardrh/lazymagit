@@ -21,24 +21,26 @@ import (
 type HistoryUIAction string
 
 const (
-	HistoryUIRebaseStart    HistoryUIAction = "rebase-start"
-	HistoryUIRebaseContinue HistoryUIAction = "rebase-continue"
-	HistoryUIRebaseSkip     HistoryUIAction = "rebase-skip"
-	HistoryUIRebaseAbort    HistoryUIAction = "rebase-abort"
-	HistoryUIReset          HistoryUIAction = "reset"
-	HistoryUICherryStart    HistoryUIAction = "cherry-pick-start"
-	HistoryUICherryContinue HistoryUIAction = "cherry-pick-continue"
-	HistoryUICherrySkip     HistoryUIAction = "cherry-pick-skip"
-	HistoryUICherryAbort    HistoryUIAction = "cherry-pick-abort"
-	HistoryUIRevertStart    HistoryUIAction = "revert-start"
-	HistoryUIRevertContinue HistoryUIAction = "revert-continue"
-	HistoryUIRevertSkip     HistoryUIAction = "revert-skip"
-	HistoryUIRevertAbort    HistoryUIAction = "revert-abort"
-	HistoryUIBisectStart    HistoryUIAction = "bisect-start"
-	HistoryUIBisectGood     HistoryUIAction = "bisect-good"
-	HistoryUIBisectBad      HistoryUIAction = "bisect-bad"
-	HistoryUIBisectSkip     HistoryUIAction = "bisect-skip"
-	HistoryUIBisectReset    HistoryUIAction = "bisect-reset"
+	HistoryUIRebaseStart       HistoryUIAction = "rebase-start"
+	HistoryUIRebaseContinue    HistoryUIAction = "rebase-continue"
+	HistoryUIRebaseSkip        HistoryUIAction = "rebase-skip"
+	HistoryUIRebaseAbort       HistoryUIAction = "rebase-abort"
+	HistoryUIRebaseInteractive HistoryUIAction = "rebase-interactive"
+	HistoryUIRebaseTodo        HistoryUIAction = "rebase-todo"
+	HistoryUIReset             HistoryUIAction = "reset"
+	HistoryUICherryStart       HistoryUIAction = "cherry-pick-start"
+	HistoryUICherryContinue    HistoryUIAction = "cherry-pick-continue"
+	HistoryUICherrySkip        HistoryUIAction = "cherry-pick-skip"
+	HistoryUICherryAbort       HistoryUIAction = "cherry-pick-abort"
+	HistoryUIRevertStart       HistoryUIAction = "revert-start"
+	HistoryUIRevertContinue    HistoryUIAction = "revert-continue"
+	HistoryUIRevertSkip        HistoryUIAction = "revert-skip"
+	HistoryUIRevertAbort       HistoryUIAction = "revert-abort"
+	HistoryUIBisectStart       HistoryUIAction = "bisect-start"
+	HistoryUIBisectGood        HistoryUIAction = "bisect-good"
+	HistoryUIBisectBad         HistoryUIAction = "bisect-bad"
+	HistoryUIBisectSkip        HistoryUIAction = "bisect-skip"
+	HistoryUIBisectReset       HistoryUIAction = "bisect-reset"
 )
 
 // HistoryUIRequest is a closed, typed union. Fields not used by Action are
@@ -96,6 +98,10 @@ func (r *Repository) ExecuteReviewedHistoryUIAction(ctx context.Context, reviewe
 		return r.RebaseSkip(ctx)
 	case HistoryUIRebaseAbort:
 		return r.RebaseAbort(ctx)
+	case HistoryUIRebaseInteractive:
+		return r.RebaseInteractive(ctx, q.Rebase)
+	case HistoryUIRebaseTodo:
+		return r.WriteRebaseTodo(ctx, q.Rebase.Todo)
 	case HistoryUIReset:
 		q.Reset.Confirmed = true
 		return r.Reset(ctx, q.Reset)
@@ -168,6 +174,49 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		plan := []string{"Rebase current branch", "Upstream " + q.Rebase.Upstream, optionalPlan("Onto ", q.Rebase.Onto)}
 		plan = append(plan, rebaseOptionPlan(q.Rebase)...)
 		return q, plan, nil
+	case HistoryUIRebaseInteractive:
+		if q.Rebase.Branch != "" {
+			return q, nil, errors.New("reviewed UI rebase of a non-current branch is unavailable")
+		}
+		if q.Rebase.RebaseMerges {
+			return q, nil, errors.New("interactive todo editor does not support merge topology commands")
+		}
+		if err := validateHistoryStrategy(q.Rebase.Strategy); err != nil {
+			return q, nil, err
+		}
+		if q.Rebase.Upstream, err = resolveOptional("rebase upstream", q.Rebase.Upstream); err != nil || q.Rebase.Upstream == "" {
+			if err == nil {
+				err = errors.New("rebase upstream is empty")
+			}
+			return q, nil, err
+		}
+		if q.Rebase.Onto, err = resolveOptional("rebase onto", q.Rebase.Onto); err != nil {
+			return q, nil, err
+		}
+		expected, e := r.rebaseTodoCommits(ctx, q.Rebase.Upstream)
+		if e != nil {
+			return q, nil, e
+		}
+		if q.Rebase.Todo, e = r.canonicalRebaseTodo(ctx, q.Rebase.Todo, expected); e != nil {
+			return q, nil, e
+		}
+		plan := []string{"Start interactive rebase of current branch", "Upstream " + q.Rebase.Upstream, "Validated terminal todo:"}
+		plan = append(plan, rebaseTodoPlan(q.Rebase.Todo)...)
+		plan = append(plan, rebaseOptionPlan(q.Rebase)...)
+		return q, plan, nil
+	case HistoryUIRebaseTodo:
+		current, e := r.ReadRebaseTodo(ctx)
+		if e != nil {
+			return q, nil, e
+		}
+		expected, e := r.rebaseTodoIDs(ctx, current)
+		if e != nil {
+			return q, nil, e
+		}
+		if q.Rebase.Todo, e = r.canonicalRebaseTodo(ctx, q.Rebase.Todo, expected); e != nil {
+			return q, nil, e
+		}
+		return q, append([]string{"Replace only the current rebase todo", "Validated terminal todo:"}, rebaseTodoPlan(q.Rebase.Todo)...), nil
 	case HistoryUIRebaseContinue, HistoryUIRebaseSkip, HistoryUIRebaseAbort:
 		return q, []string{"Execute " + string(q.Action), "Bind to current rebase administrative state"}, nil
 	case HistoryUIReset:
@@ -250,6 +299,35 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 	}
 }
 
+func (r *Repository) rebaseTodoIDs(ctx context.Context, todo string) ([]string, error) {
+	if err := ValidateRebaseTodo(todo); err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, raw := range strings.Split(todo, "\n") {
+		fields := strings.Fields(raw)
+		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
+			continue
+		}
+		oid, err := r.resolveHistoryCommit(ctx, fields[1])
+		if err != nil {
+			return nil, fmt.Errorf("active rebase todo revision %q: %w", fields[1], err)
+		}
+		ids = append(ids, oid)
+	}
+	return ids, nil
+}
+
+func rebaseTodoPlan(todo string) []string {
+	var plan []string
+	for _, raw := range strings.Split(strings.TrimSpace(todo), "\n") {
+		if line := strings.TrimSpace(raw); line != "" && !strings.HasPrefix(line, "#") {
+			plan = append(plan, line)
+		}
+	}
+	return plan
+}
+
 func rebaseOptionPlan(o RebaseOptions) []string {
 	var plan []string
 	if o.KeepEmpty {
@@ -309,7 +387,7 @@ func historyUIIdentity(r ReviewedHistoryUIAction) string {
 }
 
 func historyUIRequestIdentity(q HistoryUIRequest) string {
-	return strings.Join([]string{string(q.Action), q.Rebase.Upstream, q.Rebase.Onto, q.Rebase.Branch,
+	return strings.Join([]string{string(q.Action), q.Rebase.Upstream, q.Rebase.Onto, q.Rebase.Branch, q.Rebase.Todo,
 		strconv.FormatBool(q.Rebase.KeepEmpty), strconv.FormatBool(q.Rebase.RebaseMerges), strconv.FormatBool(q.Rebase.UpdateRefs),
 		strconv.FormatBool(q.Rebase.Autostash), strconv.FormatBool(q.Rebase.ForceRebase), q.Rebase.Strategy, strconv.FormatBool(q.Rebase.Signoff),
 		strconv.Itoa(int(q.Reset.Mode)), q.Reset.Target, strings.Join(q.Reset.Paths, "\x01"),

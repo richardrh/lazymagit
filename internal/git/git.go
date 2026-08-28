@@ -59,6 +59,8 @@ type ProcessRecord struct {
 
 type processRecorderKey struct{}
 type gitEditorKey struct{}
+type gitSequenceEditorKey struct{}
+type gitExtraEnvKey struct{}
 
 // WithProcessRecorder arranges for mutating git commands to be reported to
 // recorder synchronously. Read-only query commands are not reported.
@@ -305,7 +307,15 @@ func (r *Repository) executeMutation(ctx context.Context, input []byte, args ...
 	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
 	cmd.Env = gitCommandEnv()
 	if editor, ok := ctx.Value(gitEditorKey{}).(string); ok && editor != "" {
-		cmd.Env = append(cmd.Env, "GIT_EDITOR="+editor)
+		cmd.Env = replaceGitEnv(cmd.Env, "GIT_EDITOR="+editor)
+	}
+	if editor, ok := ctx.Value(gitSequenceEditorKey{}).(string); ok && editor != "" {
+		cmd.Env = replaceGitEnv(cmd.Env, "GIT_SEQUENCE_EDITOR="+editor)
+	}
+	if extra, ok := ctx.Value(gitExtraEnvKey{}).([]string); ok {
+		for _, entry := range extra {
+			cmd.Env = replaceGitEnv(cmd.Env, entry)
+		}
 	}
 	if input != nil {
 		cmd.Stdin = bytes.NewReader(input)
@@ -314,6 +324,18 @@ func (r *Repository) executeMutation(ctx context.Context, input []byte, args ...
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	err := cmd.Run()
 	return stdout, stderr, err
+}
+
+func replaceGitEnv(env []string, entry string) []string {
+	key, _, _ := strings.Cut(entry, "=")
+	prefix := key + "="
+	out := env[:0]
+	for _, current := range env {
+		if !strings.HasPrefix(current, prefix) {
+			out = append(out, current)
+		}
+	}
+	return append(out, entry)
 }
 
 func redactMutationArgs(args []string) ([]string, []string) {

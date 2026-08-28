@@ -8,7 +8,23 @@ import (
 	"testing"
 )
 
+func TestRebaseTodoEditorHelper(t *testing.T) {
+	source, admin := os.Getenv("LAZYMAGIT_REBASE_TODO_SOURCE"), os.Getenv("LAZYMAGIT_REBASE_TODO_GIT_DIR")
+	if source == "" || admin == "" {
+		t.Skip("internal rebase editor helper")
+	}
+	if _, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor", source, admin, os.Args[len(os.Args)-1]}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMain(m *testing.M) {
+	if handled, err := RunRebaseTodoEditor(os.Args[1:]); handled {
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	home, err := os.MkdirTemp("", "lazymagit-test-home-")
 	if err != nil {
 		panic(err)

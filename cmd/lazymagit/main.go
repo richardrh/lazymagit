@@ -20,6 +20,13 @@ import (
 const usage = "usage: lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]"
 
 func main() {
+	if handled, err := gitbackend.RunRebaseTodoEditor(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
 		os.Exit(1)
