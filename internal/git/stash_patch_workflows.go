@@ -351,7 +351,14 @@ func (r *Repository) ApplyPatch(ctx context.Context, patchFile string, options A
 	if err != nil {
 		return err
 	}
+	return r.run(ctx, applyPatchArgs(path, options, false)...)
+}
+
+func applyPatchArgs(path string, options ApplyPatchOptions, check bool) []string {
 	args := []string{"apply"}
+	if check {
+		args = append(args, "--check")
+	}
 	if options.Index {
 		args = append(args, "--index")
 	}
@@ -361,7 +368,7 @@ func (r *Repository) ApplyPatch(ctx context.Context, patchFile string, options A
 	if options.ThreeWay {
 		args = append(args, "--3way")
 	}
-	return r.run(ctx, append(args, "--", path)...)
+	return append(args, "--", path)
 }
 
 func (r *Repository) existingInputPath(name string) (string, error) {
@@ -504,12 +511,12 @@ func (r *Repository) patchOutputDirectory(name string) (string, map[string]bool,
 		dir = filepath.Join(r.commandDir, dir)
 	}
 	dir = filepath.Clean(dir)
-	info, err := os.Stat(dir)
+	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", nil, fmt.Errorf("inspect format-patch output directory: %w", err)
 	}
 	if !info.IsDir() {
-		return "", nil, errors.New("format-patch output path is not a directory")
+		return "", nil, errors.New("format-patch output path is not a directory or is a symlink")
 	}
 	entries, err := boundedDirectoryNames(dir, maxFormatPatchDirectoryEntries)
 	if err != nil {

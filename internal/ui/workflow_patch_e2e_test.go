@@ -29,6 +29,10 @@ func TestPatchE2EFormatAndApplyGeneratedSeriesByKeys(t *testing.T) {
 	setPatchFieldByKeys(t, m, "range", base+"..HEAD")
 	setPatchFieldByKeys(t, m, "directory", out)
 	submitPatchWorkflowByKeys(t, m)
+	if m.workflow == nil || m.workflow.review == nil {
+		t.Fatalf("format-patch review missing: %q", m.message)
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
 	patches := patchFilesIn(t, out)
 	if len(patches) != 2 {
 		t.Fatalf("format-patch created %d files: %#v", len(patches), patches)
@@ -39,6 +43,10 @@ func TestPatchE2EFormatAndApplyGeneratedSeriesByKeys(t *testing.T) {
 	openPatchByKeys(t, m, "W", "a")
 	setPatchFieldByKeys(t, m, "path", patches[0])
 	submitPatchWorkflowByKeys(t, m)
+	if m.workflow == nil || m.workflow.review == nil {
+		t.Fatalf("apply review missing: %q", m.message)
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
 	if m.isError || r.git("rev-parse", "HEAD") != base || r.git("status", "--porcelain", "--", "one.txt") != "?? one.txt" {
 		t.Fatalf("plain patch apply changed the wrong state: %q", m.message)
 	}
@@ -51,6 +59,7 @@ func TestPatchE2EFormatAndApplyGeneratedSeriesByKeys(t *testing.T) {
 	openPatchByKeys(t, m, "w", "w")
 	setPatchFieldByKeys(t, m, "paths", strings.Join(patches, "\n"))
 	submitPatchWorkflowByKeys(t, m)
+	confirmPatchReviewByKeys(t, m)
 	if m.isError {
 		t.Fatalf("am series failed: %s", m.message)
 	}
@@ -85,6 +94,7 @@ func TestPatchE2EAMConflictContinueAndAbortByKeys(t *testing.T) {
 	openPatchByKeys(t, m, "w", "w")
 	setPatchFieldByKeys(t, m, "paths", patch)
 	submitPatchWorkflowByKeys(t, m)
+	confirmPatchReviewByKeys(t, m)
 	if r.git("rev-parse", "HEAD") != before || !amApplying(t, r) {
 		t.Fatalf("conflicting am did not stop at the exact prior commit: %s", m.message)
 	}
@@ -101,6 +111,7 @@ func TestPatchE2EAMConflictContinueAndAbortByKeys(t *testing.T) {
 	openPatchByKeys(t, m, "w", "w")
 	setPatchFieldByKeys(t, m, "paths", patch)
 	submitPatchWorkflowByKeys(t, m)
+	confirmPatchReviewByKeys(t, m)
 	if !amApplying(t, r) {
 		t.Fatal("second conflicting am did not enter progress state")
 	}
@@ -184,6 +195,14 @@ func setPatchFieldByKeys(t *testing.T, m *Model, name, value string) {
 	}
 	// A terminal paste arrives as one key message and preserves embedded newlines.
 	sendE2EKey(t, m, keyMsg(value))
+}
+
+func confirmPatchReviewByKeys(t *testing.T, m *Model) {
+	t.Helper()
+	if m.workflow == nil || m.workflow.review == nil {
+		t.Fatalf("patch review missing: %q", m.message)
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
 }
 
 func submitPatchWorkflowByKeys(t *testing.T, m *Model) {

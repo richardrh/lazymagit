@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -33,6 +34,9 @@ func init() {
 	})...)
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-patch-apply", map[string][]string{
 		"magit-patch-apply": {"transient:magit-patch-apply:--index", "transient:magit-patch-apply:--cached", "transient:magit-patch-apply:--3way"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-patch-create", map[string][]string{
+		"magit-patch-create": {"magit-format-patch:--thread", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--cover-letter"},
 	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := map[keymap.CommandID]WorkflowHandler{
@@ -78,17 +82,38 @@ func amStartWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 	}
 	return m.OpenWorkflow(WorkflowDialog{
 		Title: title, Operation: "am start", Confirmation: "Apply commits from these paths",
-		Fields: []WorkflowField{{Name: "paths", Label: "Patch paths (one per line)", Kind: WorkflowText, Required: true}},
+		Fields: []WorkflowField{
+			{Name: "paths", Label: "Patch paths (one per line)", Kind: WorkflowText, Required: true},
+			{Name: "keep-cr", Label: "Keep CR line endings", Kind: WorkflowBool, Bool: options.KeepCR},
+		},
 		Validate: func(values WorkflowValues) error {
 			_, err := patchPaths(values["paths"])
 			return err
 		},
-		Submit: func(ctx context.Context, values WorkflowValues) error {
+		ReviewPreflight: func(_ context.Context, values WorkflowValues) (WorkflowReview, error) {
 			paths, err := patchPaths(values["paths"])
 			if err != nil {
-				return err
+				return WorkflowReview{}, err
 			}
-			return m.repo.AMStart(ctx, paths, options)
+			runOptions := options
+			runOptions.KeepCR = values["keep-cr"] == "true"
+			reviewed, err := m.repo.ReviewAMStart(paths, runOptions)
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			plan := make([]string, 0, len(reviewed.Inputs)+1)
+			for _, input := range reviewed.Inputs {
+				plan = append(plan, fmt.Sprintf("input: %s (%d bytes, sha256 %s)", input.Path, input.Size, input.Digest))
+			}
+			plan = append(plan, "Git will create commits from these reviewed inputs")
+			return WorkflowReview{Plan: plan, Confirmation: "Apply commits from the reviewed patch inputs", Data: reviewed}, nil
+		},
+		SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
+			reviewed, ok := review.Data.(gitbackend.ReviewedAMStart)
+			if !ok {
+				return errors.New("git am review is invalid")
+			}
+			return m.repo.ExecuteReviewedAMStart(ctx, reviewed)
 		},
 	})
 }
@@ -114,23 +139,45 @@ func applyPatchWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 			}
 			return nil
 		},
-		Submit: func(ctx context.Context, values WorkflowValues) error {
-			return m.repo.ApplyPatch(ctx, values["path"], gitbackend.ApplyPatchOptions{Index: values["index"] == "true", Cached: values["cached"] == "true", ThreeWay: values["three-way"] == "true"})
+		ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+			options := gitbackend.ApplyPatchOptions{Index: values["index"] == "true", Cached: values["cached"] == "true", ThreeWay: values["three-way"] == "true"}
+			reviewed, err := m.repo.ReviewApplyPatch(ctx, values["path"], options)
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			plan := []string{fmt.Sprintf("patch: %s (%d bytes, sha256 %s)", reviewed.Filename, reviewed.Size, reviewed.Digest), "Git verified this patch against the current repository"}
+			return WorkflowReview{Plan: plan, Confirmation: "Apply the reviewed patch", Data: reviewed}, nil
+		},
+		SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
+			reviewed, ok := review.Data.(gitbackend.ReviewedApplyPatch)
+			if !ok {
+				return errors.New("patch application review is invalid")
+			}
+			return m.repo.ExecuteReviewedApplyPatch(ctx, reviewed)
 		},
 	})
 }
 
-func formatPatchWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
+func formatPatchWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
+	defaults, err := formatPatchOptions(command.Options)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
 	return m.OpenWorkflow(WorkflowDialog{
-		Title: "Format patches", Operation: "format patches", Confirmation: "Create a bounded patch series in this existing directory",
+		Title: "Format patches", Operation: "format patches", Confirmation: "Review the exact bounded patch series before publishing it",
 		Fields: []WorkflowField{
 			{Name: "range", Label: "Revision range", Kind: WorkflowText, Value: "HEAD~1..HEAD", Required: true},
 			{Name: "directory", Label: "Output directory", Kind: WorkflowText, Value: ".", Required: true},
-			{Name: "numbered", Label: "Number patches", Kind: WorkflowBool},
-			{Name: "cover", Label: "Create cover letter", Kind: WorkflowBool},
-			{Name: "signoff", Label: "Add signoff", Kind: WorkflowBool},
-			{Name: "thread", Label: "Thread messages", Kind: WorkflowBool},
-			{Name: "subject", Label: "Subject prefix", Kind: WorkflowText},
+			{Name: "numbered", Label: "Number patches", Kind: WorkflowBool, Bool: defaults.Numbered},
+			{Name: "cover", Label: "Create cover letter", Kind: WorkflowBool, Bool: defaults.CoverLetter},
+			{Name: "signoff", Label: "Add signoff", Kind: WorkflowBool, Bool: defaults.Signoff},
+			{Name: "thread", Label: "Thread messages", Kind: WorkflowBool, Bool: defaults.Thread},
+			{Name: "subject", Label: "Subject prefix", Kind: WorkflowText, Value: defaults.SubjectPrefix},
+			{Name: "reroll", Label: "Reroll count", Kind: WorkflowText, Value: strconv.Itoa(defaults.RerollCount)},
+			{Name: "start", Label: "Start number (0 for Git default)", Kind: WorkflowText, Value: strconv.Itoa(defaults.StartNumber)},
+			{Name: "to", Label: "To recipients (comma-separated)", Kind: WorkflowText, Value: strings.Join(defaults.To, ", ")},
+			{Name: "cc", Label: "Cc recipients (comma-separated)", Kind: WorkflowText, Value: strings.Join(defaults.Cc, ", ")},
 		},
 		Validate: func(values WorkflowValues) error {
 			if err := validBoundedText("revision range", values["range"]); err != nil {
@@ -140,17 +187,50 @@ func formatPatchWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 				return err
 			}
 			if values["subject"] != "" {
-				return validBoundedText("subject prefix", values["subject"])
+				if err := validBoundedText("subject prefix", values["subject"]); err != nil {
+					return err
+				}
 			}
-			return nil
-		},
-		Submit: func(ctx context.Context, values WorkflowValues) error {
-			_, err := m.repo.FormatPatchUI(ctx, values["range"], gitbackend.FormatPatchOptions{
-				OutputDirectory: values["directory"], Numbered: values["numbered"] == "true",
-				CoverLetter: values["cover"] == "true", Signoff: values["signoff"] == "true",
-				Thread: values["thread"] == "true", SubjectPrefix: values["subject"],
-			})
+			if _, err := patchNonNegative("reroll count", values["reroll"]); err != nil {
+				return err
+			}
+			if _, err := patchNonNegative("start number", values["start"]); err != nil {
+				return err
+			}
+			if _, err := patchAddresses("To recipients", values["to"]); err != nil {
+				return err
+			}
+			_, err := patchAddresses("Cc recipients", values["cc"])
 			return err
+		},
+		ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+			options, err := formatPatchOptionsFromValues(defaults, values)
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			reviewed, err := m.repo.ReviewFormatPatchUI(ctx, values["range"], options)
+			if err != nil {
+				return WorkflowReview{}, err
+			}
+			plan := []string{fmt.Sprintf("destination: %s", reviewed.Directory), fmt.Sprintf("commits: %d", len(reviewed.Revisions))}
+			for _, file := range reviewed.Files {
+				plan = append(plan, fmt.Sprintf("create: %s (%d bytes, sha256 %s)", file.Name, file.Size, file.Digest))
+			}
+			return WorkflowReview{Plan: plan, Confirmation: "Publish exactly these reviewed patch files", Data: reviewed}, nil
+		},
+		SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
+			reviewed, ok := review.Data.(gitbackend.ReviewedFormatPatch)
+			if !ok {
+				return errors.New("format-patch review is invalid")
+			}
+			return m.repo.ExecuteReviewedFormatPatch(ctx, reviewed)
+		},
+		OnCancel: func() {
+			if m.workflow != nil && m.workflow.review != nil {
+				if reviewed, ok := m.workflow.review.Data.(gitbackend.ReviewedFormatPatch); ok {
+					m.repo.DiscardReviewedFormatPatch(reviewed)
+				}
+			}
 		},
 	})
 }
@@ -222,6 +302,96 @@ func amOptions(options map[keymap.CommandID]OptionValue) (gitbackend.AMOptions, 
 		}
 	}
 	return out, nil
+}
+
+func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.FormatPatchOptions, error) {
+	var out gitbackend.FormatPatchOptions
+	for id, value := range values {
+		if !value.Enabled && value.Value == "" {
+			continue
+		}
+		upstream, belongs := patchOptionUpstream(id)
+		if !belongs {
+			continue
+		}
+		switch upstream {
+		case "magit-format-patch:--thread":
+			out.Thread = value.Enabled || value.Value != ""
+		case "magit-format-patch:--to":
+			addresses, err := patchAddresses("To recipients", value.Value)
+			if err != nil {
+				return out, err
+			}
+			out.To = addresses
+		case "magit-format-patch:--cc":
+			addresses, err := patchAddresses("Cc recipients", value.Value)
+			if err != nil {
+				return out, err
+			}
+			out.Cc = addresses
+		case "magit-format-patch:--reroll-count":
+			count, err := patchNonNegative("reroll count", value.Value)
+			if err != nil {
+				return out, err
+			}
+			out.RerollCount = count
+		case "magit-format-patch:--subject-prefix":
+			if err := validBoundedText("subject prefix", value.Value); err != nil {
+				return out, err
+			}
+			out.SubjectPrefix = value.Value
+		case "transient:magit-patch-create:--cover-letter":
+			out.CoverLetter = true
+		default:
+			return out, fmt.Errorf("%s is unavailable: the format-patch backend does not safely support this option", upstream)
+		}
+	}
+	return out, nil
+}
+
+func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values WorkflowValues) (gitbackend.FormatPatchOptions, error) {
+	out := defaults
+	var err error
+	out.OutputDirectory, out.Numbered, out.CoverLetter, out.Signoff, out.Thread, out.SubjectPrefix = values["directory"], values["numbered"] == "true", values["cover"] == "true", values["signoff"] == "true", values["thread"] == "true", values["subject"]
+	if out.RerollCount, err = patchNonNegative("reroll count", values["reroll"]); err != nil {
+		return out, err
+	}
+	if out.StartNumber, err = patchNonNegative("start number", values["start"]); err != nil {
+		return out, err
+	}
+	if out.To, err = patchAddresses("To recipients", values["to"]); err != nil {
+		return out, err
+	}
+	out.Cc, err = patchAddresses("Cc recipients", values["cc"])
+	return out, err
+}
+
+func patchNonNegative(name, value string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("%s is empty", name)
+	}
+	number, err := strconv.Atoi(value)
+	if err != nil || number < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative whole number", name)
+	}
+	return number, nil
+}
+
+func patchAddresses(name, value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	parts := strings.Split(value, ",")
+	addresses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		address := strings.TrimSpace(part)
+		if err := validBoundedText(name, address); err != nil {
+			return nil, err
+		}
+		addresses = append(addresses, address)
+	}
+	return addresses, nil
 }
 
 func optionEnabled(options map[keymap.CommandID]OptionValue, upstream string) bool {
