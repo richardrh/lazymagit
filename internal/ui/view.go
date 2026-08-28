@@ -164,7 +164,9 @@ func (m *Model) renderHeader() string {
 		upstream = fmt.Sprintf("%s  ↑%d ↓%d", sanitizeSingleLine(m.snapshot.summary.Upstream), m.snapshot.summary.Ahead, m.snapshot.summary.Behind)
 	}
 	left := lipgloss.NewStyle().Bold(true).Foreground(colorPurple).Render(" LAZYMAGIT ")
-	meta := lipgloss.NewStyle().Foreground(colorCyan).Render(fmt.Sprintf(" %s   %s ", repo, branch))
+	// Keep the header legible in stock terminal fonts; Nerd Font glyphs render
+	// as a replacement character in Terminal.app and make the branch unclear.
+	meta := lipgloss.NewStyle().Foreground(colorCyan).Render(fmt.Sprintf(" %s  branch %s ", repo, branch))
 	right := lipgloss.NewStyle().Foreground(colorMuted).Render(upstream)
 	line := left + meta + right
 	return lipgloss.NewStyle().Width(m.width).Background(lipgloss.Color("#172033")).Render(truncate(line, m.width))

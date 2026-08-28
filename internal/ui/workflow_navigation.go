@@ -53,7 +53,7 @@ func init() {
 		out := map[keymap.CommandID]WorkflowHandler{}
 		for _, binding := range keymap.Registry() {
 			section, ok := statusJumpSections[binding.UpstreamCommand]
-			if !ok || binding.Transient != "magit-status-jump" {
+			if binding.Scheme != keymap.SchemeMagit || !ok || binding.Transient != "magit-status-jump" {
 				continue
 			}
 			targetSection := section

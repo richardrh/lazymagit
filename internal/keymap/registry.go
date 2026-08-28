@@ -424,6 +424,10 @@ func transientBindings(m manifest) []Binding {
 			out = append(out, b)
 			b.Scheme = SchemeVim
 			if tr.Name == "magit-status-jump" && b.Handler == HandlerExecute {
+				// Vim's j is navigation, so these Magit-only descendants cannot
+				// be reached in this scheme. Give them a distinct unsupported ID:
+				// shared Magit handlers must not accidentally promote the rows.
+				b.Command = CommandID("missing/" + strings.TrimPrefix(b.UpstreamCommand, "magit-"))
 				b.Handler, b.Availability, b.Parity = HandlerUnsupported, AvailabilityNever, ParityMissing
 				b.Unavailable, b.UnavailableCategory = "status jump uses Magit keys", UnavailableContext
 			}

@@ -345,6 +345,250 @@ func TestEveryAvailableTransientSequenceRoutesWithoutFrontendFallback(t *testing
 	}
 }
 
+func shortcutKeyMsg(token string) tea.KeyPressMsg {
+	key := tea.Key{}
+	switch token {
+	case "tab":
+		key.Code = tea.KeyTab
+	case "enter":
+		key.Code = tea.KeyEnter
+	case "backspace":
+		key.Code = tea.KeyBackspace
+	case "space":
+		key.Code, key.Text = tea.KeySpace, " "
+	case "shift+space":
+		key.Code, key.Text, key.Mod = tea.KeySpace, " ", tea.ModShift
+	case "shift+tab":
+		key.Code, key.Mod = tea.KeyTab, tea.ModShift
+	default:
+		modifier := tea.KeyMod(0)
+		text := token
+		if strings.HasPrefix(text, "ctrl+") {
+			modifier, text = tea.ModCtrl, strings.TrimPrefix(text, "ctrl+")
+		} else if strings.HasPrefix(text, "alt+") {
+			modifier, text = tea.ModAlt, strings.TrimPrefix(text, "alt+")
+		}
+		switch text {
+		case "enter":
+			key.Code = tea.KeyEnter
+		case "tab":
+			key.Code = tea.KeyTab
+		default:
+			runes := []rune(text)
+			key.Code = runes[0]
+			// Bubble Tea derives a modified key's canonical string from Code and
+			// Mod. Supplying Text makes ctrl+c indistinguishable from plain c.
+			if modifier == 0 {
+				key.Text = text
+			}
+		}
+		key.Mod = modifier
+	}
+	return tea.KeyPressMsg(key)
+}
+
+func shortcutAuditModel(scheme keyScheme, section keymap.Section) *Model {
+	m := New(&gitbackend.Repository{})
+	m.loading = false
+	m.scheme = scheme
+	m.message = ""
+	m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
+	m.install(snapshot{
+		summary: gitbackend.Summary{Head: strings.Repeat("a", 40), Branch: "main", Upstream: "origin/main"},
+		status: gitbackend.Status{Files: []gitbackend.FileStatus{
+			{Path: "unstaged.txt", Unstaged: gitbackend.ChangeModified},
+			{Path: "staged.txt", Staged: gitbackend.ChangeModified},
+		}},
+		stashes:    []gitbackend.Stash{{ID: strings.Repeat("b", 40), ShortID: "bbbbbbbbbbbb"}},
+		recent:     []gitbackend.Commit{{ID: strings.Repeat("c", 40), ShortID: "cccccccccccc", Subject: "recent"}},
+		upstream:   gitbackend.UpstreamRanges{Ahead: []gitbackend.Commit{{ID: strings.Repeat("d", 40), ShortID: "dddddddddddd", Subject: "ahead"}}, Behind: []gitbackend.Commit{{ID: strings.Repeat("e", 40), ShortID: "eeeeeeeeeeee", Subject: "behind"}}},
+		remotes:    []gitbackend.Remote{{Name: "origin"}},
+		pushRemote: "origin",
+	})
+	want := rowUnstaged
+	if section == keymap.SectionStaged {
+		want = rowStaged
+	}
+	for id, row := range m.rows {
+		if row.kind == want {
+			m.tree.SetCursor(id)
+			break
+		}
+	}
+	return m
+}
+
+func installShortcutSentinel(m *Model, id keymap.CommandID, marker string) {
+	m.workflowHandlers[id] = func(model *Model, _ WorkflowCommand) tea.Cmd {
+		model.setMessage(marker)
+		return nil
+	}
+}
+
+func TestEveryTopLevelShortcutHasRuntimeOutcomeInBothSchemes(t *testing.T) {
+	for _, tc := range []struct {
+		scheme keymap.Scheme
+		ui     keyScheme
+	}{{keymap.SchemeVim, schemeVim}, {keymap.SchemeMagit, schemeMagit}} {
+		t.Run(string(tc.scheme), func(t *testing.T) {
+			seen := map[string]bool{}
+			for _, binding := range keymap.Registry() {
+				if binding.Scheme != tc.scheme || binding.Context != keymap.ContextStatus {
+					continue
+				}
+				identity := strings.Join(binding.Sequence, "\x00")
+				if seen[identity] {
+					continue
+				}
+				seen[identity] = true
+				section := keymap.SectionUnstaged
+				if binding.Availability == keymap.AvailabilityStaged {
+					section = keymap.SectionStaged
+				}
+				m := shortcutAuditModel(tc.ui, section)
+				marker := "shortcut-dispatched:" + string(binding.Command)
+				if binding.Handler == keymap.HandlerExecute {
+					installShortcutSentinel(m, binding.Command, marker)
+				}
+				var cmd tea.Cmd
+				for _, token := range binding.Sequence {
+					_, cmd = m.Update(shortcutKeyMsg(token))
+				}
+				switch binding.Handler {
+				case keymap.HandlerPrefix:
+					if m.resolver.ActiveTransient() == "" && cmd == nil && m.workflow == nil && !m.workflowLoading && m.mode == modeStatus && m.message == "" {
+						t.Errorf("%s produced no prefix, command, workflow, mode, or message", binding.Display)
+					}
+				case keymap.HandlerExecute:
+					if m.message != marker && cmd == nil && m.mode == modeStatus && !m.busy && m.workflow == nil && !m.workflowLoading {
+						t.Errorf("%s produced no executable outcome: %q", binding.Display, m.message)
+					}
+				case keymap.HandlerUnsupported:
+					if binding.Unavailable == "" || binding.UnavailableCategory == keymap.UnavailableNone {
+						t.Errorf("%s unsupported shortcut lacks an explicit contract", binding.Display)
+					}
+				}
+			}
+			if len(seen) == 0 {
+				t.Fatal("no top-level shortcuts were exercised")
+			}
+		})
+	}
+}
+
+func keymapBindingForTransientOccurrence(scheme keymap.Scheme, occurrence string) (keymap.Binding, bool) {
+	for _, binding := range keymap.Registry() {
+		if binding.Scheme == scheme && binding.Occurrence == occurrence {
+			return binding, true
+		}
+	}
+	return keymap.Binding{}, false
+}
+
+// enterTransientForShortcutAudit follows only the canonical route to a
+// transient. It deliberately stops before its local suffix: some child
+// transients are terminal TUI adaptations, while their manifest descendants
+// remain documentation/catalog rows and must not be typed into that workflow.
+func enterTransientForShortcutAudit(m *Model, binding keymap.Binding) (tea.Cmd, bool) {
+	routeLength := len(binding.Sequence) - len(binding.LocalSequence)
+	if routeLength < 0 {
+		return nil, false
+	}
+	var cmd tea.Cmd
+	for _, token := range binding.Sequence[:routeLength] {
+		_, cmd = m.Update(shortcutKeyMsg(token))
+		if cmd != nil || m.mode != modeStatus || m.workflow != nil || m.workflowLoading {
+			return cmd, false
+		}
+	}
+	return cmd, m.resolver.ActiveTransient() == binding.Transient
+}
+
+func TestEveryTransientShortcutHasRuntimeOutcomeInBothSchemes(t *testing.T) {
+	for _, tc := range []struct {
+		scheme keymap.Scheme
+		ui     keyScheme
+	}{{keymap.SchemeVim, schemeVim}, {keymap.SchemeMagit, schemeMagit}} {
+		t.Run(string(tc.scheme), func(t *testing.T) {
+			tested := 0
+			for _, tr := range keymap.Transients() {
+				probe := shortcutAuditModel(tc.ui, keymap.SectionUnstaged)
+				catalog, ok := probe.transientCatalog(tr.Name)
+				if !ok {
+					t.Fatalf("%s has no runtime catalog", tr.Name)
+				}
+				keys := map[string]menuEntry{}
+				for _, group := range catalog.Groups {
+					for _, entry := range group.Entries {
+						selected, found := catalog.entry(entry.Key)
+						if found {
+							keys[entry.Key] = selected
+						}
+					}
+				}
+				for key, entry := range keys {
+					m := shortcutAuditModel(tc.ui, keymap.SectionUnstaged)
+					marker := "shortcut-dispatched:" + string(entry.Command)
+					if entry.Available && entry.Kind == keymap.KindSuffix && !entry.Prefix {
+						installShortcutSentinel(m, entry.Command, marker)
+					}
+					binding, found := keymapBindingForTransientOccurrence(tc.scheme, entry.Occurrence)
+					if !found {
+						t.Errorf("%s %s has no %s binding", tr.Name, key, tc.scheme)
+						continue
+					}
+					cmd, entered := enterTransientForShortcutAudit(m, binding)
+					tested++
+					if !entered {
+						// The route is a terminal workflow adaptation (for example
+						// patch apply/create), or unavailable in this key scheme.
+						// A row claimed as available must have visibly entered that
+						// terminal behavior; unavailable Vim-only routes are covered by
+						// their explicit catalog contract.
+						if entry.Available && cmd == nil && m.mode == modeStatus && !m.busy && m.workflow == nil && !m.workflowLoading && m.message == "" {
+							t.Errorf("%s route did not open its transient or terminal workflow", tr.Name)
+						}
+						continue
+					}
+					if !entry.Available {
+						for _, token := range binding.LocalSequence {
+							_, cmd = m.Update(shortcutKeyMsg(token))
+						}
+						if m.message == "" {
+							t.Errorf("%s %s unavailable shortcut produced no explanation", tr.Name, key)
+						}
+						continue
+					}
+					for _, token := range binding.LocalSequence {
+						_, cmd = m.Update(shortcutKeyMsg(token))
+					}
+					switch {
+					case entry.Kind == keymap.KindInfix && entry.TakesValue:
+						if m.transientEdit == nil || m.transientEdit.Command != entry.Command {
+							t.Errorf("%s %s did not open its value editor", tr.Name, key)
+						}
+					case entry.Kind == keymap.KindInfix:
+						if _, set := m.transientOptions[entry.Command]; !set {
+							t.Errorf("%s %s did not toggle its switch", tr.Name, key)
+						}
+					case entry.Prefix:
+						if m.resolver.ActiveTransient() == tr.Name && cmd == nil && m.workflow == nil && !m.workflowLoading && m.message == "" {
+							t.Errorf("%s %s did not enter a child transient or adapted workflow", tr.Name, key)
+						}
+					default:
+						if m.message != marker && cmd == nil && m.workflow == nil && !m.workflowLoading {
+							t.Errorf("%s %s produced no executable outcome: %q", tr.Name, key, m.message)
+						}
+					}
+				}
+			}
+			if tested == 0 {
+				t.Fatal("no transient shortcuts were exercised")
+			}
+		})
+	}
+}
+
 func TestDispatcherRendererMatchesMagitStructureAndDimensions(t *testing.T) {
 	catalog := dispatcherCatalog(schemeVim)
 	for _, section := range catalog {

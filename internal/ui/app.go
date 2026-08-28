@@ -294,10 +294,6 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.workflow.cancel()
 			m.workflow.cancel = nil
 		}
-		if m.workflow.cancel != nil {
-			m.workflow.cancel()
-			m.workflow.cancel = nil
-		}
 		if msg.err != nil {
 			m.workflow.error = sanitizeSingleLine(msg.err.Error())
 			return m, nil
@@ -308,10 +304,6 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.workflow.busy = false
-		if m.workflow.cancel != nil {
-			m.workflow.cancel()
-			m.workflow.cancel = nil
-		}
 		if m.workflow.cancel != nil {
 			m.workflow.cancel()
 			m.workflow.cancel = nil
