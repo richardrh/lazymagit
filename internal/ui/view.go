@@ -122,7 +122,7 @@ func (m *Model) renderCompactStatus(width, height int) string {
 }
 
 func (m *Model) renderCompactDetail(width, height int) string {
-	lines := strings.Split(strings.TrimSuffix(sanitizeDiff(m.detail), "\n"), "\n")
+	lines := strings.Split(strings.TrimSuffix(sanitizeDiff(m.detailForDisplay()), "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines[0] = "Select a file or commit to inspect details."
 	}
@@ -235,10 +235,10 @@ func (m *Model) renderStatusPanel(width, height int) string {
 
 func (m *Model) renderDetailPanel(width, height int) string {
 	if width < 3 || height < 3 {
-		return fitBlock(m.detail, width, height)
+		return fitBlock(m.detailForDisplay(), width, height)
 	}
 	innerW, innerH := width-2, height-2
-	lines := strings.Split(strings.TrimSuffix(sanitizeDiff(m.detail), "\n"), "\n")
+	lines := strings.Split(strings.TrimSuffix(sanitizeDiff(m.detailForDisplay()), "\n"), "\n")
 	if len(lines) == 1 && lines[0] == "" {
 		lines[0] = "Select a file to inspect its diff."
 	}
@@ -274,6 +274,13 @@ func (m *Model) renderDetailPanel(width, height int) string {
 		styled = append(styled, "")
 	}
 	return panelStyle(width, height).Render(strings.Join(styled, "\n"))
+}
+
+func (m *Model) detailForDisplay() string {
+	if m.detailHidden {
+		return "Diff hidden\n\nPress Alt+Tab to show the selected row's detail."
+	}
+	return m.detail
 }
 
 func (m *Model) renderProcessPanel(width, height int) string {

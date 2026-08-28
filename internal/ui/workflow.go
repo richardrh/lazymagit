@@ -180,7 +180,14 @@ var builtinUICommands = map[keymap.CommandID]bool{
 	keymap.CommandFetchElsewhere: true, keymap.CommandFetchAll: true, keymap.CommandAddRemote: true, keymap.CommandShowProcesses: true,
 	keymap.CommandOpenDispatcher: true, keymap.CommandQuit: true, keymap.CommandDepth1: true, keymap.CommandDepth2: true,
 	keymap.CommandDepth3: true, keymap.CommandScrollDown: true, keymap.CommandScrollUp: true,
-	commandSectionCycle: true, commandCopyThing: true, commandCopySectionValue: true, commandCopyBufferRevision: true,
+	keymap.CommandSectionCycle: true, keymap.CommandSectionCycleGlobal: true,
+	keymap.CommandSectionParent: true, keymap.CommandSiblingPrevious: true, keymap.CommandSiblingNext: true,
+	keymap.CommandLocalDepth1: true, keymap.CommandLocalDepth2: true, keymap.CommandLocalDepth3: true, keymap.CommandLocalDepth4: true,
+	keymap.CommandGlobalDepth1: true, keymap.CommandGlobalDepth2: true, keymap.CommandGlobalDepth3: true, keymap.CommandGlobalDepth4: true,
+	keymap.CommandVisitThing: true, keymap.CommandCycleDiffs: true, keymap.CommandDetailBackward: true,
+	keymap.CommandDiffMoreContext: true, keymap.CommandDiffLessContext: true, keymap.CommandDiffDefaultContext: true,
+	keymap.CommandDescribeSection: true, keymap.CommandStatusJump: true, keymap.CommandDisplayRepository: true,
+	keymap.CommandCopyThing: true, keymap.CommandCopySectionValue: true, keymap.CommandCopyBufferRevision: true,
 }
 
 func (m *Model) performWorkflow(command WorkflowCommand) (tea.Cmd, bool) {

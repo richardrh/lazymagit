@@ -9,35 +9,7 @@ import (
 	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
-// These identities are kept here so navigation can be implemented without
-// changing the central keymap. The keymap should use the same values when its
-// status rows are promoted from unsupported to executable.
-const (
-	commandSectionCycle       keymap.CommandID = "section.cycle"
-	commandSectionCycleGlobal keymap.CommandID = "section.cycle-global"
-	commandSectionParent      keymap.CommandID = "section.parent"
-	commandSiblingPrevious    keymap.CommandID = "section.sibling-previous"
-	commandSiblingNext        keymap.CommandID = "section.sibling-next"
-	commandLocalDepth1        keymap.CommandID = "section.local-depth-1"
-	commandLocalDepth2        keymap.CommandID = "section.local-depth-2"
-	commandLocalDepth3        keymap.CommandID = "section.local-depth-3"
-	commandLocalDepth4        keymap.CommandID = "section.local-depth-4"
-	commandGlobalDepth1       keymap.CommandID = "section.global-depth-1"
-	commandGlobalDepth2       keymap.CommandID = "section.global-depth-2"
-	commandGlobalDepth3       keymap.CommandID = "section.global-depth-3"
-	commandGlobalDepth4       keymap.CommandID = "section.global-depth-4"
-	commandVisitThing         keymap.CommandID = "status.visit-thing"
-	commandDetailBackward     keymap.CommandID = "detail.page-backward"
-	commandDiffMoreContext    keymap.CommandID = "detail.more-context"
-	commandDiffLessContext    keymap.CommandID = "detail.less-context"
-	commandDiffDefaultContext keymap.CommandID = "detail.default-context"
-	commandDescribeSection    keymap.CommandID = "section.describe"
-	commandStatusJump         keymap.CommandID = "status.jump"
-	commandDisplayRepository  keymap.CommandID = "status.display-repository"
-	commandCopyThing          keymap.CommandID = "status.copy-thing"
-	commandCopySectionValue   keymap.CommandID = "section.copy-value"
-	commandCopyBufferRevision keymap.CommandID = "status.copy-revision"
-)
+const defaultDiffContext = 3
 
 var statusJumpSections = map[string]sectionmodel.SectionID{
 	"magit-jump-to-stashes":                "status/stashes",
@@ -69,30 +41,34 @@ func init() {
 	})
 }
 
-// handleNavigationKey is the raw-key side of the navigation domain. Keeping
-// this separate from handleKey allows the central dispatcher to call it before
-// the generic resolver while retaining Vim's j/k/g/G collisions. Multi-key
-// sequences (C-c TAB and C-c C-w) must arrive through the keymap as commands.
+// handleNavigationKey dispatches a single, already-classified portable
+// top-level binding. Sequence prefixes remain owned by the resolver, so C-c
+// Tab and C-c C-w cannot steal Vim or Magit prefix collisions.
 func (m *Model) handleNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.mode != modeStatus || m.resolver.PendingPrefix() != "" {
 		return nil, false
 	}
-	key := msg.String()
-	commands := map[string]keymap.CommandID{
-		"ctrl+tab": commandSectionCycle, "shift+tab": commandSectionCycleGlobal,
-		"^": commandSectionParent, "alt+p": commandSiblingPrevious, "alt+n": commandSiblingNext,
-		"1": commandLocalDepth1, "2": commandLocalDepth2, "3": commandLocalDepth3, "4": commandLocalDepth4,
-		"alt+1": commandGlobalDepth1, "alt+2": commandGlobalDepth2, "alt+3": commandGlobalDepth3, "alt+4": commandGlobalDepth4,
-		"enter": commandVisitThing, "ctrl+enter": commandVisitThing, "backspace": commandDetailBackward,
-		"+": commandDiffMoreContext, "-": commandDiffLessContext, "0": commandDiffDefaultContext,
-		"H": commandDescribeSection, "J": commandDisplayRepository,
-		"ctrl+w": commandCopySectionValue, "alt+w": commandCopyBufferRevision,
-	}
-	command, ok := commands[key]
-	if !ok {
+	binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, msg.String())
+	if !ok || binding.Handler != keymap.HandlerExecute || !navigationCommand(binding.Command) {
 		return nil, false
 	}
-	return m.performNavigationCommand(command)
+	return m.performNavigationCommand(binding.Command)
+}
+
+func navigationCommand(command keymap.CommandID) bool {
+	switch command {
+	case keymap.CommandSectionCycle, keymap.CommandSectionCycleGlobal,
+		keymap.CommandSectionParent, keymap.CommandSiblingPrevious, keymap.CommandSiblingNext,
+		keymap.CommandLocalDepth1, keymap.CommandLocalDepth2, keymap.CommandLocalDepth3, keymap.CommandLocalDepth4,
+		keymap.CommandGlobalDepth1, keymap.CommandGlobalDepth2, keymap.CommandGlobalDepth3, keymap.CommandGlobalDepth4,
+		keymap.CommandVisitThing, keymap.CommandCycleDiffs, keymap.CommandDetailBackward,
+		keymap.CommandDiffMoreContext, keymap.CommandDiffLessContext, keymap.CommandDiffDefaultContext,
+		keymap.CommandDescribeSection, keymap.CommandStatusJump, keymap.CommandDisplayRepository,
+		keymap.CommandCopyThing, keymap.CommandCopySectionValue, keymap.CommandCopyBufferRevision:
+		return true
+	default:
+		return false
+	}
 }
 
 // performNavigationCommand implements non-mutating status commands. It returns
@@ -100,68 +76,62 @@ func (m *Model) handleNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 // from Model.perform.
 func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
-	case commandSectionCycle:
+	case keymap.CommandSectionCycle:
 		if m.tree.CycleLocal() {
 			m.rememberNavigationFolds()
 			m.bumpState()
 		}
 		return m.loadDetailCmd(), true
-	case commandSectionCycleGlobal:
+	case keymap.CommandSectionCycleGlobal:
 		if m.tree.CycleGlobal() {
 			m.rememberNavigationFolds()
 			m.bumpState()
 		}
 		return m.loadDetailCmd(), true
-	case commandSectionParent:
+	case keymap.CommandSectionParent:
 		return m.finishNavigationMove(m.tree.MoveToParent()), true
-	case commandSiblingPrevious:
+	case keymap.CommandSiblingPrevious:
 		return m.finishNavigationMove(m.tree.MoveToPreviousSibling()), true
-	case commandSiblingNext:
+	case keymap.CommandSiblingNext:
 		return m.finishNavigationMove(m.tree.MoveToNextSibling()), true
-	case commandLocalDepth1, commandLocalDepth2, commandLocalDepth3, commandLocalDepth4:
+	case keymap.CommandLocalDepth1, keymap.CommandLocalDepth2, keymap.CommandLocalDepth3, keymap.CommandLocalDepth4:
 		depth := int(command[len(command)-1] - '0')
 		if m.tree.RevealSelectedDepth(depth) {
 			m.rememberNavigationFolds()
 			m.bumpState()
 		}
 		return m.loadDetailCmd(), true
-	case commandGlobalDepth1, commandGlobalDepth2, commandGlobalDepth3, commandGlobalDepth4:
+	case keymap.CommandGlobalDepth1, keymap.CommandGlobalDepth2, keymap.CommandGlobalDepth3, keymap.CommandGlobalDepth4:
 		depth := int(command[len(command)-1] - '0')
 		if m.tree.RevealGlobalDepth(depth) {
 			m.rememberNavigationFolds()
 			m.bumpState()
 		}
 		return m.loadDetailCmd(), true
-	case commandVisitThing:
+	case keymap.CommandVisitThing:
 		return m.visitSelectedThing(), true
-	case commandDetailBackward:
+	case keymap.CommandCycleDiffs:
+		return m.cycleSelectedDetail(), true
+	case keymap.CommandDetailBackward:
 		m.scrollDetail(-max(1, m.detailViewportHeight()))
 		return nil, true
-	case commandDiffLessContext:
-		if reduced, ok := lessDiffContext(m.detail); ok {
-			m.detail = reduced
-			m.clampDetailOffset()
-			m.setMessage("Showing less diff context")
-		} else {
-			m.setMessage("No diff context to hide")
-		}
-		return nil, true
-	case commandDiffMoreContext, commandDiffDefaultContext:
-		// Reloading is the only safe way to recover context removed from the
-		// rendered diff; loadDetailCmd issues only the selected typed Git query.
-		m.setMessage(map[bool]string{true: "Default diff context", false: "More diff context"}[command == commandDiffDefaultContext])
-		return m.loadDetailCmd(), true
-	case commandDescribeSection:
+	case keymap.CommandDiffLessContext:
+		return m.adjustDiffContext(-3, "Showing less diff context"), true
+	case keymap.CommandDiffMoreContext:
+		return m.adjustDiffContext(3, "Showing more diff context"), true
+	case keymap.CommandDiffDefaultContext:
+		return m.resetDiffContext(), true
+	case keymap.CommandDescribeSection:
 		m.describeSelectedSection()
 		return nil, true
-	case commandStatusJump:
+	case keymap.CommandStatusJump:
 		return m.jumpToNextStatusSection(), true
-	case commandDisplayRepository:
+	case keymap.CommandDisplayRepository:
 		m.displayRepositoryStatus()
 		return nil, true
-	case commandCopyThing, commandCopySectionValue:
+	case keymap.CommandCopyThing, keymap.CommandCopySectionValue:
 		return m.copySelectedSection(), true
-	case commandCopyBufferRevision:
+	case keymap.CommandCopyBufferRevision:
 		return m.copySelectedRevision(), true
 	default:
 		return nil, false
@@ -202,10 +172,32 @@ func (m *Model) visitSelectedThing() tea.Cmd {
 		m.tree.ToggleFold(id)
 		m.foldPreferences[id] = m.tree.IsFolded(id)
 		m.bumpState()
+		return m.loadDetailCmd()
 	}
-	// Files and revisions are visited in the terminal detail pane; no editor,
-	// browser, or other ambient process is launched.
-	return m.loadDetailCmd()
+	if r, ok := m.rows[id]; ok && (r.kind == rowUntracked || r.kind == rowUnstaged || r.kind == rowStaged || r.kind == rowCommit || r.kind == rowStash) {
+		// Terminal rows are visited in the terminal detail pane. Do not launch an
+		// editor, browser, or other ambient process from the status UI.
+		m.detailHidden = false
+		m.setMessage("Opened " + sanitizeSingleLine(section.Title()))
+		return m.loadDetailCmd()
+	}
+	m.setMessage("Nothing to visit")
+	return nil
+}
+
+// cycleSelectedDetail is the safe terminal adaptation of cycling inline Magit
+// diff sections: the selected terminal row's detail pane is hidden or shown
+// without changing repository state or spawning an external viewer.
+func (m *Model) cycleSelectedDetail() tea.Cmd {
+	r, ok := m.rows[m.tree.Cursor()]
+	if !ok || (r.kind != rowUnstaged && r.kind != rowStaged && r.kind != rowCommit && r.kind != rowStash) {
+		m.setMessage("No terminal diff to cycle")
+		return nil
+	}
+	m.detailHidden = !m.detailHidden
+	m.detailOffset = 0
+	m.setMessage(map[bool]string{true: "Diff hidden", false: "Diff shown"}[m.detailHidden])
+	return nil
 }
 
 func (m *Model) jumpToNextStatusSection() tea.Cmd {
@@ -299,9 +291,42 @@ func (m *Model) copySelectedRevision() tea.Cmd {
 	return tea.SetClipboard(revision)
 }
 
+// adjustDiffContext reloads only selected file diffs with a literal Git
+// --unified value. This is the terminal-safe equivalent of Magit's context
+// controls. Non-file details have no authoritative source to reload, so -
+// falls back to removing already-rendered context without touching Git state.
+func (m *Model) adjustDiffContext(delta int, message string) tea.Cmd {
+	r, isFile := m.rows[m.tree.Cursor()]
+	if isFile && (r.kind == rowUnstaged || r.kind == rowStaged) && m.repo != nil {
+		m.diffContext = max(0, m.diffContext+delta)
+		m.setMessage(fmt.Sprintf("%s (%d lines)", message, m.diffContext))
+		return m.loadDetailCmd()
+	}
+	if delta < 0 {
+		if reduced, ok := lessDiffContext(m.detail); ok {
+			m.detail = reduced
+			m.clampDetailOffset()
+			m.setMessage(message)
+			return nil
+		}
+	}
+	m.setMessage("Diff context is available for selected file diffs")
+	return nil
+}
+
+func (m *Model) resetDiffContext() tea.Cmd {
+	r, isFile := m.rows[m.tree.Cursor()]
+	if !isFile || (r.kind != rowUnstaged && r.kind != rowStaged) || m.repo == nil {
+		m.setMessage("Diff context is available for selected file diffs")
+		return nil
+	}
+	m.diffContext = defaultDiffContext
+	m.setMessage("Default diff context (3 lines)")
+	return m.loadDetailCmd()
+}
+
 // lessDiffContext removes one outer context line from each displayed hunk.
-// Change lines and metadata are never removed; a subsequent + or 0 reloads the
-// selected typed diff query to recover the source text.
+// Change lines and metadata are never removed.
 func lessDiffContext(detail string) (string, bool) {
 	lines := strings.Split(strings.TrimSuffix(detail, "\n"), "\n")
 	changed := false

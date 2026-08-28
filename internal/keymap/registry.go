@@ -36,11 +36,39 @@ const (
 	CommandShowProcesses  CommandID = "process.toggle"
 	CommandOpenDispatcher CommandID = "transient.dispatch"
 	CommandQuit           CommandID = "ui.quit"
-	CommandDepth1         CommandID = "section.depth-1"
-	CommandDepth2         CommandID = "section.depth-2"
-	CommandDepth3         CommandID = "section.depth-3"
-	CommandScrollDown     CommandID = "detail.page-down"
-	CommandScrollUp       CommandID = "detail.page-up"
+	// CommandDepth1 through CommandDepth3 are retained for compatibility with
+	// earlier callers. New section-depth bindings distinguish local and global
+	// scope, as Magit does.
+	CommandDepth1             CommandID = "section.depth-1"
+	CommandDepth2             CommandID = "section.depth-2"
+	CommandDepth3             CommandID = "section.depth-3"
+	CommandScrollDown         CommandID = "detail.page-down"
+	CommandScrollUp           CommandID = "detail.page-up"
+	CommandSectionCycle       CommandID = "section.cycle"
+	CommandSectionCycleGlobal CommandID = "section.cycle-global"
+	CommandSectionParent      CommandID = "section.parent"
+	CommandSiblingPrevious    CommandID = "section.sibling-previous"
+	CommandSiblingNext        CommandID = "section.sibling-next"
+	CommandLocalDepth1        CommandID = "section.local-depth-1"
+	CommandLocalDepth2        CommandID = "section.local-depth-2"
+	CommandLocalDepth3        CommandID = "section.local-depth-3"
+	CommandLocalDepth4        CommandID = "section.local-depth-4"
+	CommandGlobalDepth1       CommandID = "section.global-depth-1"
+	CommandGlobalDepth2       CommandID = "section.global-depth-2"
+	CommandGlobalDepth3       CommandID = "section.global-depth-3"
+	CommandGlobalDepth4       CommandID = "section.global-depth-4"
+	CommandVisitThing         CommandID = "status.visit-thing"
+	CommandCycleDiffs         CommandID = "detail.cycle"
+	CommandDetailBackward     CommandID = "detail.page-backward"
+	CommandDiffMoreContext    CommandID = "detail.more-context"
+	CommandDiffLessContext    CommandID = "detail.less-context"
+	CommandDiffDefaultContext CommandID = "detail.default-context"
+	CommandDescribeSection    CommandID = "section.describe"
+	CommandStatusJump         CommandID = "status.jump"
+	CommandDisplayRepository  CommandID = "status.display-repository"
+	CommandCopyThing          CommandID = "status.copy-thing"
+	CommandCopySectionValue   CommandID = "section.copy-value"
+	CommandCopyBufferRevision CommandID = "status.copy-revision"
 )
 
 type View uint8
@@ -300,13 +328,38 @@ func keyAvailableInVim(key string) bool {
 func classifyTop(b *Binding, transientNames map[string]bool) {
 	key := strings.Join(b.Sequence, " ")
 	navigation := map[string]CommandID{
-		"magit-section-cycle":        "section.cycle",
-		"magit-copy-thing":           "status.copy-thing",
-		"magit-copy-section-value":   "section.copy-value",
-		"magit-copy-buffer-revision": "status.copy-revision",
+		"magit-section-cycle":             CommandSectionCycle,
+		"magit-section-cycle-global":      CommandSectionCycleGlobal,
+		"magit-section-up":                CommandSectionParent,
+		"magit-section-backward-sibling":  CommandSiblingPrevious,
+		"magit-section-forward-sibling":   CommandSiblingNext,
+		"magit-section-show-level-1":      CommandLocalDepth1,
+		"magit-section-show-level-2":      CommandLocalDepth2,
+		"magit-section-show-level-3":      CommandLocalDepth3,
+		"magit-section-show-level-4":      CommandLocalDepth4,
+		"magit-section-show-level-1-all":  CommandGlobalDepth1,
+		"magit-section-show-level-2-all":  CommandGlobalDepth2,
+		"magit-section-show-level-3-all":  CommandGlobalDepth3,
+		"magit-section-show-level-4-all":  CommandGlobalDepth4,
+		"magit-visit-thing":               CommandVisitThing,
+		"magit-section-cycle-diffs":       CommandCycleDiffs,
+		"magit-diff-show-or-scroll-down":  CommandDetailBackward,
+		"magit-diff-more-context":         CommandDiffMoreContext,
+		"magit-diff-less-context":         CommandDiffLessContext,
+		"magit-diff-default-context":      CommandDiffDefaultContext,
+		"magit-describe-section":          CommandDescribeSection,
+		"magit-display-repository-buffer": CommandDisplayRepository,
+		"magit-copy-thing":                CommandCopyThing,
+		"magit-copy-section-value":        CommandCopySectionValue,
+		"magit-copy-buffer-revision":      CommandCopyBufferRevision,
 	}
 	if command, ok := navigation[b.UpstreamCommand]; ok {
 		b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
+		if command == CommandCycleDiffs {
+			// A terminal has no inline diff sections. The UI safely cycles the
+			// selected row's detail pane instead.
+			b.Parity = ParityAdapted
+		}
 		return
 	}
 	implemented := map[string]CommandID{
@@ -682,6 +735,10 @@ func canonicalToken(token string) string {
 		return "shift+space"
 	case "DEL":
 		return "backspace"
+	case "<backtab>":
+		// Bubble Tea consistently reports this portable terminal sequence as
+		// shift+tab rather than Emacs' symbolic <backtab> spelling.
+		return "shift+tab"
 	}
 	if strings.HasPrefix(token, "C-") {
 		return "ctrl+" + modifiedToken(strings.Trim(strings.TrimPrefix(token, "C-"), "<>"))

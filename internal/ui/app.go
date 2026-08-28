@@ -123,6 +123,8 @@ type Model struct {
 	branchRequest         uint64
 	stateGeneration       uint64
 	detailOffset          int
+	detailHidden          bool
+	diffContext           int
 	detailHunk            int
 	detailLine            int
 	detailRangeStart      int
@@ -184,7 +186,7 @@ func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 	m := &Model{
 		repo: repo, tree: sectionmodel.New(roots), rows: rows,
 		resolver: keymap.NewResolver(), scheme: schemeVim, loading: true, compact: options.Compact,
-		message: "Loading repository…", detailHunk: -1, detailLine: -1, detailRangeStart: -1, detailRangeEnd: -1,
+		message: "Loading repository…", diffContext: defaultDiffContext, detailHunk: -1, detailLine: -1, detailRangeStart: -1, detailRangeEnd: -1,
 		appCtx: appCtx, appCancel: appCancel,
 		foldPreferences: map[sectionmodel.SectionID]bool{
 			"status/untracked": true, "status/stashes": true, "status/unpulled": true, "status/recent": true,
@@ -1430,6 +1432,7 @@ func (m *Model) loadDetailCmd() tea.Cmd {
 	if m.inspectionActive {
 		return nil
 	}
+	m.detailHidden = false
 	m.cancelDetail()
 	m.detailOffset = 0
 	m.detailRequest++
@@ -1472,15 +1475,16 @@ func (m *Model) loadDetailCmd() tea.Cmd {
 		return nil
 	}
 	m.detailID, m.detail = r.id, "Loading diff…"
+	contextLines := m.diffContext
 	ctx, cancel := context.WithCancel(m.appCtx)
 	m.detailCtx, m.detailCancel = ctx, cancel
 	return func() tea.Msg {
 		var text string
 		var err error
 		if r.kind == rowStaged {
-			text, err = m.repo.DiffStaged(ctx, r.path)
+			text, err = m.repo.DiffStagedWithContext(ctx, r.path, contextLines)
 		} else {
-			text, err = m.repo.Diff(ctx, r.path)
+			text, err = m.repo.DiffWithContext(ctx, r.path, contextLines)
 		}
 		return diffMsg{id: r.id, request: request, text: text, err: err}
 	}

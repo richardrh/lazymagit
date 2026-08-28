@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richard/lazymagit/internal/git"
+	"github.com/richard/lazymagit/internal/keymap"
 	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
@@ -131,6 +132,52 @@ func TestNavigationKeysRouteThroughModelUpdate(t *testing.T) {
 	}
 }
 
+func TestVisitTerminalRowsAndCycleSelectedDetail(t *testing.T) {
+	m := navigationUIModel()
+	m.tree.SetCursor("status/unstaged/file/one.txt")
+	m.detail = "diff --git a/one.txt b/one.txt\n@@ -1 +1 @@\n-old\n+new"
+
+	if _, handled := m.handleNavigationKey(keyMsg("enter")); !handled || m.detailHidden || !strings.Contains(m.message, "Opened") {
+		t.Fatalf("terminal visit handled=%v hidden=%v message=%q", handled, m.detailHidden, m.message)
+	}
+	if _, handled := m.handleNavigationKey(keyMsg("alt+tab")); !handled || !m.detailHidden || !strings.Contains(m.renderDetailPanel(60, 10), "Diff hidden") {
+		t.Fatalf("detail cycle did not hide selected terminal diff: hidden=%v", m.detailHidden)
+	}
+	if _, handled := m.handleNavigationKey(keyMsg("alt+tab")); !handled || m.detailHidden {
+		t.Fatalf("detail cycle did not restore selected terminal diff: hidden=%v", m.detailHidden)
+	}
+
+	m.tree.SetCursor("status/unstaged")
+	if _, handled := m.handleNavigationKey(keyMsg("alt+tab")); !handled || !strings.Contains(m.message, "No terminal diff") {
+		t.Fatalf("heading detail cycle was unsafe: %q", m.message)
+	}
+}
+
+func TestDiffContextKeysReloadSelectedFileDiff(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("notes.txt", "zero\none\ntwo\nthree\nfour\nfive\nsix\n")
+	r.git("add", "notes.txt")
+	r.git("commit", "-m", "base")
+	r.write("notes.txt", "zero\none\ntwo\nCHANGED\nfour\nfive\nsix\n")
+	m := newE2EModel(t, r)
+	selectE2EPath(t, m, "notes.txt", rowUnstaged)
+	m.scheme = schemeMagit
+
+	sendE2EKey(t, m, keyMsg("+"))
+	if m.diffContext != 6 || !strings.Contains(m.detail, " four") || !strings.Contains(m.message, "6 lines") {
+		t.Fatalf("more context=%d detail=%q message=%q", m.diffContext, m.detail, m.message)
+	}
+	sendE2EKey(t, m, keyMsg("-"))
+	if m.diffContext != defaultDiffContext || !strings.Contains(m.message, "3 lines") {
+		t.Fatalf("less context=%d message=%q", m.diffContext, m.message)
+	}
+	sendE2EKey(t, m, keyMsg("+"))
+	sendE2EKey(t, m, keyMsg("0"))
+	if m.diffContext != defaultDiffContext || !strings.Contains(m.message, "Default diff context") {
+		t.Fatalf("default context=%d message=%q", m.diffContext, m.message)
+	}
+}
+
 func TestStatusJumpTransientRoutesExactProjectedSections(t *testing.T) {
 	for key, section := range map[string]string{"z": "status/stashes", "n": "status/untracked", "u": "status/unstaged", "s": "status/staged", "fu": "status/unpulled", "pu": "status/unpushed"} {
 		m := navigationUIModel()
@@ -159,12 +206,12 @@ func TestStatusJumpTransientRoutesExactProjectedSections(t *testing.T) {
 func TestMultiKeyNavigationCommandsHaveDispatcherTargets(t *testing.T) {
 	m := navigationUIModel()
 	m.tree.SetCursor("status/unstaged")
-	if _, handled := m.performNavigationCommand(commandSectionCycle); !handled || !m.tree.IsFolded("status/unstaged") {
+	if _, handled := m.performNavigationCommand(keymap.CommandSectionCycle); !handled || !m.tree.IsFolded("status/unstaged") {
 		t.Fatal("C-c TAB command target did not cycle section")
 	}
 	m.tree.ToggleFold("status/unstaged")
 	m.tree.SetCursor("status/unstaged/file/one.txt")
-	cmd, handled := m.performNavigationCommand(commandCopyThing)
+	cmd, handled := m.performNavigationCommand(keymap.CommandCopyThing)
 	if !handled || clipboardPayload(cmd) != "one.txt" {
 		t.Fatal("C-c C-w command target did not copy selected thing")
 	}

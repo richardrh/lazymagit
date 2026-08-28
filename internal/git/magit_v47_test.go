@@ -179,6 +179,37 @@ func TestDiffsTruncateCapturedStdoutAtLimit(t *testing.T) {
 	}
 }
 
+func TestFileDiffContextIsExplicitAndSafe(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("notes.txt", "zero\none\ntwo\nthree\nfour\nfive\nsix\n")
+	r.commitAll("base")
+	r.write("notes.txt", "zero\none\ntwo\nCHANGED\nfour\nfive\nsix\n")
+	repo, _ := Discover(r.dir)
+
+	minimal, err := repo.DiffWithContext(context.Background(), "notes.txt", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(minimal, "\n two\n") || strings.Contains(minimal, "\n four\n") {
+		t.Fatalf("zero-context diff retained surrounding lines: %q", minimal)
+	}
+	wide, err := repo.DiffWithContext(context.Background(), "notes.txt", 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(wide, "\n two\n") || !strings.Contains(wide, "\n four\n") {
+		t.Fatalf("three-context diff omitted surrounding lines: %q", wide)
+	}
+	if _, err := repo.DiffWithContext(context.Background(), "notes.txt", -1); err == nil {
+		t.Fatal("negative context was accepted")
+	}
+
+	r.git("add", "notes.txt")
+	if _, err := repo.DiffStagedWithContext(context.Background(), "notes.txt", 1); err != nil {
+		t.Fatalf("staged explicit context: %v", err)
+	}
+}
+
 func TestAutomaticPatchLoadingDisablesConfiguredDiffCommandsAndColor(t *testing.T) {
 	for _, hostile := range []struct {
 		name      string

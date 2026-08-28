@@ -912,8 +912,26 @@ func (r *Repository) Diff(ctx context.Context, path string) (string, error) {
 	return r.diffLimit(ctx, path, diffOutputLimit)
 }
 
+// DiffWithContext loads an unstaged file diff with an explicit non-negative
+// number of unified context lines. It keeps the same terminal-safe options and
+// output bound as Diff.
+func (r *Repository) DiffWithContext(ctx context.Context, path string, lines int) (string, error) {
+	if lines < 0 {
+		return "", fmt.Errorf("diff context must be non-negative")
+	}
+	return r.loadDiffLimit(ctx, path, diffOutputLimit, "--unified="+strconv.Itoa(lines))
+}
+
 func (r *Repository) DiffStaged(ctx context.Context, path string) (string, error) {
 	return r.diffStagedLimit(ctx, path, diffOutputLimit)
+}
+
+// DiffStagedWithContext is DiffWithContext for the index.
+func (r *Repository) DiffStagedWithContext(ctx context.Context, path string, lines int) (string, error) {
+	if lines < 0 {
+		return "", fmt.Errorf("diff context must be non-negative")
+	}
+	return r.loadDiffLimit(ctx, path, diffOutputLimit, "--cached", "--unified="+strconv.Itoa(lines))
 }
 
 const (

@@ -117,6 +117,52 @@ func TestTransientCatalogIsExactCompleteOccurrenceMultiset(t *testing.T) {
 	}
 }
 
+func TestPortableNavigationBindingsAreClassifiedAndKeepSchemeCollisions(t *testing.T) {
+	magit := []struct {
+		sequence []string
+		command  CommandID
+		parity   Parity
+	}{
+		{[]string{"ctrl+c", "tab"}, CommandSectionCycle, ParityPartial},
+		{[]string{"ctrl+tab"}, CommandSectionCycle, ParityPartial},
+		{[]string{"shift+tab"}, CommandSectionCycleGlobal, ParityPartial},
+		{[]string{"^"}, CommandSectionParent, ParityPartial},
+		{[]string{"alt+p"}, CommandSiblingPrevious, ParityPartial},
+		{[]string{"alt+n"}, CommandSiblingNext, ParityPartial},
+		{[]string{"4"}, CommandLocalDepth4, ParityPartial},
+		{[]string{"alt+1"}, CommandGlobalDepth1, ParityPartial},
+		{[]string{"alt+2"}, CommandGlobalDepth2, ParityPartial},
+		{[]string{"alt+3"}, CommandGlobalDepth3, ParityPartial},
+		{[]string{"alt+4"}, CommandGlobalDepth4, ParityPartial},
+		{[]string{"enter"}, CommandVisitThing, ParityPartial},
+		{[]string{"ctrl+enter"}, CommandVisitThing, ParityPartial},
+		{[]string{"alt+tab"}, CommandCycleDiffs, ParityAdapted},
+		{[]string{"backspace"}, CommandDetailBackward, ParityPartial},
+		{[]string{"+"}, CommandDiffMoreContext, ParityPartial},
+		{[]string{"-"}, CommandDiffLessContext, ParityPartial},
+		{[]string{"0"}, CommandDiffDefaultContext, ParityPartial},
+	}
+	for _, test := range magit {
+		binding, ok := Find(SchemeMagit, ContextStatus, test.sequence...)
+		if !ok || binding.Handler != HandlerExecute || binding.Command != test.command || binding.Parity != test.parity {
+			t.Errorf("Magit %v = %+v, want execute %s/%s", test.sequence, binding, test.command, test.parity)
+		}
+	}
+
+	if binding, ok := Find(SchemeVim, ContextStatus, "j"); !ok || binding.Command != CommandMoveDown {
+		t.Fatalf("Vim j collision = %+v", binding)
+	}
+	if binding, ok := Find(SchemeVim, ContextStatus, "x"); !ok || binding.Command != CommandDiscard {
+		t.Fatalf("Vim x collision = %+v", binding)
+	}
+	if _, ok := Find(SchemeVim, ContextStatus, "n"); ok {
+		t.Fatal("Magit n must not displace Vim navigation")
+	}
+	if binding, ok := Find(SchemeMagit, ContextStatus, "j"); !ok || binding.Handler != HandlerPrefix || binding.UpstreamCommand != "magit-status-jump" {
+		t.Fatalf("Magit j collision = %+v", binding)
+	}
+}
+
 func TestCompactStatusJumpSuffixesAreTerminalKeySequences(t *testing.T) {
 	for key, want := range map[string][]string{"fp": {"f", "p"}, "fu": {"f", "u"}, "pp": {"p", "p"}, "pu": {"p", "u"}} {
 		var found bool
