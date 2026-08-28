@@ -129,6 +129,8 @@ type Model struct {
 	detailLine            int
 	detailRangeStart      int
 	detailRangeEnd        int
+	detailSelectedHunks   map[int]bool
+	detailSelections      []gitbackend.InteractiveChangeSelection
 	inspectionActive      bool
 	transientOffset       int
 	vimGToken             uint64
@@ -608,7 +610,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setMode(modeHelp)
 		return m, nil
 	}
-	if m.handlePatchRangeKey(key) {
+	if m.handlePatchHunkSelectionKey(key) || m.handlePatchRangeKey(key) {
 		m.cancelPrefix()
 		return m, nil
 	}
@@ -1295,6 +1297,8 @@ func (m *Model) resetDetailSelection() {
 	m.detailLine = -1
 	m.detailRangeStart = -1
 	m.detailRangeEnd = -1
+	m.detailSelectedHunks = nil
+	m.detailSelections = nil
 }
 
 func (m *Model) bumpState() {

@@ -137,6 +137,8 @@ func (m *Model) renderCompactDetail(width, height int) string {
 			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
 		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
 			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+		case strings.HasPrefix(line, "@@") && m.detailHunkSelected(absoluteIndex):
+			style = style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			style = style.Foreground(colorGreen)
 		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
@@ -257,6 +259,8 @@ func (m *Model) renderDetailPanel(width, height int) string {
 			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
 		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
 			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+		case strings.HasPrefix(line, "@@") && m.detailHunkSelected(absoluteIndex):
+			style = style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			style = style.Foreground(colorGreen)
 		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
@@ -274,6 +278,19 @@ func (m *Model) renderDetailPanel(width, height int) string {
 		styled = append(styled, "")
 	}
 	return panelStyle(width, height).Render(strings.Join(styled, "\n"))
+}
+
+func (m *Model) detailHunkSelected(lineIndex int) bool {
+	hunk := -1
+	for index, line := range m.detailLines() {
+		if strings.HasPrefix(line, "@@") {
+			hunk++
+		}
+		if index == lineIndex {
+			break
+		}
+	}
+	return m.detailSelectedHunks[hunk]
 }
 
 func (m *Model) detailForDisplay() string {
@@ -328,7 +345,7 @@ func (m *Model) renderFooter() string {
 			primary = append(primary, workflow(binding.Display, binding.Label))
 		}
 		left = strings.Join(primary, "  ")
-		optional := []string{"↑/↓ detail  [ prev  ] next  v lines", "$ Processes", "? Commands"}
+		optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "$ Processes", "? Commands"}
 		if m.scheme == schemeMagit {
 			optional = append(optional, "[Magit] F2 Vim", "n/p move")
 		} else {

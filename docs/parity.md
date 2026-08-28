@@ -16,8 +16,8 @@ not.
 | Status commit sections | Partial | Magit hash/ref/subject rows, recent fallback, upstream ranges | Full decoration ordering/faces and configurable log arguments |
 | Revision inspection | Partial | Metadata, changed-file stat/names, bounded full patch | Revision-local commands and parent navigation |
 | Whole-file stage/unstage | Partial | `s`/`u`; `S` stages all tracked changes excluding untracked; `U` clears index changes while preserving the worktree; unborn branches, renames/deletions, literal paths | Multi-selection operations |
-| Hunk/region operations | Partial | `[`/`]` focus hunks; `v` selects changed lines; reviewed stage, unstage, and discard regenerate and stale-check the exact patch before mutation | Split/refine hunks, arbitrary disjoint selections, binary/rename region operations |
-| Discard | Partial | Confirmed safe whole-file discard plus reviewed unstaged/staged hunk and changed-line discard | Mixed-state whole-file preservation edge cases and multi-selection discard |
+| Hunk/region operations | Partial | `[`/`]` focus hunks; `V` toggles noncontiguous hunks; `v`/`Space` collects disjoint typed changed-line regions; reviewed stage, unstage, and discard regenerate and stale-check the exact patch before mutation | Binary/rename region operations and semantic patch editing beyond typed region refinement |
+| Discard | Partial | Confirmed safe whole-file discard plus reviewed unstaged/staged hunk, multi-hunk, and changed-line discard; unresolved target conflicts are rejected | Mixed-state whole-file preservation edge cases |
 | Commit | Partial | `c c`, hooks, one-line message, responsive command catalog | Multiline editor and executable amend/fixup/squash/reword/signoff |
 | Branch | Partial | `b b` local switch; backend create/list | TUI create/delete/rename/upstream/spin-off |
 | Remote | Partial | `M a`, separate name/URL, fetch-on-add default | `remote.pushDefault` prompt, rename/remove/set-url/prune |

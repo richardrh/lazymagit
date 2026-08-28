@@ -5,6 +5,136 @@ import (
 	"testing"
 )
 
+func TestInteractivePatchKeysMultiHunkAndDisjointRegions(t *testing.T) {
+	t.Run("stage unstage and discard selected hunks", func(t *testing.T) {
+		r := newUIE2ERepo(t)
+		lines := make([]string, 120)
+		for i := range lines {
+			lines[i] = "line"
+		}
+		r.write("file.txt", strings.Join(lines, "\n")+"\n")
+		r.git("add", "file.txt")
+		r.git("commit", "-m", "base")
+		lines[4], lines[94] = "FIRST", "SECOND"
+		r.write("file.txt", strings.Join(lines, "\n")+"\n")
+		m := newE2EModel(t, r)
+
+		selectE2EPath(t, m, "file.txt", rowUnstaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+		selectTwoHunksByKeys(t, m)
+		sendE2EKey(t, m, keyMsg("s"))
+		if m.workflow == nil || m.workflow.dialog.Title != "Stage selected hunks" {
+			t.Fatalf("multi stage did not open review: %+v", m.workflow)
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		if got := r.git("show", ":file.txt"); !strings.Contains(got, "FIRST") || !strings.Contains(got, "SECOND") {
+			t.Fatalf("multi stage index:\n%s", got)
+		}
+
+		selectE2EPath(t, m, "file.txt", rowStaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+		selectTwoHunksByKeys(t, m)
+		sendE2EKey(t, m, keyMsg("u"))
+		if m.workflow == nil || m.workflow.dialog.Title != "Unstage selected hunks" {
+			t.Fatalf("multi unstage did not open review: %+v", m.workflow)
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		if got := r.git("diff", "--cached", "--name-only"); got != "" {
+			t.Fatalf("multi unstage left index change: %q", got)
+		}
+
+		selectE2EPath(t, m, "file.txt", rowUnstaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+		selectTwoHunksByKeys(t, m)
+		sendE2EKey(t, m, keyMsg("x"))
+		if m.workflow == nil || m.workflow.dialog.Title != "Discard selected unstaged hunks" {
+			t.Fatalf("multi discard did not open review: %+v", m.workflow)
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		if got, want := r.git("hash-object", "file.txt"), r.git("rev-parse", "HEAD:file.txt"); got != want {
+			t.Fatalf("multi discard worktree blob = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("discard selected staged hunks", func(t *testing.T) {
+		r := newUIE2ERepo(t)
+		lines := make([]string, 120)
+		for i := range lines {
+			lines[i] = "line"
+		}
+		r.write("file.txt", strings.Join(lines, "\n")+"\n")
+		r.git("add", "file.txt")
+		r.git("commit", "-m", "base")
+		lines[4], lines[94] = "FIRST", "SECOND"
+		r.write("file.txt", strings.Join(lines, "\n")+"\n")
+		m := newE2EModel(t, r)
+		selectE2EPath(t, m, "file.txt", rowUnstaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+		selectTwoHunksByKeys(t, m)
+		sendE2EKey(t, m, keyMsg("s"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+
+		selectE2EPath(t, m, "file.txt", rowStaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+		selectTwoHunksByKeys(t, m)
+		sendE2EKey(t, m, keyMsg("x"))
+		if m.workflow == nil || m.workflow.dialog.Title != "Discard selected staged hunks" {
+			t.Fatalf("multi staged discard did not open review: %+v", m.workflow)
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		if got := r.git("diff", "--cached", "--name-only"); got != "" {
+			t.Fatalf("multi staged discard left index change: %q", got)
+		}
+		if got, want := r.git("hash-object", "file.txt"), r.git("rev-parse", "HEAD:file.txt"); got != want {
+			t.Fatalf("multi staged discard worktree blob = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("disjoint changed-line regions", func(t *testing.T) {
+		r := newUIE2ERepo(t)
+		r.write("file.txt", "one\ntwo\nthree\nfour\nfive\n")
+		r.git("add", "file.txt")
+		r.git("commit", "-m", "base")
+		r.write("file.txt", "one\nTWO\nthree\nFOUR\nfive\n")
+		m := newE2EModel(t, r)
+		selectE2EPath(t, m, "file.txt", rowUnstaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+
+		sendE2EKey(t, m, keyMsg("]"))
+		sendE2EKey(t, m, keyMsg("v"))
+		sendE2EKey(t, m, keyMsg("j"))
+		sendE2EKey(t, m, keyMsg("space")) // pin TWO's delete/add block
+		sendE2EKey(t, m, keyMsg("j"))
+		sendE2EKey(t, m, keyMsg("v"))
+		sendE2EKey(t, m, keyMsg("j"))
+		sendE2EKey(t, m, keyMsg("s"))
+		if m.workflow == nil || m.workflow.dialog.Title != "Stage selected regions" {
+			t.Fatalf("disjoint regions did not open review: %+v", m.workflow)
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		sendE2EKey(t, m, keyMsg("enter"))
+		if got, want := r.git("show", ":file.txt"), "one\nTWO\nthree\nFOUR\nfive"; got != want {
+			t.Fatalf("disjoint regions index = %q, want %q", got, want)
+		}
+	})
+}
+
+func selectTwoHunksByKeys(t *testing.T, m *Model) {
+	t.Helper()
+	sendE2EKey(t, m, keyMsg("]"))
+	sendE2EKey(t, m, keyMsg("V"))
+	sendE2EKey(t, m, keyMsg("]"))
+	sendE2EKey(t, m, keyMsg("V"))
+	if len(m.detailSelectedHunks) != 2 {
+		t.Fatalf("selected hunks = %#v", m.detailSelectedHunks)
+	}
+}
+
 func TestInteractivePatchKeysStageFocusedHunkAndLineRange(t *testing.T) {
 	t.Run("focused hunk", func(t *testing.T) {
 		r := newUIE2ERepo(t)

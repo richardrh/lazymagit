@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -15,10 +16,11 @@ import (
 const changeDiffLimit = 64 << 20
 
 var (
-	ErrChangeDiffTooLarge       = errors.New("change diff exceeds mutation limit")
-	ErrMalformedChangePatch     = errors.New("malformed change patch")
-	ErrUnsupportedChangePatch   = errors.New("change patch contains an unsupported file change")
-	ErrInvalidChangePatchRegion = errors.New("invalid change patch region")
+	ErrChangeDiffTooLarge        = errors.New("change diff exceeds mutation limit")
+	ErrMalformedChangePatch      = errors.New("malformed change patch")
+	ErrUnsupportedChangePatch    = errors.New("change patch contains an unsupported file change")
+	ErrInvalidChangePatchRegion  = errors.New("invalid change patch region")
+	ErrInteractiveChangeConflict = errors.New("interactive change cannot operate on an unresolved conflict")
 )
 
 type DiffRange struct {
@@ -288,7 +290,22 @@ const (
 	InteractiveChangeFile InteractiveChangeScope = iota
 	InteractiveChangeHunk
 	InteractiveChangeLines
+	// InteractiveChangeSelections applies a typed union of whole hunks and
+	// changed-line regions. Selections can be in any order and need not be
+	// contiguous; they are canonicalized before review and execution.
+	InteractiveChangeSelections
 )
+
+// InteractiveChangeSelection names one safe part of a hunk. A whole hunk and
+// a changed-line region are deliberately distinct representations: Start=0,
+// End=0 is not overloaded as a whole hunk, so an invalid empty region cannot
+// accidentally broaden a mutation.
+type InteractiveChangeSelection struct {
+	Hunk      int
+	WholeHunk bool
+	Start     int
+	End       int
+}
 
 type InteractiveChangeRequest struct {
 	Action     InteractiveChangeAction
@@ -296,11 +313,18 @@ type InteractiveChangeRequest struct {
 	Path       string
 	Hunk       int
 	Start, End int
+	Selections []InteractiveChangeSelection
+	// DiffContext pins hunk coordinates to the context width used to display
+	// the selection. Context 0 is meaningful, so DiffContextSet distinguishes
+	// it from legacy requests that use Git's default context.
+	DiffContext    int
+	DiffContextSet bool
 }
 
 type ReviewedInteractiveChange struct {
 	Request      InteractiveChangeRequest
 	HunkHeading  string
+	HunkHeadings []string
 	ChangedLines int
 	PatchHash    string
 	token        ConfirmationToken
@@ -340,23 +364,64 @@ func (d *DiffDocument) HunkPatch(fileIndex, hunkIndex int) ([]byte, error) {
 // deletions become context and unselected additions disappear, matching the
 // partial-application semantics used by change-oriented Git clients.
 func (d *DiffDocument) ChangedLineRegionPatch(fileIndex, hunkIndex, start, end int) ([]byte, error) {
-	if d == nil || fileIndex < 0 || fileIndex >= len(d.Files) || hunkIndex < 0 || hunkIndex >= len(d.Files[fileIndex].Hunks) {
+	return d.ChangedLineSelectionsPatch(fileIndex, []InteractiveChangeSelection{{Hunk: hunkIndex, Start: start, End: end}})
+}
+
+// ChangedLineSelectionsPatch reconstructs one file patch from a union of
+// typed hunk selections. Regions may be disjoint, including several regions
+// in the same hunk. A selected whole hunk dominates its regions. Unselected
+// additions are omitted and unselected deletions are rendered as context, so
+// the result is an ordinary, independently validated unified patch.
+func (d *DiffDocument) ChangedLineSelectionsPatch(fileIndex int, selections []InteractiveChangeSelection) ([]byte, error) {
+	if d == nil || fileIndex < 0 || fileIndex >= len(d.Files) {
 		return nil, ErrInvalidChangePatchRegion
 	}
 	f := &d.Files[fileIndex]
 	if err := mutableFile(f); err != nil {
 		return nil, err
 	}
-	source := f.Hunks[hunkIndex]
-	if start < 0 || end > len(source.Lines) || start >= end {
-		return nil, ErrInvalidChangePatchRegion
+	canonical, err := canonicalChangeSelections(f.Hunks, selections)
+	if err != nil {
+		return nil, err
 	}
-	selected := false
+	var b strings.Builder
+	writeFileHeader(&b, f)
+	for hunkIndex, source := range f.Hunks {
+		hunkSelections, selectedHunk := canonical[hunkIndex]
+		if !selectedHunk {
+			continue
+		}
+		whole := false
+		selected := make([]bool, len(source.Lines))
+		for _, selection := range hunkSelections {
+			if selection.WholeHunk {
+				whole = true
+				break
+			}
+			for line := selection.Start; line < selection.End; line++ {
+				selected[line] = true
+			}
+		}
+		if whole {
+			writeHunk(&b, source)
+			continue
+		}
+		refined, ok := refineHunk(source, selected)
+		if !ok {
+			return nil, ErrInvalidChangePatchRegion
+		}
+		writeHunk(&b, refined)
+	}
+	return []byte(b.String()), nil
+}
+
+func refineHunk(source DiffHunk, selected []bool) (DiffHunk, bool) {
 	lines := make([]DiffLine, 0, len(source.Lines))
+	changed := false
 	for i, line := range source.Lines {
-		inside := i >= start && i < end
+		inside := selected[i]
 		if inside && (line.Kind == DiffLineAdded || line.Kind == DiffLineDeleted) {
-			selected = true
+			changed = true
 		}
 		switch {
 		case line.Kind == DiffLineAdded && !inside:
@@ -367,13 +432,61 @@ func (d *DiffDocument) ChangedLineRegionPatch(fileIndex, hunkIndex, start, end i
 		}
 		lines = append(lines, line)
 	}
-	if !selected {
-		return nil, ErrInvalidChangePatchRegion
+	if !changed {
+		return DiffHunk{}, false
 	}
 	h := source
 	h.Lines = lines
 	h.OldRange.Count, h.NewRange.Count = countHunkSides(lines)
-	return renderPatch(f, h), nil
+	return h, true
+}
+
+// canonicalChangeSelections validates selections against the parsed hunk
+// shape and returns them grouped in hunk order. Sorting gives the rendered
+// patch a stable hunk order while preserving the exact selected changes.
+func canonicalChangeSelections(hunks []DiffHunk, selections []InteractiveChangeSelection) (map[int][]InteractiveChangeSelection, error) {
+	if len(selections) == 0 {
+		return nil, ErrInvalidChangePatchRegion
+	}
+	grouped := make(map[int][]InteractiveChangeSelection)
+	for _, selection := range selections {
+		if selection.Hunk < 0 || selection.Hunk >= len(hunks) {
+			return nil, ErrInvalidChangePatchRegion
+		}
+		if selection.WholeHunk {
+			if selection.Start != 0 || selection.End != 0 {
+				return nil, ErrInvalidChangePatchRegion
+			}
+		} else if selection.Start < 0 || selection.End > len(hunks[selection.Hunk].Lines) || selection.Start >= selection.End {
+			return nil, ErrInvalidChangePatchRegion
+		}
+		grouped[selection.Hunk] = append(grouped[selection.Hunk], selection)
+	}
+	for hunk, group := range grouped {
+		sort.Slice(group, func(i, j int) bool {
+			if group[i].WholeHunk != group[j].WholeHunk {
+				return group[i].WholeHunk
+			}
+			if group[i].Start != group[j].Start {
+				return group[i].Start < group[j].Start
+			}
+			return group[i].End < group[j].End
+		})
+		if group[0].WholeHunk {
+			grouped[hunk] = group[:1]
+			continue
+		}
+		merged := group[:0]
+		for _, selection := range group {
+			if len(merged) == 0 || selection.Start > merged[len(merged)-1].End {
+				merged = append(merged, selection)
+				continue
+			}
+			merged[len(merged)-1].End = max(merged[len(merged)-1].End, selection.End)
+		}
+		grouped[hunk] = merged
+	}
+	return grouped, nil
 }
 
 func mutableFile(f *DiffFile) error {
@@ -425,15 +538,21 @@ func writeHunk(b *strings.Builder, h DiffHunk) {
 }
 
 func (r *Repository) LoadUnstagedDiffDocument(ctx context.Context, path string) (*DiffDocument, error) {
-	return r.loadChangeDiffDocument(ctx, path, false)
+	return r.loadChangeDiffDocument(ctx, path, false, nil)
 }
 
 func (r *Repository) LoadStagedDiffDocument(ctx context.Context, path string) (*DiffDocument, error) {
-	return r.loadChangeDiffDocument(ctx, path, true)
+	return r.loadChangeDiffDocument(ctx, path, true, nil)
 }
 
-func (r *Repository) loadChangeDiffDocument(ctx context.Context, path string, staged bool) (*DiffDocument, error) {
+func (r *Repository) loadChangeDiffDocument(ctx context.Context, path string, staged bool, contextLines *int) (*DiffDocument, error) {
 	args := []string{"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--patch", "--full-index"}
+	if contextLines != nil {
+		if *contextLines < 0 {
+			return nil, ErrInvalidChangePatchRegion
+		}
+		args = append(args, "-U"+strconv.Itoa(*contextLines))
+	}
 	if staged {
 		args = append(args, "--cached")
 	}
@@ -450,54 +569,106 @@ func (r *Repository) loadChangeDiffDocument(ctx context.Context, path string, st
 	return ParseUnifiedDiff(out)
 }
 
-func (r *Repository) selectedInteractivePatch(ctx context.Context, request InteractiveChangeRequest) ([]byte, string, int, error) {
+func (r *Repository) selectedInteractivePatch(ctx context.Context, request InteractiveChangeRequest) ([]byte, []string, int, error) {
 	if strings.TrimSpace(request.Path) == "" {
-		return nil, "", 0, errors.New("interactive change path is empty")
+		return nil, nil, 0, errors.New("interactive change path is empty")
+	}
+	if request.Action > InteractiveChangeDiscardStaged {
+		return nil, nil, 0, errors.New("unknown interactive change action")
+	}
+	if err := r.rejectInteractiveConflict(ctx, request.Path); err != nil {
+		return nil, nil, 0, err
 	}
 	staged := request.Action == InteractiveChangeUnstage || request.Action == InteractiveChangeDiscardStaged
-	if request.Action > InteractiveChangeDiscardStaged {
-		return nil, "", 0, errors.New("unknown interactive change action")
+	var contextLines *int
+	if request.DiffContextSet {
+		contextLines = &request.DiffContext
 	}
-	doc, err := r.loadChangeDiffDocument(ctx, request.Path, staged)
+	doc, err := r.loadChangeDiffDocument(ctx, request.Path, staged, contextLines)
 	if err != nil {
-		return nil, "", 0, err
+		return nil, nil, 0, err
 	}
 	if len(doc.Files) != 1 {
-		return nil, "", 0, ErrInvalidChangePatchRegion
+		return nil, nil, 0, ErrInvalidChangePatchRegion
 	}
 	file := &doc.Files[0]
 	var patch []byte
-	heading := ""
+	var headings []string
 	changed := 0
 	switch request.Scope {
 	case InteractiveChangeFile:
 		patch, err = doc.FilePatch(0)
 		for _, hunk := range file.Hunks {
+			headings = append(headings, hunk.Heading)
 			changed += changedLineCount(hunk.Lines)
 		}
 	case InteractiveChangeHunk:
 		patch, err = doc.HunkPatch(0, request.Hunk)
 		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
-			heading = file.Hunks[request.Hunk].Heading
+			headings = append(headings, file.Hunks[request.Hunk].Heading)
 			changed = changedLineCount(file.Hunks[request.Hunk].Lines)
 		}
 	case InteractiveChangeLines:
 		patch, err = doc.ChangedLineRegionPatch(0, request.Hunk, request.Start, request.End)
 		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
-			heading = file.Hunks[request.Hunk].Heading
-			for i := request.Start; i < request.End && i < len(file.Hunks[request.Hunk].Lines); i++ {
-				if i >= 0 && file.Hunks[request.Hunk].Lines[i].Kind != DiffLineContext {
-					changed++
+			headings = append(headings, file.Hunks[request.Hunk].Heading)
+			changed = changedLinesInRegion(file.Hunks[request.Hunk], request.Start, request.End)
+		}
+	case InteractiveChangeSelections:
+		patch, err = doc.ChangedLineSelectionsPatch(0, request.Selections)
+		if err == nil {
+			canonical, canonicalErr := canonicalChangeSelections(file.Hunks, request.Selections)
+			if canonicalErr != nil {
+				return nil, nil, 0, canonicalErr
+			}
+			for hunkIndex, hunk := range file.Hunks {
+				selections, ok := canonical[hunkIndex]
+				if !ok {
+					continue
+				}
+				headings = append(headings, hunk.Heading)
+				if selections[0].WholeHunk {
+					changed += changedLineCount(hunk.Lines)
+					continue
+				}
+				for _, selection := range selections {
+					changed += changedLinesInRegion(hunk, selection.Start, selection.End)
 				}
 			}
 		}
 	default:
-		return nil, "", 0, errors.New("unknown interactive change scope")
+		return nil, nil, 0, errors.New("unknown interactive change scope")
 	}
 	if err != nil {
-		return nil, "", 0, err
+		return nil, nil, 0, err
 	}
-	return patch, heading, changed, nil
+	return patch, headings, changed, nil
+}
+
+func changedLinesInRegion(hunk DiffHunk, start, end int) int {
+	changed := 0
+	for i := start; i < end && i < len(hunk.Lines); i++ {
+		if i >= 0 && hunk.Lines[i].Kind != DiffLineContext {
+			changed++
+		}
+	}
+	return changed
+}
+
+// rejectInteractiveConflict prevents a partial patch from being applied over
+// unmerged index stages. Repeating this check during Execute makes a conflict
+// introduced after review a stale-plan failure rather than a mutation attempt.
+func (r *Repository) rejectInteractiveConflict(ctx context.Context, path string) error {
+	status, err := r.Status(ctx)
+	if err != nil {
+		return err
+	}
+	for _, file := range status.Files {
+		if file.Path == path && (file.Staged == ChangeUnmerged || file.Unstaged == ChangeUnmerged) {
+			return fmt.Errorf("%w: %q", ErrInteractiveChangeConflict, path)
+		}
+	}
+	return nil
 }
 
 func changedLineCount(lines []DiffLine) int {
@@ -512,17 +683,34 @@ func changedLineCount(lines []DiffLine) int {
 
 func interactiveChangeIdentity(request InteractiveChangeRequest, patch []byte) string {
 	sum := sha256.Sum256(patch)
-	return fmt.Sprintf("%d\x00%d\x00%s\x00%d\x00%d\x00%d\x00%x", request.Action, request.Scope, request.Path, request.Hunk, request.Start, request.End, sum)
+	var selections strings.Builder
+	for _, selection := range request.Selections {
+		fmt.Fprintf(&selections, "\x00%d\x00%t\x00%d\x00%d", selection.Hunk, selection.WholeHunk, selection.Start, selection.End)
+	}
+	return fmt.Sprintf("%d\x00%d\x00%s\x00%d\x00%d\x00%d\x00%d\x00%t%s\x00%x", request.Action, request.Scope, request.Path, request.Hunk, request.Start, request.End, request.DiffContext, request.DiffContextSet, selections.String(), sum)
+}
+
+func cloneInteractiveChangeRequest(request InteractiveChangeRequest) InteractiveChangeRequest {
+	request.Selections = append([]InteractiveChangeSelection(nil), request.Selections...)
+	return request
 }
 
 func (r *Repository) ReviewInteractiveChange(ctx context.Context, request InteractiveChangeRequest) (ReviewedInteractiveChange, error) {
-	patch, heading, changed, err := r.selectedInteractivePatch(ctx, request)
+	request = cloneInteractiveChangeRequest(request)
+	patch, headings, changed, err := r.selectedInteractivePatch(ctx, request)
 	if err != nil {
 		return ReviewedInteractiveChange{}, err
 	}
 	identity := interactiveChangeIdentity(request, patch)
 	sum := sha256.Sum256(patch)
-	return ReviewedInteractiveChange{Request: request, HunkHeading: heading, ChangedLines: changed, PatchHash: fmt.Sprintf("%x", sum), token: NewConfirmationToken(identity)}, nil
+	reviewed := ReviewedInteractiveChange{
+		Request: request, HunkHeadings: append([]string(nil), headings...), ChangedLines: changed,
+		PatchHash: fmt.Sprintf("%x", sum), token: NewConfirmationToken(identity),
+	}
+	if len(headings) == 1 {
+		reviewed.HunkHeading = headings[0]
+	}
+	return reviewed, nil
 }
 
 func (r *Repository) ExecuteReviewedInteractiveChange(ctx context.Context, reviewed ReviewedInteractiveChange) error {

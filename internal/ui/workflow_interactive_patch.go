@@ -19,11 +19,30 @@ func (m *Model) focusedHunkRequest(key string) (gitbackend.InteractiveChangeRequ
 	if !ok {
 		return gitbackend.InteractiveChangeRequest{}, false
 	}
-	request := gitbackend.InteractiveChangeRequest{Action: action, Scope: gitbackend.InteractiveChangeHunk, Path: row.path, Hunk: hunk}
-	if m.detailRangeStart >= 0 && m.detailRangeEnd >= 0 {
+	request := gitbackend.InteractiveChangeRequest{
+		Action: action, Scope: gitbackend.InteractiveChangeHunk, Path: row.path, Hunk: hunk,
+		DiffContext: m.diffContext, DiffContextSet: true,
+	}
+	if len(m.detailSelectedHunks) != 0 || len(m.detailSelections) != 0 {
+		request.Scope, request.Selections = gitbackend.InteractiveChangeSelections, m.patchSelections(hunk, start, end)
+	} else if m.detailRangeStart >= 0 && m.detailRangeEnd >= 0 {
 		request.Scope, request.Start, request.End = gitbackend.InteractiveChangeLines, start, end
 	}
 	return request, true
+}
+
+// patchSelections joins explicitly selected hunks with pinned and active line
+// regions. The backend canonicalizes and validates this typed representation;
+// the UI never derives a patch from its display text.
+func (m *Model) patchSelections(hunk, start, end int) []gitbackend.InteractiveChangeSelection {
+	selections := append([]gitbackend.InteractiveChangeSelection(nil), m.detailSelections...)
+	for selectedHunk := range m.detailSelectedHunks {
+		selections = append(selections, gitbackend.InteractiveChangeSelection{Hunk: selectedHunk, WholeHunk: true})
+	}
+	if m.detailRangeStart >= 0 && m.detailRangeEnd >= 0 {
+		selections = append(selections, gitbackend.InteractiveChangeSelection{Hunk: hunk, Start: start, End: end})
+	}
+	return selections
 }
 
 func (m *Model) focusedInteractiveAction(key string) (selectedRow row, action gitbackend.InteractiveChangeAction, ok bool) {
@@ -94,6 +113,29 @@ func (m *Model) focusedPatchCoordinates() (hunk, start, end int, ok bool) {
 	return focused, start, end, start >= 0 && end > start
 }
 
+func (m *Model) handlePatchHunkSelectionKey(key string) bool {
+	if key != "V" || m.detailHunk < 0 || m.detailID != m.tree.Cursor() {
+		return false
+	}
+	if m.detailRangeStart >= 0 {
+		m.setMessage("Finish or cancel line selection before selecting hunks")
+		return true
+	}
+	hunk, _, _, ok := m.focusedPatchCoordinates()
+	if !ok {
+		return false
+	}
+	if m.detailSelectedHunks == nil {
+		m.detailSelectedHunks = make(map[int]bool)
+	}
+	m.detailSelectedHunks[hunk] = !m.detailSelectedHunks[hunk]
+	if !m.detailSelectedHunks[hunk] {
+		delete(m.detailSelectedHunks, hunk)
+	}
+	m.setMessage(fmt.Sprintf("Hunk %d %s (%d selected); [/] navigate, V toggle, s/u/x review", hunk+1, map[bool]string{true: "selected", false: "unselected"}[m.detailSelectedHunks[hunk]], len(m.detailSelectedHunks)))
+	return true
+}
+
 func (m *Model) handlePatchRangeKey(key string) bool {
 	if m.detailHunk < 0 || m.detailID != m.tree.Cursor() {
 		return false
@@ -101,20 +143,27 @@ func (m *Model) handlePatchRangeKey(key string) bool {
 	if key == "v" {
 		return m.togglePatchRange()
 	}
-	if m.detailRangeStart < 0 {
-		return false
+	if key == "space" && m.detailRangeStart >= 0 {
+		return m.pinPatchRange()
 	}
 	delta := patchRangeDelta(m.scheme, key)
 	if delta == 0 {
 		return false
 	}
-	m.movePatchRange(delta)
-	return true
+	if m.detailRangeStart >= 0 {
+		m.movePatchRange(delta)
+		return true
+	}
+	if len(m.detailSelections) != 0 {
+		m.movePatchCursor(delta)
+		return true
+	}
+	return false
 }
 
 func (m *Model) togglePatchRange() bool {
 	if m.detailRangeStart >= 0 {
-		m.detailLine, m.detailRangeStart, m.detailRangeEnd = -1, -1, -1
+		m.detailRangeStart, m.detailRangeEnd = -1, -1
 		m.setMessage("Line selection cancelled")
 		return true
 	}
@@ -123,12 +172,40 @@ func (m *Model) togglePatchRange() bool {
 		m.setMessage("Focused hunk has no selectable changed lines")
 		return true
 	}
-	m.detailLine, m.detailRangeStart, m.detailRangeEnd = changed[0], changed[0], changed[0]
+	if !containsDetailLine(changed, m.detailLine) {
+		m.detailLine = changed[0]
+	}
+	m.detailRangeStart, m.detailRangeEnd = m.detailLine, m.detailLine
 	movement := "j/k"
 	if m.scheme == schemeMagit {
 		movement = "n/p"
 	}
-	m.setMessage("Line selection active; " + movement + " extend, s/u/x review, v cancel")
+	m.setMessage("Line selection active; " + movement + " extend, Space add region, s/u/x review, v cancel")
+	return true
+}
+
+func containsDetailLine(lines []int, line int) bool {
+	for _, candidate := range lines {
+		if candidate == line {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) pinPatchRange() bool {
+	hunk, start, end, ok := m.focusedPatchCoordinates()
+	if !ok {
+		m.setMessage("Selected line range is invalid")
+		return true
+	}
+	m.detailSelections = append(m.detailSelections, gitbackend.InteractiveChangeSelection{Hunk: hunk, Start: start, End: end})
+	m.detailRangeStart, m.detailRangeEnd = -1, -1
+	movement := "j/k"
+	if m.scheme == schemeMagit {
+		movement = "n/p"
+	}
+	m.setMessage(fmt.Sprintf("Region added (%d); %s move, v select another, s/u/x review", len(m.detailSelections), movement))
 	return true
 }
 
@@ -140,6 +217,12 @@ func patchRangeDelta(scheme keyScheme, key string) int {
 }
 
 func (m *Model) movePatchRange(delta int) {
+	if m.movePatchCursor(delta) {
+		m.detailRangeEnd = m.detailLine
+	}
+}
+
+func (m *Model) movePatchCursor(delta int) bool {
 	changed := m.focusedHunkChangedLines()
 	for index, line := range changed {
 		if line != m.detailLine {
@@ -148,11 +231,16 @@ func (m *Model) movePatchRange(delta int) {
 		next := index + delta
 		if next >= 0 && next < len(changed) {
 			m.detailLine = changed[next]
-			m.detailRangeEnd = m.detailLine
 			m.detailOffset = min(m.detailLine, m.detailMaximumOffset())
 		}
-		return
+		return true
 	}
+	if len(changed) != 0 {
+		m.detailLine = changed[0]
+		m.detailOffset = min(m.detailLine, m.detailMaximumOffset())
+		return true
+	}
+	return false
 }
 
 func (m *Model) focusedHunkChangedLines() []int {
@@ -179,10 +267,32 @@ func (m *Model) focusedHunkChangedLines() []int {
 func (m *Model) openInteractiveChange(request gitbackend.InteractiveChangeRequest) tea.Cmd {
 	title, operation := interactiveChangeLabels(request.Action)
 	selection := "focused hunk"
-	if request.Scope == gitbackend.InteractiveChangeLines {
+	switch request.Scope {
+	case gitbackend.InteractiveChangeLines:
 		title = strings.Replace(title, "focused hunk", "selected lines", 1)
 		operation = strings.Replace(operation, "hunk", "lines", 1)
 		selection = "selected changed-line range"
+	case gitbackend.InteractiveChangeSelections:
+		whole, regions := 0, 0
+		for _, selected := range request.Selections {
+			if selected.WholeHunk {
+				whole++
+			} else {
+				regions++
+			}
+		}
+		name := "selected regions"
+		if whole != 0 && regions == 0 {
+			name = "selected hunk"
+			if whole != 1 {
+				name = "selected hunks"
+			}
+		} else if whole != 0 {
+			name = "selected hunks and regions"
+		}
+		title = interactiveSelectionTitle(title, name)
+		operation = strings.Replace(operation, "hunk", strings.TrimPrefix(name, "selected "), 1)
+		selection = name
 	}
 	return m.OpenWorkflow(WorkflowDialog{
 		Title: title, Operation: operation,
@@ -192,9 +302,13 @@ func (m *Model) openInteractiveChange(request gitbackend.InteractiveChangeReques
 			if err != nil {
 				return WorkflowReview{}, err
 			}
+			location := fmt.Sprintf("hunk: %d", request.Hunk+1)
+			if request.Scope == gitbackend.InteractiveChangeSelections {
+				location = fmt.Sprintf("hunks: %d; selections: %d", len(reviewed.HunkHeadings), len(request.Selections))
+			}
 			plan := []string{
 				"path: " + sanitizeSingleLine(request.Path),
-				fmt.Sprintf("hunk: %d; changed lines: %d", request.Hunk+1, reviewed.ChangedLines),
+				location + fmt.Sprintf("; changed lines: %d", reviewed.ChangedLines),
 				"patch: " + reviewed.PatchHash[:min(12, len(reviewed.PatchHash))],
 			}
 			if heading := strings.TrimSpace(reviewed.HunkHeading); heading != "" {
@@ -210,6 +324,16 @@ func (m *Model) openInteractiveChange(request gitbackend.InteractiveChangeReques
 			return m.repo.ExecuteReviewedInteractiveChange(ctx, reviewed)
 		},
 	})
+}
+
+func interactiveSelectionTitle(title, selection string) string {
+	if strings.Contains(title, "focused unstaged hunk") {
+		return strings.Replace(title, "focused unstaged hunk", strings.Replace(selection, "selected ", "selected unstaged ", 1), 1)
+	}
+	if strings.Contains(title, "focused staged hunk") {
+		return strings.Replace(title, "focused staged hunk", strings.Replace(selection, "selected ", "selected staged ", 1), 1)
+	}
+	return strings.Replace(title, "focused hunk", selection, 1)
 }
 
 func interactiveChangeLabels(action gitbackend.InteractiveChangeAction) (string, string) {

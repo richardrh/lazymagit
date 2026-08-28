@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -379,6 +380,127 @@ func TestChangePatchNoFinalNewlineAndContextRefusal(t *testing.T) {
 	}
 	if got := r.read("context"); got != before {
 		t.Fatalf("failed apply partially mutated worktree: got %q, want %q", got, before)
+	}
+}
+
+func TestInteractiveChangeMultiSelectionsStageUnstageAndDiscard(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	base := make([]string, 160)
+	for i := range base {
+		base[i] = fmt.Sprintf("line %03d", i+1)
+	}
+	r.write("file.txt", strings.Join(base, "\n")+"\n")
+	r.commitAll("base")
+	changed := append([]string(nil), base...)
+	changed[4], changed[74], changed[144] = "FIRST", "SECOND", "THIRD"
+	r.write("file.txt", strings.Join(changed, "\n")+"\n")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The first and third hunks are deliberately noncontiguous. One reviewed
+	// patch carries both hunks under a single file header.
+	request := InteractiveChangeRequest{Action: InteractiveChangeStage, Scope: InteractiveChangeSelections, Path: "file.txt", Selections: []InteractiveChangeSelection{
+		{Hunk: 2, WholeHunk: true}, {Hunk: 0, WholeHunk: true},
+	}}
+	review, err := repo.ReviewInteractiveChange(ctx, request)
+	if err != nil || len(review.HunkHeadings) != 2 || review.ChangedLines != 4 {
+		t.Fatalf("multi-hunk review = %#v, %v", review, err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	index := r.git("show", ":file.txt")
+	if !strings.Contains(index, "FIRST") || strings.Contains(index, "SECOND") || !strings.Contains(index, "THIRD") {
+		t.Fatalf("multi-hunk stage index:\n%s", index)
+	}
+
+	unstage, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeUnstage, Scope: InteractiveChangeSelections, Path: "file.txt", Selections: []InteractiveChangeSelection{
+		{Hunk: 1, WholeHunk: true}, {Hunk: 0, WholeHunk: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, unstage); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("multi-hunk unstage left index changes: %q", got)
+	}
+
+	discard, err := repo.ReviewInteractiveChange(ctx, InteractiveChangeRequest{Action: InteractiveChangeDiscardUnstaged, Scope: InteractiveChangeSelections, Path: "file.txt", Selections: []InteractiveChangeSelection{
+		{Hunk: 2, WholeHunk: true}, {Hunk: 0, WholeHunk: true},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedInteractiveChange(ctx, discard); err != nil {
+		t.Fatal(err)
+	}
+	worktree := r.read("file.txt")
+	if strings.Contains(worktree, "FIRST") || !strings.Contains(worktree, "SECOND") || strings.Contains(worktree, "THIRD") {
+		t.Fatalf("multi-hunk discard worktree:\n%s", worktree)
+	}
+}
+
+func TestInteractiveChangeRejectsUnresolvedConflict(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("conflict.txt", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("conflict.txt", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("conflict.txt", "main\n")
+	r.commitAll("main")
+	merge := exec.Command("git", "-C", r.dir, "merge", "topic")
+	if out, err := merge.CombinedOutput(); err == nil {
+		t.Fatalf("conflicting merge unexpectedly succeeded: %s", out)
+	}
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.ReviewInteractiveChange(context.Background(), InteractiveChangeRequest{
+		Action: InteractiveChangeStage, Scope: InteractiveChangeHunk, Path: "conflict.txt", Hunk: 0,
+	})
+	if !errors.Is(err, ErrInteractiveChangeConflict) {
+		t.Fatalf("conflict review error = %v", err)
+	}
+}
+
+func TestChangedLineSelectionsPatchSupportsDisjointRegions(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file.txt", "one\ntwo\nthree\nfour\nfive\n")
+	r.commitAll("base")
+	r.write("file.txt", "one\nTWO\nthree\nFOUR\nfive\n")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := repo.LoadUnstagedDiffDocument(context.Background(), "file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hunk := doc.Files[0].Hunks[0]
+	firstStart, firstEnd := changedBlockContaining(t, hunk, "TWO")
+	secondStart, secondEnd := changedBlockContaining(t, hunk, "FOUR")
+	patch, err := doc.ChangedLineSelectionsPatch(0, []InteractiveChangeSelection{
+		{Hunk: 0, Start: secondStart, End: secondEnd}, {Hunk: 0, Start: firstStart, End: firstEnd},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(patch), "@@ -") != 1 {
+		t.Fatalf("disjoint patch was not one refined hunk:\n%s", patch)
+	}
+	if err := repo.StageChangePatch(context.Background(), patch); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := r.git("show", ":file.txt"), "one\nTWO\nthree\nFOUR\nfive"; got != want {
+		t.Fatalf("disjoint regions stage = %q, want %q", got, want)
 	}
 }
 
