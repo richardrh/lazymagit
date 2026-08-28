@@ -503,6 +503,10 @@ func handleWorkflowNavigation(w *workflowState, key string) bool {
 		return true
 	}
 	if w.field >= len(w.dialog.Fields) {
+		if key == "up" {
+			w.field = max(0, len(w.dialog.Fields)-1)
+			return true
+		}
 		return false
 	}
 	field := &w.dialog.Fields[w.field]

@@ -14,6 +14,29 @@ import (
 	"github.com/richard/lazymagit/internal/keymap"
 )
 
+func TestWorkflowActionRowMovesBackToEditableField(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.OpenWorkflow(WorkflowDialog{
+		Title: "Amend HEAD", ActionLabel: "Review & Submit",
+		Fields: []WorkflowField{{Name: "message", Label: "Message", Kind: WorkflowText, Value: "fix: b menu errors", Required: true}},
+		Submit: func(context.Context, WorkflowValues) error { return nil },
+	})
+	m.workflow.field = len(m.workflow.dialog.Fields)
+	_, _ = m.handleWorkflowKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if m.workflow.field != 0 {
+		t.Fatalf("Up from action row left field=%d", m.workflow.field)
+	}
+	_, _ = m.handleWorkflowKey(keyMsg(" edited"))
+	if got := m.workflow.dialog.Fields[0].Value; got != "fix: b menu errors edited" {
+		t.Fatalf("edited message = %q", got)
+	}
+	_, _ = m.handleWorkflowKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.workflow.field != len(m.workflow.dialog.Fields) {
+		t.Fatalf("Down from message left field=%d", m.workflow.field)
+	}
+}
+
 func TestWorkflowSearchFiltersSelectsAndAllowsCustomValues(t *testing.T) {
 	field := WorkflowField{Kind: WorkflowSearch, Choices: []WorkflowChoice{{Value: "main", Label: "main (current)"}, {Value: "feature/login", Label: "feature/login"}, {Value: "release", Label: "release"}}, AllowCustom: true}
 	field.Search = "log"
