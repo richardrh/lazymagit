@@ -518,8 +518,8 @@ All manifest transients are generated from effective status bindings and transie
 | `r` | `magit-notes-remove` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
 | `m` | `magit-notes-merge` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
 | `p` | `magit-notes-prune` | **suffix** | Actions | if-not: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
-| `c` | `magit-notes-merge-commit` | **suffix** | Actions | if: magit-notes-merging-p | `missing` | suffix: not implemented |
-| `a` | `magit-notes-merge-abort` | **suffix** | Actions | if: magit-notes-merging-p | `missing` | suffix: not implemented |
+| `c` | `magit-notes-merge-commit` | **suffix** | Actions | if: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
+| `a` | `magit-notes-merge-abort` | **suffix** | Actions | if: magit-notes-merging-p | `partial` | TUI workflow handler (startup-validated) |
 
 ### `W` — magit-patch (5 occurrences)
 
@@ -877,8 +877,8 @@ All manifest transients are generated from effective status bindings and transie
 | `-u` | `magit-tag:--local-user` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `t` | `magit-tag-create` | **suffix** | Create |  | `partial` | TUI workflow handler (startup-validated) |
 | `r` | `magit-tag-release` | **suffix** | Create |  | `partial` | TUI workflow handler (startup-validated) |
-| `k` | `magit-tag-delete` | **suffix** | Do |  | `missing` | suffix: not implemented |
-| `p` | `magit-tag-prune` | **suffix** | Do |  | `missing` | suffix: not implemented |
+| `k` | `magit-tag-delete` | **suffix** | Do |  | `partial` | TUI workflow handler (startup-validated) |
+| `p` | `magit-tag-prune` | **suffix** | Do |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `Z` — magit-worktree (5 occurrences)
 

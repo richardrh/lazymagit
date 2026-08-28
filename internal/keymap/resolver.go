@@ -160,9 +160,11 @@ func (r *Resolver) buildTransient(context Context) {
 			}
 			n = n.children[token]
 		}
-		// Preserve the first conditional occurrence. UI condition selection can
-		// replace it before dispatch; the resolver must never erase duplicates.
-		if n.binding == nil {
+		// Duplicate local sequences can pair an infix with a conditional suffix
+		// (for example notes' c). Prefer the executable suffix so an available
+		// action is not shadowed by an infix with no command; the UI still chooses
+		// the active occurrence when rendering conditions.
+		if n.binding == nil || n.binding.Handler == HandlerInfix && b.Handler != HandlerInfix {
 			n.binding = b
 		}
 	}
