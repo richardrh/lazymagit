@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richard/lazymagit/internal/git"
+	"github.com/richard/lazymagit/internal/keymap"
 	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
@@ -204,6 +205,25 @@ func TestCommandPrefixWaitsAndUnknownSuffixStaysInTransient(t *testing.T) {
 	}
 	if m.tree.Cursor() != before || !strings.Contains(m.message, "not implemented") {
 		t.Fatal("unknown suffix was replayed as navigation")
+	}
+}
+
+func TestPerformAppliesDirectDisplayCommands(t *testing.T) {
+	m := New(nil)
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "file", Unstaged: gitbackend.ChangeModified}}}})
+	m.loading = false
+	m.perform(keymap.CommandOpenDispatcher)
+	if m.mode != modeHelp {
+		t.Fatalf("dispatcher mode = %d", m.mode)
+	}
+	m.setMode(modeStatus)
+	m.perform(keymap.CommandDepth1)
+	if m.tree.SetCursor("status/unstaged/file/file") {
+		t.Fatal("depth one retained a file row")
+	}
+	m.perform(keymap.CommandToggleSection)
+	if !m.tree.IsFolded(m.tree.Cursor()) {
+		t.Fatal("toggle section did not fold current section")
 	}
 }
 

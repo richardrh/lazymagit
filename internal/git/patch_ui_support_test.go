@@ -205,6 +205,44 @@ func TestReviewedFormatPatchPublishesExactNewFilesAndRejectsStaleDirectory(t *te
 	}
 }
 
+func TestReviewFormatPatchRejectsInvalidOrEmptyInputBeforePublication(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(r.dir, "patches")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, input := range []struct {
+		name, revision, directory string
+	}{
+		{"unsafe revision", "-HEAD", out},
+		{"empty range", "HEAD..HEAD", out},
+		{"output is a file", "HEAD", filepath.Join(r.dir, "base.txt")},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			review, err := repo.ReviewFormatPatchUI(ctx, input.revision, FormatPatchOptions{OutputDirectory: input.directory})
+			if err == nil {
+				repo.DiscardReviewedFormatPatch(review)
+				t.Fatal("ReviewFormatPatchUI unexpectedly succeeded")
+			}
+		})
+	}
+	if _, err := repo.ReviewFormatPatchUI(ctx, "HEAD", FormatPatchOptions{OutputDirectory: out, RerollCount: -1}); err == nil {
+		t.Fatal("negative format-patch option was accepted")
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("failed review left output behind: entries=%v err=%v", entries, err)
+	}
+}
+
 func TestReviewDiffPatchRejectsSymlinkAndOversizedExistingFile(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("target", "do not replace\n")

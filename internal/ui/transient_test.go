@@ -242,6 +242,16 @@ func TestStatusJumpAvailabilityFollowsProjectedSections(t *testing.T) {
 	}
 }
 
+func TestBindingConditionReportsUnavailableMergetoolAndStatusJump(t *testing.T) {
+	m := New(&gitbackend.Repository{})
+	if active, reason := m.bindingCondition(keymap.Binding{Transient: "magit-git-mergetool", UpstreamCommand: "magit-git-mergetool"}); active || !strings.Contains(reason, "unresolved paths") {
+		t.Fatalf("mergetool condition = %v, %q", active, reason)
+	}
+	if active, reason := m.bindingCondition(keymap.Binding{Transient: "magit-status-jump", UpstreamCommand: "magit-jump-to-stashes"}); active || reason != "status section is not present" {
+		t.Fatalf("status jump condition = %v, %q", active, reason)
+	}
+}
+
 func TestSparseCheckoutConditionsFollowRepositoryState(t *testing.T) {
 	r := newUIE2ERepo(t)
 	r.write("base", "base\n")

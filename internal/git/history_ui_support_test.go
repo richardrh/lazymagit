@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -97,6 +99,121 @@ func TestReviewedHistoryCherryPickBindsResolvedCommitAndWorktree(t *testing.T) {
 	}
 	if got := r.git("diff", "--cached", "--name-only"); got != "" {
 		t.Fatalf("stale cherry-pick changed index = %q", got)
+	}
+}
+
+func TestHistoryUIReviewCanonicalizesExtendedOptions(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	r.write("first.txt", "first\n")
+	r.commitAll("first")
+	r.write("second.txt", "second\n")
+	r.commitAll("second")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rebase, err := repo.ReviewHistoryUIAction(ctx, HistoryUIRequest{Action: HistoryUIRebaseStart, Rebase: RebaseOptions{
+		Upstream: "HEAD~1", Onto: "HEAD", KeepEmpty: true, RebaseMerges: true, UpdateRefs: true,
+		Autostash: true, ForceRebase: true, Strategy: "recursive", Signoff: true,
+	}})
+	if err != nil {
+		t.Fatalf("review rebase: %v", err)
+	}
+	if len(rebase.Plan) != 10 || rebase.Request.Rebase.Upstream == "HEAD~1" || rebase.Request.Rebase.Onto == "HEAD" {
+		t.Fatalf("rebase review = %#v", rebase)
+	}
+
+	for _, request := range []HistoryUIRequest{
+		{Action: HistoryUICherryStart, Revisions: []string{"HEAD"}, Pick: PickOptions{NoCommit: true, Mainline: 1, Strategy: "recursive", Signoff: true, NoEdit: true}},
+		{Action: HistoryUIRevertStart, Revisions: []string{"HEAD"}, Pick: PickOptions{NoEdit: true}},
+		{Action: HistoryUIBisectStart, Bisect: BisectStartOptions{Bad: "HEAD", Good: "HEAD~1", NoCheckout: true, FirstParent: true}},
+		{Action: HistoryUIBisectSkip},
+	} {
+		review, err := repo.ReviewHistoryUIAction(ctx, request)
+		if err != nil {
+			t.Fatalf("review %s: %v", request.Action, err)
+		}
+		if len(review.Plan) == 0 {
+			t.Fatalf("review %s has no plan", request.Action)
+		}
+	}
+
+	for _, request := range []HistoryUIRequest{
+		{Action: HistoryUICherryStart},
+		{Action: HistoryUIRevertStart, Revisions: []string{"HEAD"}, Pick: PickOptions{Mainline: -1}},
+		{Action: HistoryUICherryStart, Revisions: []string{"HEAD"}, Pick: PickOptions{Strategy: "bad strategy"}},
+	} {
+		if _, err := repo.ReviewHistoryUIAction(ctx, request); err == nil {
+			t.Errorf("review %s = nil error for %#v", request.Action, request)
+		}
+	}
+}
+
+func TestReviewedHistoryStartsCherryPickAndRevert(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "source")
+	r.write("picked.txt", "picked\n")
+	picked := r.commitAll("picked")
+	r.git("switch", "main")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	review, err := repo.ReviewHistoryUIAction(ctx, HistoryUIRequest{Action: HistoryUICherryStart, Revisions: []string{picked}, Pick: PickOptions{NoCommit: true, NoEdit: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedHistoryUIAction(ctx, review); err != nil {
+		t.Fatalf("execute reviewed cherry-pick: %v", err)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "picked.txt" {
+		t.Fatalf("cherry-pick index = %q", got)
+	}
+	r.git("reset", "--hard", "HEAD")
+
+	r.write("reverted.txt", "revert me\n")
+	commit := r.commitAll("revert me")
+	review, err = repo.ReviewHistoryUIAction(ctx, HistoryUIRequest{Action: HistoryUIRevertStart, Revisions: []string{commit}, Pick: PickOptions{NoEdit: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedHistoryUIAction(ctx, review); err != nil {
+		t.Fatalf("execute reviewed revert: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, "reverted.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("revert retained file: %v", err)
+	}
+}
+
+func TestReviewedHistoryRejectsInactiveContinuationActions(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []HistoryUIAction{
+		HistoryUIRebaseContinue,
+		HistoryUICherryContinue,
+		HistoryUIRevertContinue,
+		HistoryUIBisectSkip,
+	} {
+		review, err := repo.ReviewHistoryUIAction(context.Background(), HistoryUIRequest{Action: action})
+		if err != nil {
+			t.Fatalf("review %s: %v", action, err)
+		}
+		if err := repo.ExecuteReviewedHistoryUIAction(context.Background(), review); err == nil {
+			t.Errorf("execute inactive %s succeeded", action)
+		}
 	}
 }
 
