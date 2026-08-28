@@ -21,11 +21,12 @@ const (
 	inspectItemLimit   = 512
 )
 
-// These are the read-only portions of the vendored transients.  Deliberately
+// These are the read-only portions of the vendored transients. Deliberately
 // absent are Emacs buffer operations (save transient values, margins, buffer
-// locks, hunk fontification/refinement), mutation (stage/resolve), reflogs and
-// external tools (Ediff and mergetool).  Ediff display commands are adapted to
-// terminal-safe unified comparisons below.
+// locks, hunk fontification/refinement), general mutation, reflogs, and
+// external tools. Ediff display commands are adapted to terminal-safe unified
+// comparisons below; the one reviewed conflict-resolution exception is wired
+// separately to conflictResolutionWorkflow.
 var inspectSuffixes = map[string]WorkflowHandler{
 	// magit-diff
 	"magit-diff-dwim":         inspectDiffDWIM,
@@ -89,7 +90,7 @@ func init() {
 		handlers := make(map[keymap.CommandID]WorkflowHandler)
 		for _, binding := range keymap.Registry() {
 			if binding.Transient == "magit-git-mergetool" && binding.Kind == keymap.KindSuffix && binding.UpstreamCommand == "magit-git-mergetool" {
-				handlers[binding.Command] = inspectMergetool
+				handlers[binding.Command] = conflictResolutionWorkflow
 				continue
 			}
 			handler := inspectSuffixes[binding.UpstreamCommand]
@@ -276,6 +277,9 @@ func runUnifiedComparison(m *Model, title string, kind gitbackend.DiffKind) tea.
 
 func inspectCompareDWIM(m *Model, _ WorkflowCommand) tea.Cmd {
 	row := m.rows[m.tree.Cursor()]
+	if row.path != "" && isUnmergedSnapshotPath(m, row.path) {
+		return inspectConflictVersions(m, row.path)
+	}
 	switch row.kind {
 	case rowStaged:
 		return runUnifiedComparison(m, "staged", gitbackend.DiffIndex)
@@ -313,17 +317,8 @@ func hasUnmergedInspectionPath(m *Model) bool {
 	return false
 }
 
-// inspectMergetool intentionally does not invoke `git mergetool`: that command
-// launches an ambient, potentially graphical program and can modify the index.
-// A combined diff is useful in a terminal while preserving the user's conflict
-// state for an explicit resolver outside this UI.
-func inspectMergetool(m *Model, _ WorkflowCommand) tea.Cmd {
-	if !hasUnmergedInspectionPath(m) {
-		m.setError(errors.New("terminal conflict inspection requires unresolved paths"))
-		return nil
-	}
-	return runDiffInspection(m, "Terminal conflict inspection (read-only)", gitbackend.DiffQuery{Kind: gitbackend.DiffConflicts, Files: selectedInspectPath(m)})
-}
+// E t m is wired to conflictResolutionWorkflow, a reviewed terminal-native
+// resolver. We intentionally do not launch git mergetool or an ambient editor.
 
 func logQueryFromCommand(command WorkflowCommand) gitbackend.LogQuery {
 	query := gitbackend.LogQuery{Limit: 128, Graph: true, Decorations: true, OutputLimit: inspectOutputLimit}

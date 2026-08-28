@@ -452,6 +452,12 @@ func transientBindings(m manifest) []Binding {
 				command, handler, availability, parity, category, reason = id, HandlerExecute, AvailabilityAlways, ParityPartial, UnavailableNone, ""
 			} else if transientCapability[tr.Name][entry.Command] {
 				handler, availability, parity, category, reason = HandlerExecute, AvailabilityAlways, ParityPartial, UnavailableNone, ""
+				if tr.Name == "magit-git-mergetool" && entry.Command == "magit-git-mergetool" {
+					// The terminal-native workflow deliberately replaces Magit's
+					// configurable external mergetool with a reviewed, bounded
+					// ours/theirs checkout and stage operation.
+					parity = ParityAdapted
+				}
 			} else if entry.Command == "magit-branch-spinoff" || entry.Command == "magit-branch-spinout" {
 				category, reason = UnavailableUnsupported, "backend explicitly reports this branch workflow as unsupported"
 			}

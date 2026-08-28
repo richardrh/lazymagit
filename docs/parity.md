@@ -12,7 +12,7 @@ not.
 | Area | State | Current behavior | Important gap |
 |---|---|---|---|
 | Repository discovery/init | Exact slice | Nested discovery, bare detection, safe init prompt | Bare status UI |
-| Status file sections | Partial | Magit headings/order, independent staged/unstaged state, stable folds | Inline hunks, conflicts, operation headers |
+| Status file sections | Partial | Magit headings/order, independent staged/unstaged state, stable folds, and unresolved-path selection | Inline hunks and operation headers |
 | Status commit sections | Partial | Magit hash/ref/subject rows, recent fallback, upstream ranges | Full decoration ordering/faces and configurable log arguments |
 | Revision inspection | Partial | Metadata, changed-file stat/names, bounded full patch | Revision-local commands and parent navigation |
 | Whole-file stage/unstage | Partial | `s`/`u`; `S` stages all tracked changes excluding untracked; `U` clears index changes while preserving the worktree; unborn branches, renames/deletions, literal paths | Multi-selection operations |
@@ -25,11 +25,11 @@ not.
 | Pull | Missing | — | `F` transient, merge/rebase choices |
 | Push | Partial | `P p` preserves plain push with an existing upstream; otherwise uses the configured push remote or a **Push and set upstream** destination chooser without pre-writing push-remote config | Arbitrary destination/upstream prompts, repository-wide push-default prompt, tags, force-with-lease transient |
 | Diff/log | Partial | File diffs and structured status logs | General `d`/`l` views, ranges, graph, filters |
-| Conflicts | Missing workflow | Unmerged state parses | Ours/theirs/base, resolve, continue/abort |
+| Conflicts | Partial | `e` safely shows bounded base/ours/theirs index blobs for a selected unresolved path; `E t m` provides reviewed Git-native ours/theirs resolution and stages that path; merge/rebase/cherry-pick/revert retain their appropriate continue/abort controls | Base is inspect-only because stock Git provides no base checkout mode; no external mergetool/editor, manual merge-buffer editing, or bulk Ediff resolve actions |
 | Patch workflows | Partial | `w`/`W` support reviewed `git am`, checked/reviewed plain `git apply`, and bounded reviewed `format-patch` publication; format dialogs expose numbering, cover/signoff, threading, subject, reroll/start numbers, and To/Cc | No request-pull, GPG/editor flows, mail parsing controls beyond 3-way/scissors/signoff/keep-CR, or format-patch diff-algorithm/interdiff/range-diff knobs; thread style is intentionally reduced to Git's safe default |
 | Stash | Partial | `z` transient workflows plus folded status section, `j z` jump, stable OID rows, and bounded lazy patch detail | Remaining stash suffixes and exact section presentation edge cases |
-| Merge | Partial | `m` transient: reviewed target selection, plain/no-commit/squash/preview, `--ff-only`/`--no-ff`, conflict continue, and reviewed abort | Editor-backed merge messages, strategy and signing options, absorb/dissolve |
-| Rebase | Partial | `r` transient: reviewed non-interactive rebase plus terminal-native reviewed interactive todo editing (`pick`/`reword`/`edit`/`squash`/`fixup`/`drop`), active todo edits, and continue/skip/abort | `exec`, aliases, merge-topology todo commands, and autosquash rewriting remain unavailable; interactive merge topology is rejected |
+| Merge | Partial | `m` transient: reviewed target selection, plain/no-commit/squash/preview, `--ff-only`/`--no-ff`, typed strategy/signing options, and stale-safe reviewed conflict continue/abort | Editor-backed merge messages, absorb/dissolve |
+| Rebase | Partial | `r` transient: reviewed non-interactive current-branch rebase, upstream/push-remote targets, typed keep-empty/rebase-merges/update-refs/autostash/force/strategy/signoff options, and terminal-native reviewed interactive todo editing (`pick`/`reword`/`edit`/`squash`/`fixup`/`drop`) with active edits and continue/skip/abort | `exec`, aliases, merge-topology todo commands, and autosquash rewriting remain unavailable; interactive merge topology is rejected |
 | Cherry-pick/revert | Partial | `A`/`a` and `V`/`v`: reviewed resolved commits with mainline/strategy/signoff, non-editor apply, and reviewed continue/skip/abort | Multi-commit selection and editor-backed message editing |
 | Reset | Partial | `x` quick mixed reset and `X` transient: reviewed mixed/soft/hard/keep/index/worktree/file reset with stale-state rejection | Magit's context-sensitive defaults and revision browser |
 | Bisect | Partial | `B` transient: reviewed start/good/bad/mark/skip/reset plus typed `--no-checkout` and `--first-parent` start options | `bisect run` stays unavailable because arbitrary command execution is unsafe; custom terms are not exposed |
@@ -50,4 +50,4 @@ not.
 6. Keep destructive edge cases as mandatory regression tests before marking a
    row exact.
 
-The next core parity milestone is practical conflict and history-editing workflows, followed by richer multi-selection patch operations. These provide more Magit value than adding rarely used top-level commands out of order.
+The next core parity milestone is richer history editing and multi-selection patch operations. These provide more Magit value than adding rarely used top-level commands out of order.

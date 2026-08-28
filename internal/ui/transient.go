@@ -238,7 +238,7 @@ func keymapDisplayFor(sequence []string) string {
 
 func (m *Model) bindingCondition(binding keymap.Binding) (bool, string) {
 	if binding.Transient == "magit-git-mergetool" && binding.UpstreamCommand == "magit-git-mergetool" && m.repo != nil && !hasUnmergedInspectionPath(m) {
-		return false, "requires unresolved paths; terminal view does not launch external mergetools"
+		return false, "requires unresolved paths; terminal resolver never launches external mergetools"
 	}
 	if binding.Transient == "magit-status-jump" {
 		if target := statusJumpSections[binding.UpstreamCommand]; target != "" && m.tree.Section(target) == nil {

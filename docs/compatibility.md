@@ -54,16 +54,6 @@ write push-remote configuration before pushing; a successful
 or cancelled push leaves no new branch remote configuration. Detached, unborn, and Git command
 failures remain backend errors and are shown through the process pane.
 
-Magit's Emacs APIs, package extensions, complete conflict resolution, submodule
-management, worktree management, forge integration, and every transient option
-are not yet exact-compatible. The history transients provide reviewed merge,
-non-interactive rebase, cherry-pick/revert, reset, and bisect paths; revisions
-are resolved to object IDs and execution rejects stale repository state.
-Interactive rebase has a terminal-native multiline todo editor with reviewed,
-revision-bound pick/reword/edit/squash/fixup/drop instructions and active
-rebase todo editing plus continue/skip/abort. It never invokes `$EDITOR` or a
-user shell: a sealed lazymagit callback installs the reviewed todo. `exec`,
-merge-topology commands, aliases, and autosquash rewriting remain unavailable.
-`bisect run` likewise remains unavailable rather than accepting arbitrary
-command execution. Unsafe discard of mixed staged and
-unstaged content is intentionally rejected.
+Magit's Emacs APIs, package extensions, submodule management, worktree management, forge integration, and every transient option are not yet exact-compatible. For an unresolved path, `e` renders bounded base/ours/theirs index blobs and `E t m` provides a reviewed, stale-safe terminal-native ours/theirs checkout followed by staging that exact path. This deliberately never launches an external mergetool, editor, or shell. Base remains inspect-only: stock Git has no base checkout mode, so the UI does not pretend otherwise. Merge continuation is reviewed against the prepared index tree; rebase, cherry-pick, and revert continue/abort controls use their reviewed sequencer state.
+
+The history transients provide reviewed merge, non-interactive rebase, cherry-pick/revert, reset, and bisect paths; revisions are resolved to object IDs and execution rejects stale repository state. Interactive rebase has a terminal-native multiline todo editor with reviewed, revision-bound pick/reword/edit/squash/fixup/drop instructions and active rebase todo editing plus continue/skip/abort. It never invokes `$EDITOR` or a user shell: a sealed lazymagit callback installs the reviewed todo. `exec`, merge-topology commands, aliases, and autosquash rewriting remain unavailable. `bisect run` likewise remains unavailable rather than accepting arbitrary command execution. Unsafe discard of mixed staged and unstaged content is intentionally rejected.

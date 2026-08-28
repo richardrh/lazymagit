@@ -94,7 +94,7 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("s"))
 	sendE2EKey(t, m, keyMsg("m"))
 	sendE2EKey(t, m, keyMsg("m"))
-	submitWorkflowByKeys(t, m, false)
+	submitWorkflowByKeys(t, m, true)
 	if status := local.git("status", "--porcelain"); status != "" {
 		t.Fatalf("continue left worktree changes: %s", status)
 	}

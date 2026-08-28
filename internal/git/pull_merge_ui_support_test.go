@@ -40,6 +40,41 @@ func TestReviewedMergeExecutesAndRejectsHeadOrConfigChanges(t *testing.T) {
 	}
 }
 
+func TestReviewedMergeContinueBindsPreparedResolution(t *testing.T) {
+	ctx := context.Background()
+	r, repo := conflictedRepository(t)
+
+	r.write("conflict.txt", "resolved one\n")
+	r.git("add", "--", "conflict.txt")
+	reviewed, err := repo.ReviewMergeContinue(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.write("conflict.txt", "resolved two\n")
+	r.git("add", "--", "conflict.txt")
+	if err := repo.ExecuteReviewedMergeContinue(ctx, reviewed); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("index-stale continue error = %v, want ErrStalePlan", err)
+	}
+	reviewed, err = repo.ReviewMergeContinue(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.git("config", "merge.stat", "false")
+	if err := repo.ExecuteReviewedMergeContinue(ctx, reviewed); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("config-stale continue error = %v, want ErrStalePlan", err)
+	}
+	reviewed, err = repo.ReviewMergeContinue(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedMergeContinue(ctx, reviewed); err != nil {
+		t.Fatalf("continue reviewed merge: %v", err)
+	}
+	if got := r.git("status", "--porcelain"); got != "" {
+		t.Fatalf("status after continue = %q", got)
+	}
+}
+
 func TestReviewedMergeAbortIsDestructiveAndStaleSafe(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)

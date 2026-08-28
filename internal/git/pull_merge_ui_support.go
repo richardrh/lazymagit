@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const mergeReviewConfigLimit = 1 << 20
@@ -61,6 +62,52 @@ type ReviewedMergeAbort struct {
 	HeadOID    string
 	MergeHeads []string
 	Config     []byte
+}
+
+// ReviewedMergeContinue binds the final merge commit to the exact prepared
+// index tree, merge heads, HEAD, and effective configuration shown at review.
+// Unlike a plain `commit`, it cannot silently commit a different resolution.
+type ReviewedMergeContinue struct {
+	HeadOID    string
+	MergeHeads []string
+	IndexTree  string
+	Config     []byte
+}
+
+func (r *Repository) ReviewMergeContinue(ctx context.Context) (ReviewedMergeContinue, error) {
+	state, err := r.MergeState(ctx)
+	if err != nil {
+		return ReviewedMergeContinue{}, err
+	}
+	if !state.InProgress {
+		return ReviewedMergeContinue{}, errors.New("no merge is in progress")
+	}
+	if len(state.Conflicts) != 0 {
+		return ReviewedMergeContinue{}, fmt.Errorf("cannot continue merge with unresolved conflicts: %s", strings.Join(state.Conflicts, ", "))
+	}
+	head, config, err := r.mergeReviewIdentity(ctx)
+	if err != nil {
+		return ReviewedMergeContinue{}, err
+	}
+	tree, err := r.output(ctx, "write-tree")
+	if err != nil {
+		return ReviewedMergeContinue{}, fmt.Errorf("snapshot merge index: %w", err)
+	}
+	return ReviewedMergeContinue{HeadOID: head, MergeHeads: append([]string(nil), state.Heads...), IndexTree: trimLine(tree), Config: config}, nil
+}
+
+func (r *Repository) ExecuteReviewedMergeContinue(ctx context.Context, reviewed ReviewedMergeContinue) error {
+	if reviewed.HeadOID == "" || reviewed.IndexTree == "" || len(reviewed.MergeHeads) == 0 {
+		return ErrStalePlan
+	}
+	current, err := r.ReviewMergeContinue(ctx)
+	if err != nil {
+		return err
+	}
+	if current.HeadOID != reviewed.HeadOID || current.IndexTree != reviewed.IndexTree || !sameStrings(current.MergeHeads, reviewed.MergeHeads) || !bytes.Equal(current.Config, reviewed.Config) {
+		return ErrStalePlan
+	}
+	return r.ContinueMerge(ctx)
 }
 
 func (r *Repository) ReviewMergeAbort(ctx context.Context) (ReviewedMergeAbort, error) {

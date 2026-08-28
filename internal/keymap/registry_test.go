@@ -163,6 +163,19 @@ func TestPortableNavigationBindingsAreClassifiedAndKeepSchemeCollisions(t *testi
 	}
 }
 
+func TestMergetoolConflictResolverIsExplicitlyAdapted(t *testing.T) {
+	for _, binding := range Registry() {
+		if binding.Transient != "magit-git-mergetool" || binding.UpstreamCommand != "magit-git-mergetool" || binding.Kind != KindSuffix {
+			continue
+		}
+		if binding.Handler != HandlerExecute || binding.Parity != ParityAdapted {
+			t.Fatalf("mergetool resolver = %+v, want adapted executable workflow", binding)
+		}
+		return
+	}
+	t.Fatal("nested mergetool resolver is absent from registry")
+}
+
 func TestCompactStatusJumpSuffixesAreTerminalKeySequences(t *testing.T) {
 	for key, want := range map[string][]string{"fp": {"f", "p"}, "fu": {"f", "u"}, "pp": {"p", "p"}, "pu": {"p", "u"}} {
 		var found bool

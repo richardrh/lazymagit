@@ -288,15 +288,22 @@ func mergeContinueWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 }
 
 func continueMergeDialog(repo *gitbackend.Repository) WorkflowDialog {
-	return WorkflowDialog{Title: "Continue merge", Confirmation: "Commit the resolved merge using the existing message", Operation: "continue merge", Submit: func(ctx context.Context, _ WorkflowValues) error {
-		state, err := repo.MergeState(ctx)
+	return WorkflowDialog{Title: "Continue merge", Operation: "continue merge", ReviewPreflight: func(ctx context.Context, _ WorkflowValues) (WorkflowReview, error) {
+		reviewed, err := repo.ReviewMergeContinue(ctx)
 		if err != nil {
-			return err
+			return WorkflowReview{}, err
 		}
-		if len(state.Conflicts) != 0 {
-			return fmt.Errorf("cannot continue merge with unresolved conflicts: %s", strings.Join(state.Conflicts, ", "))
+		return WorkflowReview{Plan: []string{
+			"Commit the resolved merge using the existing message",
+			"Merge heads: " + strings.Join(reviewed.MergeHeads, ", "),
+			"Prepared index tree: " + reviewed.IndexTree,
+		}, Confirmation: "Press Enter again only if the reviewed resolution is unchanged", Data: reviewed}, nil
+	}, SubmitReview: func(ctx context.Context, _ WorkflowValues, transported WorkflowReview) error {
+		reviewed, ok := transported.Data.(gitbackend.ReviewedMergeContinue)
+		if !ok {
+			return errors.New("merge continue review is invalid")
 		}
-		return repo.ContinueMerge(ctx)
+		return repo.ExecuteReviewedMergeContinue(ctx, reviewed)
 	}}
 }
 

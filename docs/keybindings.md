@@ -425,7 +425,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-b` | `magit-mergetool.keepBackup` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-k` | `magit-mergetool.keepTemporaries` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-w` | `magit-mergetool.writeToTemp` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
-| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `adapted` | TUI workflow handler (startup-validated) |
 
 ### `i` — magit-gitignore (8 occurrences)
 
