@@ -27,6 +27,9 @@ const (
 	DiffIndex
 	DiffRevision
 	DiffRevisionRange
+	// DiffConflicts renders Git's combined diff for unresolved paths. It is a
+	// read-only terminal alternative to launching an external mergetool.
+	DiffConflicts
 )
 
 type DiffAlgorithm uint8
@@ -141,6 +144,11 @@ func (r *Repository) QueryDiff(ctx context.Context, q DiffQuery) (DiffResult, er
 			separator = "..."
 		}
 		args = append(args, base+separator+target)
+	case DiffConflicts:
+		if q.Base != "" || q.Target != "" || q.TripleDot {
+			return DiffResult{}, errors.New("conflict diff does not accept revisions")
+		}
+		args = append(args, "--cc")
 	default:
 		return DiffResult{}, errors.New("unknown diff kind")
 	}

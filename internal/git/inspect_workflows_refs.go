@@ -28,12 +28,48 @@ type Ref struct {
 	Current              bool
 }
 
+type RefSort uint8
+
+const (
+	RefSortName RefSort = iota
+	RefSortNameReverse
+	RefSortVersionName
+	RefSortVersionNameReverse
+	RefSortCreatorDate
+	RefSortCreatorDateReverse
+	RefSortAuthorDate
+	RefSortAuthorDateReverse
+	RefSortCommitterDate
+	RefSortCommitterDateReverse
+	RefSortTaggerDate
+	RefSortTaggerDateReverse
+	RefSortObjectType
+	RefSortObjectTypeReverse
+	RefSortSubject
+	RefSortSubjectReverse
+)
+
+func (s RefSort) gitOption() (string, error) {
+	options := [...]string{
+		"refname", "-refname", "version:refname", "-version:refname",
+		"creatordate", "-creatordate", "authordate", "-authordate",
+		"committerdate", "-committerdate", "taggerdate", "-taggerdate",
+		"objecttype", "-objecttype", "subject", "-subject",
+	}
+	if int(s) < 0 || int(s) >= len(options) {
+		return "", errors.New("unknown ref sort")
+	}
+	return options[s], nil
+}
+
 type RefQuery struct {
 	// Focus accepts a revision and defaults to the current HEAD. Ahead/Behind
 	// compare it with its upstream, when Focus names a local branch.
 	Focus       string
+	Contains    string
 	MergedTo    string
 	NoMergedTo  string
+	Sort        RefSort
 	Limit       int
 	OutputLimit int
 }
@@ -64,8 +100,19 @@ func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, erro
 	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
 		return RefResult{}, fmt.Errorf("ref output limit must be between 0 and %d", inspectionOutputLimit)
 	}
+	sort, err := q.Sort.gitOption()
+	if err != nil {
+		return RefResult{}, err
+	}
 	format := "%00%(HEAD)%00%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(push:short)%00%(symref)%00%(subject)%00"
-	args := []string{"for-each-ref", "--count=" + strconv.Itoa(limit+1), "--sort=refname", "--format=" + format}
+	args := []string{"for-each-ref", "--count=" + strconv.Itoa(limit+1), "--sort=" + sort, "--format=" + format}
+	if q.Contains != "" {
+		oid, resolveErr := r.resolveCommitOID(ctx, q.Contains)
+		if resolveErr != nil {
+			return RefResult{}, resolveErr
+		}
+		args = append(args, "--contains="+oid)
+	}
 	if q.MergedTo != "" {
 		oid, resolveErr := r.resolveCommitOID(ctx, q.MergedTo)
 		if resolveErr != nil {

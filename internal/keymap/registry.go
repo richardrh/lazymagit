@@ -394,6 +394,12 @@ func classifyTop(b *Binding, transientNames map[string]bool) {
 		}
 		return
 	}
+	if b.UpstreamCommand == "magit-ediff-dwim" {
+		// Ediff is adapted by the UI to a read-only unified terminal comparison;
+		// the external split-window editor is never launched.
+		b.Command, b.Handler, b.Availability, b.Parity = CommandID("inspection.ediff-dwim"), HandlerExecute, AvailabilityAlways, ParityAdapted
+		return
+	}
 	if b.UpstreamCommand == "magit-dispatch" {
 		b.Command, b.Handler, b.Availability, b.Parity = CommandOpenDispatcher, HandlerExecute, AvailabilityAlways, ParityPartial
 		return
@@ -620,11 +626,16 @@ func TransientByName(name string) (Transient, bool) {
 var transientCapability = map[string]map[string]bool{
 	"magit-branch":        setOf("magit-checkout", "magit-branch-checkout", "magit-branch-orphan", "magit-branch-and-checkout", "magit-worktree-checkout", "magit-branch-create", "magit-worktree-branch", "magit-branch-configure", "magit-branch-rename", "magit-branch-reset", "magit-branch-delete"),
 	"magit-commit":        setOf("magit-commit-create", "magit-commit-extend", "magit-commit-amend", "magit-commit-reword", "magit-commit-fixup", "magit-commit-squash", "magit-commit-alter", "magit-commit-augment", "magit-commit-revise"),
-	"magit-diff":          setOf("magit-stash-show"),
+	"magit-diff":          setOf("magit-diff-dwim", "magit-diff-range", "magit-diff-paths", "magit-diff-unstaged", "magit-diff-staged", "magit-diff-working-tree", "magit-show-commit", "magit-stash-show"),
 	"magit-fetch":         setOf("magit-fetch-from-pushremote", "magit-fetch-from-upstream", "magit-fetch-other", "magit-fetch-all", "magit-fetch-branch", "magit-fetch-refspec", "magit-fetch-modules", "magit-branch-configure"),
 	"magit-fetch-modules": setOf("magit-fetch-modules"),
 	"magit-diff-refresh":  setOf("magit-diff-refresh"),
+	"magit-ediff":         setOf("magit-ediff-dwim", "magit-ediff-show-unstaged", "magit-ediff-show-staged", "magit-ediff-show-working-tree", "magit-ediff-show-commit", "magit-ediff-compare", "magit-ediff-show-stash"),
+	"magit-git-mergetool": setOf("magit-git-mergetool"),
+	"magit-log":           setOf("magit-log-current", "magit-log-other", "magit-log-head", "magit-log-related", "magit-log-branches", "magit-log-all-branches", "magit-log-all", "magit-log-reflog", "magit-log-matching-branches", "magit-log-matching-tags", "magit-reflog-current", "magit-reflog-other", "magit-reflog-head"),
 	"magit-log-refresh":   setOf("magit-log-refresh"),
+	"magit-shortlog":      setOf("magit-shortlog-since", "magit-shortlog-range"),
+	"magit-show-refs":     setOf("magit-show-refs-head", "magit-show-refs-current", "magit-show-refs-other"),
 	"magit-patch-apply":   setOf("magit-patch-apply"),
 	"magit-patch-create":  setOf("magit-patch-create"),
 	"magit-push":          setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),

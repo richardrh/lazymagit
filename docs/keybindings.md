@@ -41,7 +41,7 @@ Generated from the vendored manifest for Magit 4.7.0 (`v4.7.0`, `67f203853e74e92
 | 35 | `C` | `C` | `magit-clone` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:368 (magit-mode-map)` | `partial` | registered transient |
 | 36 | `d` | `d` | `magit-diff` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:370 (magit-mode-map)` | `partial` | registered transient |
 | 37 | `D` | `D` | `magit-diff-refresh` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:370 (magit-mode-map)` | `partial` | registered transient |
-| 38 | `e` | `e` | `magit-ediff-dwim` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:372 (magit-mode-map)` | `missing` | not implemented |
+| 38 | `e` | `e` | `magit-ediff-dwim` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:372 (magit-mode-map)` | `adapted` | registered handler |
 | 39 | `E` | `E` | `magit-ediff` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:372 (magit-mode-map)` | `partial` | registered transient |
 | 40 | `f` | `f` | `magit-fetch` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:374 (magit-mode-map)` | `partial` | registered transient |
 | 41 | `F` | `F` | `magit-pull` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:374 (magit-mode-map)` | `partial` | registered transient |
@@ -294,13 +294,13 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `d` | `magit-diff-dwim` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `r` | `magit-diff-range` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `p` | `magit-diff-paths` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `u` | `magit-diff-unstaged` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `s` | `magit-diff-staged` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `w` | `magit-diff-working-tree` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `c` | `magit-show-commit` | **suffix** | Actions |  | `missing` | suffix: not implemented |
+| `d` | `magit-diff-dwim` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `r` | `magit-diff-range` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `p` | `magit-diff-paths` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `u` | `magit-diff-unstaged` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-diff-staged` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `w` | `magit-diff-working-tree` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `c` | `magit-show-commit` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 | `t` | `magit-stash-show` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `D` — magit-diff-refresh (9 occurrences)
@@ -377,17 +377,17 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `E` | `magit-ediff-dwim` | **suffix** | Ediff |  | `missing` | suffix: not implemented |
+| `E` | `magit-ediff-dwim` | **suffix** | Ediff |  | `partial` | TUI workflow handler (startup-validated) |
 | `s` | `magit-ediff-stage` | **suffix** | Ediff | inapt-if-not: magit-anything-modified-p | `missing` | suffix: not implemented |
 | `m` | `magit-ediff-resolve-rest` | **suffix** | Ediff | inapt-if-not: magit-anything-unmerged-p | `missing` | suffix: not implemented |
 | `M` | `magit-ediff-resolve-all` | **suffix** | Ediff | inapt-if-not: magit-anything-unmerged-p | `missing` | suffix: not implemented |
 | `t` | `magit-git-mergetool` | **suffix** | Ediff |  | `partial` |  |
-| `u` | `magit-ediff-show-unstaged` | **suffix** | Ediff | inapt-if-not: magit-anything-unstaged-p | `missing` | suffix: not implemented |
-| `i` | `magit-ediff-show-staged` | **suffix** | Ediff | inapt-if-not: magit-anything-staged-p | `missing` | suffix: not implemented |
-| `w` | `magit-ediff-show-working-tree` | **suffix** | Ediff | inapt-if-not: magit-anything-modified-p | `missing` | suffix: not implemented |
-| `c` | `magit-ediff-show-commit` | **suffix** | Ediff |  | `missing` | suffix: not implemented |
-| `r` | `magit-ediff-compare` | **suffix** | Ediff |  | `missing` | suffix: not implemented |
-| `z` | `magit-ediff-show-stash` | **suffix** | Ediff | inapt-if-not: magit-list-stashes | `missing` | suffix: not implemented |
+| `u` | `magit-ediff-show-unstaged` | **suffix** | Ediff | inapt-if-not: magit-anything-unstaged-p | `partial` | TUI workflow handler (startup-validated) |
+| `i` | `magit-ediff-show-staged` | **suffix** | Ediff | inapt-if-not: magit-anything-staged-p | `partial` | TUI workflow handler (startup-validated) |
+| `w` | `magit-ediff-show-working-tree` | **suffix** | Ediff | inapt-if-not: magit-anything-modified-p | `partial` | TUI workflow handler (startup-validated) |
+| `c` | `magit-ediff-show-commit` | **suffix** | Ediff |  | `partial` | TUI workflow handler (startup-validated) |
+| `r` | `magit-ediff-compare` | **suffix** | Ediff |  | `partial` | TUI workflow handler (startup-validated) |
+| `z` | `magit-ediff-show-stash` | **suffix** | Ediff | inapt-if-not: magit-list-stashes | `partial` | TUI workflow handler (startup-validated) |
 
 ### `f` — magit-fetch (12 occurrences)
 
@@ -425,7 +425,7 @@ All manifest transients are generated from effective status bindings and transie
 | `-b` | `magit-mergetool.keepBackup` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-k` | `magit-mergetool.keepTemporaries` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
 | `-w` | `magit-mergetool.writeToTemp` | **infix** | Settings |  | `missing` | infix: argument editing is not implemented |
-| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `missing` | suffix: not implemented |
+| ` m` | `magit-git-mergetool` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `i` — magit-gitignore (8 occurrences)
 
@@ -444,20 +444,20 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `l` | `magit-log-current` | **suffix** | Log |  | `missing` | suffix: not implemented |
-| `o` | `magit-log-other` | **suffix** | Log |  | `missing` | suffix: not implemented |
-| `h` | `magit-log-head` | **suffix** | Log |  | `missing` | suffix: not implemented |
-| `u` | `magit-log-related` | **suffix** | Log |  | `missing` | suffix: not implemented |
-| `L` | `magit-log-branches` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `b` | `magit-log-all-branches` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `a` | `magit-log-all` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `R` | `magit-log-reflog` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `B` | `magit-log-matching-branches` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `T` | `magit-log-matching-tags` | **suffix** |  |  | `missing` | suffix: not implemented |
+| `l` | `magit-log-current` | **suffix** | Log |  | `partial` | TUI workflow handler (startup-validated) |
+| `o` | `magit-log-other` | **suffix** | Log |  | `partial` | TUI workflow handler (startup-validated) |
+| `h` | `magit-log-head` | **suffix** | Log |  | `partial` | TUI workflow handler (startup-validated) |
+| `u` | `magit-log-related` | **suffix** | Log |  | `partial` | TUI workflow handler (startup-validated) |
+| `L` | `magit-log-branches` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
+| `b` | `magit-log-all-branches` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
+| `a` | `magit-log-all` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
+| `R` | `magit-log-reflog` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
+| `B` | `magit-log-matching-branches` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
+| `T` | `magit-log-matching-tags` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
 | `m` | `magit-log-merged` | **suffix** |  |  | `missing` | suffix: not implemented |
-| `r` | `magit-reflog-current` | **suffix** | Reflog |  | `missing` | suffix: not implemented |
-| `O` | `magit-reflog-other` | **suffix** | Reflog |  | `missing` | suffix: not implemented |
-| `H` | `magit-reflog-head` | **suffix** | Reflog |  | `missing` | suffix: not implemented |
+| `r` | `magit-reflog-current` | **suffix** | Reflog |  | `partial` | TUI workflow handler (startup-validated) |
+| `O` | `magit-reflog-other` | **suffix** | Reflog |  | `partial` | TUI workflow handler (startup-validated) |
+| `H` | `magit-reflog-head` | **suffix** | Reflog |  | `partial` | TUI workflow handler (startup-validated) |
 | `i` | `magit-wip-log-index` | **suffix** | Wiplog | if-non-nil: magit-wip-mode | `missing` | suffix: not implemented |
 | `w` | `magit-wip-log-worktree` | **suffix** | Wiplog | if-non-nil: magit-wip-mode | `missing` | suffix: not implemented |
 | `s` | `magit-shortlog` | **suffix** | Other |  | `partial` |  |
@@ -731,8 +731,8 @@ All manifest transients are generated from effective status bindings and transie
 | `-g` | `transient:magit-shortlog:--group=` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-f` | `transient:magit-shortlog:--format=` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-w` | `transient:magit-shortlog:-w` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `s` | `magit-shortlog-since` | **suffix** | Shortlog |  | `missing` | suffix: not implemented |
-| `r` | `magit-shortlog-range` | **suffix** | Shortlog |  | `missing` | suffix: not implemented |
+| `s` | `magit-shortlog-since` | **suffix** | Shortlog |  | `partial` | TUI workflow handler (startup-validated) |
+| `r` | `magit-shortlog-range` | **suffix** | Shortlog |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `y` — magit-show-refs (10 occurrences)
 
@@ -744,9 +744,9 @@ All manifest transients are generated from effective status bindings and transie
 | `-N` | `transient:magit-show-refs:--no-merged=` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-n` | `transient:magit-show-refs:--no-merged` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
 | `-s` | `magit-for-each-ref:--sort` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
-| `y` | `magit-show-refs-head` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `c` | `magit-show-refs-current` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `o` | `magit-show-refs-other` | **suffix** | Actions |  | `missing` | suffix: not implemented |
+| `y` | `magit-show-refs-head` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `c` | `magit-show-refs-current` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
+| `o` | `magit-show-refs-other` | **suffix** | Actions |  | `partial` | TUI workflow handler (startup-validated) |
 | `r` | `magit-refs-set-show-commit-count` | **suffix** | Actions | if-derived: magit-refs-mode | `missing` | suffix: not implemented |
 
 ### `>` — magit-sparse-checkout (6 occurrences)

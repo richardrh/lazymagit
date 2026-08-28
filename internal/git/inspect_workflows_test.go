@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -157,6 +158,17 @@ func TestInspectionReflogShortlogAndMergedRefs(t *testing.T) {
 		t.Fatal("option-like shortlog revision was accepted")
 	}
 
+	contained, err := repo.QueryRefs(ctx, RefQuery{Focus: "main", Contains: "main", Sort: RefSortNameReverse})
+	if err != nil || !refResultHasName(contained, "main") || refResultHasName(contained, "merged") || refResultHasName(contained, "unmerged") {
+		t.Fatalf("contained refs = %#v, %v", contained, err)
+	}
+	if _, err := repo.QueryRefs(ctx, RefQuery{Contains: "--all"}); err == nil {
+		t.Fatal("option-like contains revision was accepted")
+	}
+	if _, err := repo.QueryRefs(ctx, RefQuery{Sort: RefSort(99)}); err == nil {
+		t.Fatal("unknown ref sort was accepted")
+	}
+
 	merged, err := repo.QueryRefs(ctx, RefQuery{Focus: "main", MergedTo: "main"})
 	if err != nil {
 		t.Fatal(err)
@@ -170,6 +182,35 @@ func TestInspectionReflogShortlogAndMergedRefs(t *testing.T) {
 	}
 	if !refResultHasName(notMerged, "unmerged") || refResultHasName(notMerged, "merged") {
 		t.Fatalf("not-merged refs = %#v", notMerged)
+	}
+}
+
+func TestInspectionConflictDiffIsReadOnlyAndRevisionFree(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("conflict.txt", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("conflict.txt", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("conflict.txt", "main\n")
+	r.commitAll("main")
+	cmd := exec.Command("git", "-C", r.dir, "merge", "topic")
+	if out, err := cmd.CombinedOutput(); err == nil {
+		t.Fatalf("merge unexpectedly succeeded: %s", out)
+	}
+	repo, _ := Discover(r.dir)
+
+	result, err := repo.QueryDiff(ctx, DiffQuery{Kind: DiffConflicts, Files: []string{"conflict.txt"}})
+	if err != nil || !strings.Contains(result.Detail, "diff --cc conflict.txt") {
+		t.Fatalf("conflict diff = %#v, %v", result, err)
+	}
+	if _, err := repo.QueryDiff(ctx, DiffQuery{Kind: DiffConflicts, Base: "HEAD"}); err == nil {
+		t.Fatal("conflict diff accepted a revision")
+	}
+	if got := r.git("ls-files", "-u", "--", "conflict.txt"); got == "" {
+		t.Fatal("conflict inspection changed the index")
 	}
 }
 

@@ -52,6 +52,21 @@ func TestInspectShortlogOptionsMapToTypedQuery(t *testing.T) {
 	}
 }
 
+func TestInspectRefOptionsMapToClosedTypedQuery(t *testing.T) {
+	command := WorkflowCommand{Options: map[keymap.CommandID]OptionValue{
+		inspectOptionID(t, "magit-for-each-ref:--contains"): {Value: "HEAD"},
+		inspectOptionID(t, "magit-for-each-ref:--sort"):     {Value: "--sort=-subject"},
+	}}
+	query, err := refQueryFromCommand(command, "HEAD")
+	if err != nil || query.Contains != "HEAD" || query.Sort != gitbackend.RefSortSubjectReverse {
+		t.Fatalf("mapped refs query = %+v, %v", query, err)
+	}
+	command.Options[inspectOptionID(t, "magit-for-each-ref:--sort")] = OptionValue{Value: "%(refname)"}
+	if _, err := refQueryFromCommand(command, "HEAD"); err == nil {
+		t.Fatal("refs accepted an arbitrary Git sort atom")
+	}
+}
+
 func TestInspectionRegistrationCoversSafeExpandedOccurrences(t *testing.T) {
 	m := New(nil)
 	for _, binding := range keymap.Registry() {
@@ -64,11 +79,27 @@ func TestInspectionRegistrationCoversSafeExpandedOccurrences(t *testing.T) {
 	}
 }
 
+func TestInspectionMergetoolIsOnlyConnectedInsideItsTerminalSafeTransient(t *testing.T) {
+	m := New(nil)
+	for _, binding := range keymap.Registry() {
+		if binding.UpstreamCommand != "magit-git-mergetool" || binding.Kind != keymap.KindSuffix {
+			continue
+		}
+		_, installed := m.workflowHandlers[binding.Command]
+		if binding.Transient == "magit-git-mergetool" && !installed {
+			t.Errorf("nested mergetool action is not connected")
+		}
+		if binding.Transient != "magit-git-mergetool" && installed {
+			t.Errorf("external mergetool route %s was connected", binding.Transient)
+		}
+	}
+}
+
 func TestInspectionUnsupportedEmacsBufferAndMutationOperations(t *testing.T) {
 	for _, upstream := range []string{
 		"transient-save-and-exit", "magit-toggle-buffer-lock", "magit-toggle-margin",
 		"magit-diff-toggle-refine-hunk", "magit-ediff-stage", "magit-ediff-resolve-all",
-		"magit-git-mergetool", "magit-wip-log-index", "magit-wip-log-worktree", "magit-log-merged",
+		"magit-wip-log-index", "magit-wip-log-worktree", "magit-log-merged",
 	} {
 		if inspectSuffixes[upstream] != nil {
 			t.Errorf("unsupported operation %s was connected", upstream)

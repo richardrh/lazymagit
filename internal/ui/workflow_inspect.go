@@ -88,6 +88,10 @@ func init() {
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := make(map[keymap.CommandID]WorkflowHandler)
 		for _, binding := range keymap.Registry() {
+			if binding.Transient == "magit-git-mergetool" && binding.Kind == keymap.KindSuffix && binding.UpstreamCommand == "magit-git-mergetool" {
+				handlers[binding.Command] = inspectMergetool
+				continue
+			}
 			handler := inspectSuffixes[binding.UpstreamCommand]
 			// The recursively vendored dispatcher repeats top-level commands.
 			// Give those occurrences the same safe behavior rather than only
@@ -101,14 +105,32 @@ func init() {
 		}
 		return handlers
 	})
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-diff", map[string][]string{
+		"magit-diff-dwim": {}, "magit-diff-range": {}, "magit-diff-paths": {},
+		"magit-diff-unstaged": {}, "magit-diff-staged": {}, "magit-diff-working-tree": {}, "magit-show-commit": {},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-ediff", map[string][]string{
+		"magit-ediff-dwim": {}, "magit-ediff-show-unstaged": {}, "magit-ediff-show-staged": {},
+		"magit-ediff-show-working-tree": {}, "magit-ediff-show-commit": {}, "magit-ediff-compare": {}, "magit-ediff-show-stash": {},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-git-mergetool", map[string][]string{
+		"magit-git-mergetool": {},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-log", map[string][]string{
+		"magit-log-current": {}, "magit-log-other": {}, "magit-log-head": {}, "magit-log-related": {},
+		"magit-log-branches": {}, "magit-log-all-branches": {}, "magit-log-all": {}, "magit-log-reflog": {},
+		"magit-log-matching-branches": {}, "magit-log-matching-tags": {},
+		"magit-reflog-current": {}, "magit-reflog-other": {}, "magit-reflog-head": {},
+	})...)
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-shortlog", map[string][]string{
 		"magit-shortlog-since": {"transient:magit-shortlog:--numbered", "transient:magit-shortlog:--summary", "transient:magit-shortlog:--email", "transient:magit-shortlog:--group=", "transient:magit-shortlog:--format=", "transient:magit-shortlog:-w"},
 		"magit-shortlog-range": {"transient:magit-shortlog:--numbered", "transient:magit-shortlog:--summary", "transient:magit-shortlog:--email", "transient:magit-shortlog:--group=", "transient:magit-shortlog:--format=", "transient:magit-shortlog:-w"},
 	})...)
+	refOptions := []string{"magit-for-each-ref:--contains", "transient:magit-show-refs:--merged=", "transient:magit-show-refs:--merged", "transient:magit-show-refs:--no-merged=", "transient:magit-show-refs:--no-merged", "magit-for-each-ref:--sort"}
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-show-refs", map[string][]string{
-		"magit-show-refs-head":    {"transient:magit-show-refs:--merged=", "transient:magit-show-refs:--merged", "transient:magit-show-refs:--no-merged=", "transient:magit-show-refs:--no-merged"},
-		"magit-show-refs-current": {"transient:magit-show-refs:--merged=", "transient:magit-show-refs:--merged", "transient:magit-show-refs:--no-merged=", "transient:magit-show-refs:--no-merged"},
-		"magit-show-refs-other":   {"transient:magit-show-refs:--merged=", "transient:magit-show-refs:--merged", "transient:magit-show-refs:--no-merged=", "transient:magit-show-refs:--no-merged"},
+		"magit-show-refs-head":    refOptions,
+		"magit-show-refs-current": refOptions,
+		"magit-show-refs-other":   refOptions,
 	})...)
 	// Log-refresh options are consumed by its connected read-only suffixes. Keep
 	// this declaration occurrence-aware so the central transient validator can
@@ -280,6 +302,27 @@ func inspectCompareStash(m *Model, command WorkflowCommand) tea.Cmd {
 }
 func inspectCompareRange(m *Model, command WorkflowCommand) tea.Cmd {
 	return inspectDiffRange(m, command)
+}
+
+func hasUnmergedInspectionPath(m *Model) bool {
+	for _, file := range m.snapshot.status.Files {
+		if file.Staged == gitbackend.ChangeUnmerged || file.Unstaged == gitbackend.ChangeUnmerged {
+			return true
+		}
+	}
+	return false
+}
+
+// inspectMergetool intentionally does not invoke `git mergetool`: that command
+// launches an ambient, potentially graphical program and can modify the index.
+// A combined diff is useful in a terminal while preserving the user's conflict
+// state for an explicit resolver outside this UI.
+func inspectMergetool(m *Model, _ WorkflowCommand) tea.Cmd {
+	if !hasUnmergedInspectionPath(m) {
+		m.setError(errors.New("terminal conflict inspection requires unresolved paths"))
+		return nil
+	}
+	return runDiffInspection(m, "Terminal conflict inspection (read-only)", gitbackend.DiffQuery{Kind: gitbackend.DiffConflicts, Files: selectedInspectPath(m)})
 }
 
 func logQueryFromCommand(command WorkflowCommand) gitbackend.LogQuery {
@@ -592,6 +635,25 @@ func refsResultText(result gitbackend.RefResult) string {
 	return truncationNote(result.Truncated) + strings.Join(lines, "\n")
 }
 
+func refSortFromOption(value string) (gitbackend.RefSort, error) {
+	value = strings.TrimPrefix(strings.TrimSpace(value), "--sort=")
+	sorts := map[string]gitbackend.RefSort{
+		"refname": gitbackend.RefSortName, "-refname": gitbackend.RefSortNameReverse,
+		"version:refname": gitbackend.RefSortVersionName, "-version:refname": gitbackend.RefSortVersionNameReverse,
+		"creatordate": gitbackend.RefSortCreatorDate, "-creatordate": gitbackend.RefSortCreatorDateReverse,
+		"authordate": gitbackend.RefSortAuthorDate, "-authordate": gitbackend.RefSortAuthorDateReverse,
+		"committerdate": gitbackend.RefSortCommitterDate, "-committerdate": gitbackend.RefSortCommitterDateReverse,
+		"taggerdate": gitbackend.RefSortTaggerDate, "-taggerdate": gitbackend.RefSortTaggerDateReverse,
+		"objecttype": gitbackend.RefSortObjectType, "-objecttype": gitbackend.RefSortObjectTypeReverse,
+		"subject": gitbackend.RefSortSubject, "-subject": gitbackend.RefSortSubjectReverse,
+	}
+	sort, ok := sorts[value]
+	if !ok {
+		return gitbackend.RefSortName, fmt.Errorf("unsupported ref sort %q", value)
+	}
+	return sort, nil
+}
+
 func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQuery, error) {
 	query := gitbackend.RefQuery{Focus: focus, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
 	for _, binding := range keymap.BindingsForTransient(schemeID(schemeMagit), "magit-show-refs") {
@@ -600,6 +662,8 @@ func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQ
 			continue
 		}
 		switch binding.UpstreamCommand {
+		case "magit-for-each-ref:--contains":
+			query.Contains = value.Value
 		case "transient:magit-show-refs:--merged=":
 			query.MergedTo = value.Value
 		case "transient:magit-show-refs:--merged":
@@ -608,6 +672,12 @@ func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQ
 			query.NoMergedTo = value.Value
 		case "transient:magit-show-refs:--no-merged":
 			query.NoMergedTo = "HEAD"
+		case "magit-for-each-ref:--sort":
+			sort, err := refSortFromOption(value.Value)
+			if err != nil {
+				return query, err
+			}
+			query.Sort = sort
 		default:
 			return query, fmt.Errorf("unsupported refs option %s", binding.UpstreamCommand)
 		}

@@ -237,12 +237,24 @@ func keymapDisplayFor(sequence []string) string {
 }
 
 func (m *Model) bindingCondition(binding keymap.Binding) (bool, string) {
+	if binding.Transient == "magit-git-mergetool" && binding.UpstreamCommand == "magit-git-mergetool" && m.repo != nil && !hasUnmergedInspectionPath(m) {
+		return false, "requires unresolved paths; terminal view does not launch external mergetools"
+	}
 	if binding.Transient == "magit-status-jump" {
 		if target := statusJumpSections[binding.UpstreamCommand]; target != "" && m.tree.Section(target) == nil {
 			return false, "status section is not present"
 		}
 	}
 	for _, condition := range binding.Conditions {
+		if strings.Contains(condition, "magit-list-stashes") && len(m.snapshot.stashes) == 0 {
+			return false, "requires a stash entry"
+		}
+		if matched, active, reason := m.statusBindingCondition(condition); matched {
+			if !active {
+				return false, reason
+			}
+			continue
+		}
 		if matched, active, reason := m.operationBindingCondition(condition); matched {
 			if !active {
 				return false, reason
@@ -269,6 +281,40 @@ func (m *Model) bindingCondition(binding keymap.Binding) (bool, string) {
 		}
 	}
 	return true, ""
+}
+
+func (m *Model) statusBindingCondition(condition string) (matched, active bool, reason string) {
+	kind := ""
+	for _, candidate := range []string{"unmerged", "unstaged", "staged", "modified"} {
+		if strings.Contains(condition, "magit-anything-"+candidate+"-p") {
+			kind = candidate
+			break
+		}
+	}
+	if kind == "" {
+		return false, false, ""
+	}
+	for _, file := range m.snapshot.status.Files {
+		switch kind {
+		case "unmerged":
+			if file.Staged == gitbackend.ChangeUnmerged || file.Unstaged == gitbackend.ChangeUnmerged {
+				return true, true, ""
+			}
+		case "unstaged":
+			if file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked {
+				return true, true, ""
+			}
+		case "staged":
+			if file.Staged != gitbackend.ChangeNone {
+				return true, true, ""
+			}
+		case "modified":
+			if file.Staged != gitbackend.ChangeNone || file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked {
+				return true, true, ""
+			}
+		}
+	}
+	return true, false, "requires " + strings.ReplaceAll(kind, "unstaged", "unstaged changes")
 }
 
 func (m *Model) sparseCheckoutBindingCondition(condition string) (matched, active bool, reason string) {

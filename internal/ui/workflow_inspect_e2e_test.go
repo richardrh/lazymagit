@@ -119,6 +119,19 @@ func TestInspectReflogShortlogAndMergedRefsThroughModelUpdate(t *testing.T) {
 	assertInspectDetail(t, m, "References", "Local branches", "main")
 }
 
+func TestInspectRefsContainsAndSortOptionsThroughModelUpdate(t *testing.T) {
+	m := newInspectE2EModel(t)
+
+	// --contains and --sort are entered through the manifest transient, then
+	// executed through the same model/update path as the other inspection views.
+	sendInspectSequence(t, m, "y", "-", "c", "H", "E", "A", "D")
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	sendInspectSequence(t, m, "-", "s", "-", "s", "u", "b", "j", "e", "c", "t")
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	sendInspectSequence(t, m, "y")
+	assertInspectDetail(t, m, "References", "Local branches", "main")
+}
+
 func TestInspectLogRefreshPropagatesLimitOptionThroughModelUpdate(t *testing.T) {
 	m := newInspectE2EModel(t)
 	sendInspectSequence(t, m, "L", "-", "n", "1")
