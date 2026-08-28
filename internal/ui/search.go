@@ -9,6 +9,9 @@ import (
 )
 
 func (m *Model) handleStatusSearchKey(key, text string) bool {
+	if m.detailRangeStart >= 0 && m.detailRangeEnd >= 0 && (key == "n" || key == "N") {
+		return false
+	}
 	if !m.searching {
 		if key == "/" {
 			m.searching = true

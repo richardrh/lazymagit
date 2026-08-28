@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richard/lazymagit/internal/git"
+	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
 func TestStatusSearchFiltersHighlightsAndNavigates(t *testing.T) {
@@ -58,5 +59,62 @@ func TestCompactLayoutIsDenseAndPreservesDetail(t *testing.T) {
 	}
 	if width, height := ansi.StringWidth(strings.Split(body, "\n")[0]), strings.Count(body, "\n")+1; width != 120 || height != 20 {
 		t.Fatalf("compact dimensions = %dx%d, want 120x20", width, height)
+	}
+}
+
+func TestStatusSearchDoesNotStealPatchRangeKeys(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.install(snapshot{
+		status: gitbackend.Status{Files: []gitbackend.FileStatus{
+			{Path: "alpha.txt", Unstaged: gitbackend.ChangeModified},
+			{Path: "omega.txt", Unstaged: gitbackend.ChangeModified},
+		}},
+	})
+	m.tree.RevealGlobalDepth(4)
+	m.scheme = schemeMagit
+
+	_, _ = m.Update(keyMsg("/"))
+	for _, char := range "a" {
+		_, _ = m.Update(keyMsg(string(char)))
+	}
+	_, _ = m.Update(keyMsg("enter"))
+	if m.searching {
+		t.Fatal("search did not complete")
+	}
+	if len(m.searchMatches) < 2 {
+		t.Fatalf("expected at least two status search matches, got %d", len(m.searchMatches))
+	}
+
+	target := sectionmodel.SectionID("status/unstaged/file/alpha.txt")
+	if m.tree.Section(target) == nil {
+		t.Fatalf("fixture row missing: %s", target)
+	}
+	m.tree.SetCursor(target)
+	first := m.tree.Cursor()
+	m.detailID = first
+	m.detail = "diff --git a/alpha.txt b/alpha.txt\n" +
+		"@@ -1,2 +1,2 @@\n" +
+		"-old\n+new\n-old2\n+new2\n"
+	m.detailHunk = 1
+	if m.detailID != m.tree.Cursor() {
+		t.Fatalf("patch detail context missing")
+	}
+
+	_, _ = m.Update(keyMsg("v"))
+	if m.detailRangeStart < 0 || m.detailRangeEnd < 0 {
+		t.Fatalf("line selection did not begin")
+	}
+	startLine := m.detailLine
+
+	_, _ = m.Update(keyMsg("n"))
+	if m.tree.Cursor() != first {
+		t.Fatalf("search cursor moved during patch range extension")
+	}
+	if m.detailLine == startLine {
+		t.Fatalf("patch range did not extend")
+	}
+	if m.searchQuery == "" {
+		t.Fatalf("search query unexpectedly cleared")
 	}
 }
