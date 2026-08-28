@@ -27,8 +27,11 @@ not.
 | Diff/log | Partial | File diffs and structured status logs | General `d`/`l` views, ranges, graph, filters |
 | Conflicts | Missing workflow | Unmerged state parses | Ours/theirs/base, resolve, continue/abort |
 | Stash | Partial | `z` transient workflows plus folded status section, `j z` jump, stable OID rows, and bounded lazy patch detail | Remaining stash suffixes and exact section presentation edge cases |
-| Merge/rebase/cherry-pick | Missing | — | Start, sequence status, continue/skip/abort |
-| Reset | Missing | Magit `x`/`X` are recognized and report their upstream missing status; Vim `x` remains the adapted discard key | Quick reset and `X` transient |
+| Merge | Partial | `m` transient: reviewed target selection, plain/no-commit/squash/preview, `--ff-only`/`--no-ff`, conflict continue, and reviewed abort | Editor-backed merge messages, strategy and signing options, absorb/dissolve |
+| Rebase | Partial | `r` transient: reviewed non-interactive current-branch rebase, upstream/push-remote targets, continue/skip/abort, and typed keep-empty/rebase-merges/update-refs/autostash/force/strategy/signoff options | Interactive todo editing and all multiline edit/reword/drop/autosquash semantics remain unavailable |
+| Cherry-pick/revert | Partial | `A`/`a` and `V`/`v`: reviewed resolved commits with mainline/strategy/signoff, non-editor apply, and reviewed continue/skip/abort | Multi-commit selection and editor-backed message editing |
+| Reset | Partial | `x` quick mixed reset and `X` transient: reviewed mixed/soft/hard/keep/index/worktree/file reset with stale-state rejection | Magit's context-sensitive defaults and revision browser |
+| Bisect | Partial | `B` transient: reviewed start/good/bad/mark/skip/reset plus typed `--no-checkout` and `--first-parent` start options | `bisect run` stays unavailable because arbitrary command execution is unsafe; custom terms are not exposed |
 | Tags | Partial | Decorations display | `t` create/delete/prune/push |
 | Submodules/worktrees | Missing workflow | Repository discovery generally works | `o`/`Z` management transients |
 | Process output | Partial | `$` bottom process pane, bounded sanitized chronological command/output transcript, failure auto-open, OSC52 copy request | Magit's full process lifecycle controls and persistent process buffer behavior |

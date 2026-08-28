@@ -26,8 +26,12 @@ const (
 	HistoryUIRebaseSkip     HistoryUIAction = "rebase-skip"
 	HistoryUIRebaseAbort    HistoryUIAction = "rebase-abort"
 	HistoryUIReset          HistoryUIAction = "reset"
+	HistoryUICherryStart    HistoryUIAction = "cherry-pick-start"
+	HistoryUICherryContinue HistoryUIAction = "cherry-pick-continue"
 	HistoryUICherrySkip     HistoryUIAction = "cherry-pick-skip"
 	HistoryUICherryAbort    HistoryUIAction = "cherry-pick-abort"
+	HistoryUIRevertStart    HistoryUIAction = "revert-start"
+	HistoryUIRevertContinue HistoryUIAction = "revert-continue"
 	HistoryUIRevertSkip     HistoryUIAction = "revert-skip"
 	HistoryUIRevertAbort    HistoryUIAction = "revert-abort"
 	HistoryUIBisectStart    HistoryUIAction = "bisect-start"
@@ -40,11 +44,13 @@ const (
 // HistoryUIRequest is a closed, typed union. Fields not used by Action are
 // ignored. Review resolves every revision to an OID before it creates a token.
 type HistoryUIRequest struct {
-	Action   HistoryUIAction
-	Rebase   RebaseOptions
-	Reset    ResetOptions
-	Bisect   BisectStartOptions
-	Revision string
+	Action    HistoryUIAction
+	Rebase    RebaseOptions
+	Reset     ResetOptions
+	Pick      PickOptions
+	Revisions []string
+	Bisect    BisectStartOptions
+	Revision  string
 }
 
 type HistoryUIState struct {
@@ -93,10 +99,18 @@ func (r *Repository) ExecuteReviewedHistoryUIAction(ctx context.Context, reviewe
 	case HistoryUIReset:
 		q.Reset.Confirmed = true
 		return r.Reset(ctx, q.Reset)
+	case HistoryUICherryStart:
+		return r.CherryPickStart(ctx, q.Revisions, q.Pick)
+	case HistoryUICherryContinue:
+		return r.CherryPickContinue(ctx)
 	case HistoryUICherrySkip:
 		return r.CherryPickSkip(ctx)
 	case HistoryUICherryAbort:
 		return r.CherryPickAbort(ctx)
+	case HistoryUIRevertStart:
+		return r.RevertStart(ctx, q.Revisions, q.Pick)
+	case HistoryUIRevertContinue:
+		return r.RevertContinue(ctx)
 	case HistoryUIRevertSkip:
 		return r.RevertSkip(ctx)
 	case HistoryUIRevertAbort:
@@ -121,6 +135,7 @@ func (r *Repository) ExecuteReviewedHistoryUIAction(ctx context.Context, reviewe
 
 func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIRequest) (HistoryUIRequest, []string, error) {
 	q.Reset.Paths = append([]string(nil), q.Reset.Paths...)
+	q.Revisions = append([]string(nil), q.Revisions...)
 	q.Bisect.Paths = append([]string(nil), q.Bisect.Paths...)
 	resolveOptional := func(label, revision string) (string, error) {
 		if revision == "" {
@@ -138,6 +153,9 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		if q.Rebase.Branch != "" {
 			return q, nil, errors.New("reviewed UI rebase of a non-current branch is unavailable")
 		}
+		if err := validateHistoryStrategy(q.Rebase.Strategy); err != nil {
+			return q, nil, err
+		}
 		if q.Rebase.Upstream, err = resolveOptional("rebase upstream", q.Rebase.Upstream); err != nil || q.Rebase.Upstream == "" {
 			if err == nil {
 				err = errors.New("rebase upstream is empty")
@@ -147,7 +165,9 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		if q.Rebase.Onto, err = resolveOptional("rebase onto", q.Rebase.Onto); err != nil {
 			return q, nil, err
 		}
-		return q, []string{"Rebase current branch", "Upstream " + q.Rebase.Upstream, optionalPlan("Onto ", q.Rebase.Onto)}, nil
+		plan := []string{"Rebase current branch", "Upstream " + q.Rebase.Upstream, optionalPlan("Onto ", q.Rebase.Onto)}
+		plan = append(plan, rebaseOptionPlan(q.Rebase)...)
+		return q, plan, nil
 	case HistoryUIRebaseContinue, HistoryUIRebaseSkip, HistoryUIRebaseAbort:
 		return q, []string{"Execute " + string(q.Action), "Bind to current rebase administrative state"}, nil
 	case HistoryUIReset:
@@ -158,6 +178,47 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		q.Reset.Target = preflight.Target
 		q.Reset.Confirmed, q.Reset.Force = false, false
 		return q, []string{preflight.Summary, historyLossPlan(preflight)}, nil
+	case HistoryUICherryStart, HistoryUIRevertStart:
+		verb := "Cherry-pick"
+		if q.Action == HistoryUIRevertStart {
+			verb = "Revert"
+		}
+		if len(q.Revisions) == 0 {
+			return q, nil, errors.New(strings.ToLower(verb) + ": no commits supplied")
+		}
+		if q.Pick.Mainline < 0 {
+			return q, nil, errors.New(strings.ToLower(verb) + ": mainline must be positive")
+		}
+		if err := validateHistoryStrategy(q.Pick.Strategy); err != nil {
+			return q, nil, err
+		}
+		for i, revision := range q.Revisions {
+			if q.Revisions[i], err = resolveOptional(fmt.Sprintf("%s commit %d", strings.ToLower(verb), i+1), revision); err != nil {
+				return q, nil, err
+			}
+		}
+		plan := []string{verb + " explicitly resolved commit"}
+		for _, revision := range q.Revisions {
+			plan = append(plan, "Commit "+revision)
+		}
+		if q.Pick.NoCommit {
+			plan = append(plan, "Apply without creating a commit")
+		}
+		if q.Pick.Mainline > 0 {
+			plan = append(plan, "Mainline parent "+strconv.Itoa(q.Pick.Mainline))
+		}
+		if q.Pick.Strategy != "" {
+			plan = append(plan, "Strategy "+q.Pick.Strategy)
+		}
+		if q.Pick.Signoff {
+			plan = append(plan, "Add Signed-off-by trailer")
+		}
+		if q.Pick.NoEdit || q.Action == HistoryUIRevertStart {
+			plan = append(plan, "Git editors are disabled")
+		}
+		return q, plan, nil
+	case HistoryUICherryContinue, HistoryUIRevertContinue:
+		return q, []string{"Execute " + string(q.Action), "Bind to current sequencer state"}, nil
 	case HistoryUICherrySkip, HistoryUIRevertSkip:
 		return q, []string{"Skip the current sequencer item", "Discard its current index and worktree conflict state"}, nil
 	case HistoryUICherryAbort, HistoryUIRevertAbort:
@@ -169,7 +230,14 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		if q.Bisect.Good, err = resolveOptional("bisect good", q.Bisect.Good); err != nil {
 			return q, nil, err
 		}
-		return q, []string{"Start bisect", optionalPlan("Bad ", q.Bisect.Bad), optionalPlan("Good ", q.Bisect.Good)}, nil
+		plan := []string{"Start bisect", optionalPlan("Bad ", q.Bisect.Bad), optionalPlan("Good ", q.Bisect.Good)}
+		if q.Bisect.NoCheckout {
+			plan = append(plan, "Do not check out trial revisions")
+		}
+		if q.Bisect.FirstParent {
+			plan = append(plan, "Follow only first parents")
+		}
+		return q, plan, nil
 	case HistoryUIBisectGood, HistoryUIBisectBad, HistoryUIBisectSkip:
 		if q.Revision, err = resolveOptional("bisect revision", q.Revision); err != nil {
 			return q, nil, err
@@ -180,6 +248,32 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 	default:
 		return q, nil, errors.New("invalid reviewed history action")
 	}
+}
+
+func rebaseOptionPlan(o RebaseOptions) []string {
+	var plan []string
+	if o.KeepEmpty {
+		plan = append(plan, "Keep empty commits")
+	}
+	if o.RebaseMerges {
+		plan = append(plan, "Preserve merge topology")
+	}
+	if o.UpdateRefs {
+		plan = append(plan, "Update affected branch references")
+	}
+	if o.Autostash {
+		plan = append(plan, "Autostash local changes during rebase")
+	}
+	if o.ForceRebase {
+		plan = append(plan, "Replay even if fast-forward is possible")
+	}
+	if o.Strategy != "" {
+		plan = append(plan, "Strategy "+o.Strategy)
+	}
+	if o.Signoff {
+		plan = append(plan, "Add Signed-off-by trailers")
+	}
+	return plan
 }
 
 func optionalPlan(prefix, value string) string {
@@ -216,8 +310,11 @@ func historyUIIdentity(r ReviewedHistoryUIAction) string {
 
 func historyUIRequestIdentity(q HistoryUIRequest) string {
 	return strings.Join([]string{string(q.Action), q.Rebase.Upstream, q.Rebase.Onto, q.Rebase.Branch,
+		strconv.FormatBool(q.Rebase.KeepEmpty), strconv.FormatBool(q.Rebase.RebaseMerges), strconv.FormatBool(q.Rebase.UpdateRefs),
+		strconv.FormatBool(q.Rebase.Autostash), strconv.FormatBool(q.Rebase.ForceRebase), q.Rebase.Strategy, strconv.FormatBool(q.Rebase.Signoff),
 		strconv.Itoa(int(q.Reset.Mode)), q.Reset.Target, strings.Join(q.Reset.Paths, "\x01"),
-		q.Bisect.Bad, q.Bisect.Good, strings.Join(q.Bisect.Paths, "\x01"), q.Revision}, "\x00")
+		strings.Join(q.Revisions, "\x01"), strconv.FormatBool(q.Pick.NoCommit), strconv.Itoa(q.Pick.Mainline), q.Pick.Strategy, strconv.FormatBool(q.Pick.Signoff), strconv.FormatBool(q.Pick.NoEdit),
+		q.Bisect.Bad, q.Bisect.Good, strings.Join(q.Bisect.Paths, "\x01"), strconv.FormatBool(q.Bisect.NoCheckout), strconv.FormatBool(q.Bisect.FirstParent), q.Revision}, "\x00")
 }
 
 func (r *Repository) historyUIState(ctx context.Context) (HistoryUIState, error) {

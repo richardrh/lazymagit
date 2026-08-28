@@ -15,6 +15,7 @@ prefixes with an optional Vim navigation layer.
 - Whole-file and reviewed file/hunk/changed-line stage, unstage, and discard
 - Stale-safe interactive patch reviews that revalidate the exact source diff before mutation
 - Commit creation, revision inspection, searchable branch switching, remote add, fetch, and push
+- Reviewed merge, non-interactive rebase, cherry-pick/revert, reset, and bisect workflows with stale-state rejection
 - Standard side-by-side and optional compact borderless status/diff layouts
 - Universal status-row search with `/`, then `n` / `N` navigation
 - Searchable worktree and branch browsers
@@ -69,6 +70,7 @@ Magit scheme. This explicit mode is necessary because Vim's `k` (move up) and
 | Fetch upstream / push remote | `f u` / `f p` | `f u` / `f p` |
 | Fetch chosen remote / all remotes | `f e` / `f a` | `f e` / `f a` |
 | Add remote (`M -f` to fetch) | `M a` | `M a` |
+| History workflows | `m`, `r`, `A`/`V`, `x`/`X`, `B` | `m`, `r`, `A`/`V`, `x`/`X`, `B` |
 | Push | `P p` | `P p` |
 | Toggle Git processes | `$` | `$` |
 | Help / quit | `?` / `q` | `?` / `q` |
@@ -115,6 +117,6 @@ There is not yet a separate prompt for configuring repository-wide
 
 ## Compatibility scope
 
-This is not yet a behavior-exact port of all Magit. The implemented wave now covers the core status workflow, reviewed hunk/changed-line mutations, searchable branch and worktree browsers, compact layout, and common commands. Interactive rebase, complete conflict resolution, arbitrary disjoint patch selection, executable full transient option sets, and Emacs extension APIs remain out of scope. See [docs/compatibility.md](docs/compatibility.md) for upstream test traceability and [docs/parity.md](docs/parity.md) for the feature-by-feature parity matrix and [docs/keybindings.md](docs/keybindings.md) for the complete 98-key status ledger.
+This is not yet a behavior-exact port of all Magit. The implemented wave now covers the core status workflow, reviewed hunk/changed-line mutations, searchable branch and worktree browsers, compact layout, common commands, and reviewed history workflows. Interactive rebase todo editing (including multiline edit/reword/drop/autosquash semantics), complete conflict resolution, arbitrary disjoint patch selection, executable full transient option sets, and Emacs extension APIs remain out of scope. See [docs/compatibility.md](docs/compatibility.md) for upstream test traceability and [docs/parity.md](docs/parity.md) for the feature-by-feature parity matrix and [docs/keybindings.md](docs/keybindings.md) for the complete 98-key status ledger.
 
-Whole-file destructive actions require confirmation and reject unsafe mixed-state cases. Focused hunk and changed-line mutations use a two-phase Review/Execute flow, reconstruct patches inside the backend, revalidate the exact source diff immediately before execution, and fail closed with a stale-plan error if repository state changed.
+Whole-file destructive actions require confirmation and reject unsafe mixed-state cases. History operations resolve revisions to object IDs, show an immutable Review/Execute plan, revalidate HEAD, index, worktree, and operation administration state immediately before execution, and fail closed with a stale-plan error if repository state changed. Focused hunk and changed-line mutations use the same two-phase flow, reconstruct patches inside the backend, and revalidate the exact source diff before mutation.

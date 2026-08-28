@@ -16,6 +16,8 @@ import (
 // rows in the Magit 4.7 manifest.
 func init() {
 	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "magit:--signoff"}
+	rebaseOptions := []string{"transient:magit-rebase:--keep-empty", "transient:magit-rebase:--rebase-merges=", "transient:magit-rebase:--update-refs", "transient:magit-rebase:--autostash", "transient:magit-rebase:--force-rebase", "magit-merge:--strategy", "magit:--signoff"}
+	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent"}
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-cherry-pick", map[string][]string{
 		"magit-cherry-copy":  pickOptions,
 		"magit-cherry-apply": pickOptions,
@@ -23,6 +25,15 @@ func init() {
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-revert", map[string][]string{
 		"magit-revert-and-commit": {"magit-cherry-pick:--mainline", "transient:magit-revert:--no-edit", "magit-merge:--strategy", "magit:--signoff"},
 		"magit-revert-no-commit":  {"magit-cherry-pick:--mainline", "transient:magit-revert:--no-edit", "magit-merge:--strategy", "magit:--signoff"},
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-rebase", map[string][]string{
+		"magit-rebase-branch":          rebaseOptions,
+		"magit-rebase-subset":          rebaseOptions,
+		"magit-rebase-onto-upstream":   rebaseOptions,
+		"magit-rebase-onto-pushremote": rebaseOptions,
+	})...)
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-bisect", map[string][]string{
+		"magit-bisect-start": bisectOptions,
 	})...)
 	RegisterWorkflowDomain(func(m *Model) map[keymap.CommandID]WorkflowHandler {
 		out := make(map[keymap.CommandID]WorkflowHandler)
@@ -73,7 +84,7 @@ func historyTransientHandler(transient, upstream string) WorkflowHandler {
 		case "magit-cherry-apply":
 			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, false, true, c) }
 		case "magit-sequencer-continue":
-			return historyDirect("continue cherry-pick", (*gitbackend.Repository).CherryPickContinue)
+			return reviewedHistoryAction(gitbackend.HistoryUICherryContinue)
 		case "magit-sequencer-skip":
 			return reviewedHistoryAction(gitbackend.HistoryUICherrySkip)
 		case "magit-sequencer-abort":
@@ -86,7 +97,7 @@ func historyTransientHandler(transient, upstream string) WorkflowHandler {
 		case "magit-revert-no-commit":
 			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, true, true, c) }
 		case "magit-sequencer-continue":
-			return historyDirect("continue revert", (*gitbackend.Repository).RevertContinue)
+			return reviewedHistoryAction(gitbackend.HistoryUIRevertContinue)
 		case "magit-sequencer-skip":
 			return reviewedHistoryAction(gitbackend.HistoryUIRevertSkip)
 		case "magit-sequencer-abort":
@@ -155,15 +166,18 @@ func historyUnavailable(reason string) WorkflowHandler {
 	return func(m *Model, _ WorkflowCommand) tea.Cmd { m.setError(errors.New(reason)); return nil }
 }
 
-func historyDirect(name string, action func(*gitbackend.Repository, context.Context) error) WorkflowHandler {
-	return func(m *Model, _ WorkflowCommand) tea.Cmd {
-		return m.StartWorkflowOperation(name, func(ctx context.Context) error { return action(m.repo, ctx) })
-	}
-}
-
 func selectedHistoryRevision(m *Model) string {
 	if current, ok := m.rows[m.tree.Cursor()]; ok && current.kind == rowCommit && current.commit.ID != "" {
 		return current.commit.ID
+	}
+	return ""
+}
+
+func historyOptionUpstream(id keymap.CommandID) string {
+	for _, binding := range keymap.Registry() {
+		if binding.Command == id {
+			return binding.UpstreamCommand
+		}
 	}
 	return ""
 }
@@ -174,13 +188,7 @@ func historyPickOptions(command WorkflowCommand) (gitbackend.PickOptions, error)
 		if !value.Enabled && value.Value == "" {
 			continue
 		}
-		upstream := ""
-		for _, b := range keymap.Registry() {
-			if b.Command == id {
-				upstream = b.UpstreamCommand
-				break
-			}
-		}
+		upstream := historyOptionUpstream(id)
 		switch upstream {
 		case "magit-cherry-pick:--mainline":
 			n, err := strconv.Atoi(value.Value)
@@ -210,25 +218,14 @@ func openPickWorkflow(m *Model, revert, noCommit bool, command WorkflowCommand) 
 		return nil
 	}
 	opts.NoCommit = noCommit
-	name := "cherry-pick"
-	if revert {
-		name = "revert"
-	}
 	defaultRevision := selectedHistoryRevision(m)
-	return m.LoadWorkflow(name, func(context.Context) (WorkflowDialog, error) {
-		title := "Cherry-pick commit"
-		if revert {
-			title = "Revert commit"
-		}
-		return WorkflowDialog{Title: title, Operation: name,
-			Plan:   []string{"Apply one explicitly resolved commit", "Git editors are disabled"},
-			Fields: []WorkflowField{{Name: "revision", Label: "Commit revision", Kind: WorkflowText, Value: defaultRevision, Required: true}},
-			Submit: func(ctx context.Context, values WorkflowValues) error {
-				if revert {
-					return m.repo.RevertStart(ctx, []string{values["revision"]}, opts)
-				}
-				return m.repo.CherryPickStart(ctx, []string{values["revision"]}, opts)
-			}}, nil
+	title := "Review cherry-pick"
+	action := gitbackend.HistoryUICherryStart
+	if revert {
+		title, action = "Review revert", gitbackend.HistoryUIRevertStart
+	}
+	return openReviewedHistoryDialog(m, title, []WorkflowField{{Name: "revision", Label: "Commit revision", Kind: WorkflowText, Value: defaultRevision, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
+		return gitbackend.HistoryUIRequest{Action: action, Pick: opts, Revisions: []string{values["revision"]}}
 	})
 }
 
@@ -257,28 +254,74 @@ func openReviewedHistoryDialog(m *Model, title string, fields []WorkflowField, r
 		}})
 }
 
-func openRebaseWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
+func rebaseOptions(command WorkflowCommand) (gitbackend.RebaseOptions, error) {
+	var opts gitbackend.RebaseOptions
+	for id, value := range command.Options {
+		if !value.Enabled && value.Value == "" {
+			continue
+		}
+		switch historyOptionUpstream(id) {
+		case "transient:magit-rebase:--keep-empty":
+			opts.KeepEmpty = true
+		case "transient:magit-rebase:--rebase-merges=":
+			opts.RebaseMerges = true
+		case "transient:magit-rebase:--update-refs":
+			opts.UpdateRefs = true
+		case "transient:magit-rebase:--autostash":
+			opts.Autostash = true
+		case "transient:magit-rebase:--force-rebase":
+			opts.ForceRebase = true
+		case "magit-merge:--strategy":
+			opts.Strategy = value.Value
+		case "magit:--signoff":
+			opts.Signoff = true
+		default:
+			return opts, fmt.Errorf("%s is unavailable: no safe typed rebase option", historyOptionUpstream(id))
+		}
+	}
+	return opts, nil
+}
+
+func openRebaseWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
+	opts, err := rebaseOptions(command)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
 	upstream := m.snapshot.summary.Upstream
 	if upstream == "" {
 		upstream = "HEAD~1"
 	}
 	fields := []WorkflowField{{Name: "upstream", Label: "Upstream revision", Kind: WorkflowText, Value: upstream, Required: true}, {Name: "onto", Label: "Onto revision (optional)", Kind: WorkflowText}}
 	return openReviewedHistoryDialog(m, "Review non-interactive rebase", fields, func(v WorkflowValues) gitbackend.HistoryUIRequest {
-		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: gitbackend.RebaseOptions{Upstream: v["upstream"], Onto: v["onto"]}}
+		requestOptions := opts
+		requestOptions.Upstream, requestOptions.Onto = v["upstream"], v["onto"]
+		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: requestOptions}
 	})
 }
 
-func openRebaseUpstream(m *Model, c WorkflowCommand) tea.Cmd {
+func openRebaseUpstream(m *Model, command WorkflowCommand) tea.Cmd {
+	opts, err := rebaseOptions(command)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
 	if m.snapshot.summary.Upstream == "" {
 		m.setError(errors.New("rebase onto upstream requires a configured upstream"))
 		return nil
 	}
 	return openReviewedHistoryDialog(m, "Review rebase onto upstream", nil, func(WorkflowValues) gitbackend.HistoryUIRequest {
-		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: gitbackend.RebaseOptions{Upstream: m.snapshot.summary.Upstream}}
+		opts.Upstream = m.snapshot.summary.Upstream
+		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: opts}
 	})
 }
 
-func openRebasePushRemote(m *Model, _ WorkflowCommand) tea.Cmd {
+func openRebasePushRemote(m *Model, command WorkflowCommand) tea.Cmd {
+	opts, err := rebaseOptions(command)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
 	return m.LoadWorkflow("push remote", func(ctx context.Context) (WorkflowDialog, error) {
 		remote, err := m.repo.PushRemote(ctx)
 		if err != nil {
@@ -288,8 +331,8 @@ func openRebasePushRemote(m *Model, _ WorkflowCommand) tea.Cmd {
 		if branch == "" || m.snapshot.summary.Detached {
 			return WorkflowDialog{}, errors.New("rebase onto push remote requires a current local branch")
 		}
-		target := remote + "/" + branch
-		return reviewedHistoryWorkflowDialog(m, "Review rebase onto push remote", gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: gitbackend.RebaseOptions{Upstream: target}}), nil
+		opts.Upstream = remote + "/" + branch
+		return reviewedHistoryWorkflowDialog(m, "Review rebase onto push remote", gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIRebaseStart, Rebase: opts}), nil
 	})
 }
 
@@ -330,10 +373,34 @@ func openResetWorkflow(m *Model, mode gitbackend.ResetMode, pathMode bool) tea.C
 	})
 }
 
-func openBisectStart(m *Model, _ WorkflowCommand) tea.Cmd {
+func bisectOptions(command WorkflowCommand) (gitbackend.BisectStartOptions, error) {
+	var opts gitbackend.BisectStartOptions
+	for id, value := range command.Options {
+		if !value.Enabled && value.Value == "" {
+			continue
+		}
+		switch historyOptionUpstream(id) {
+		case "transient:magit-bisect:--no-checkout":
+			opts.NoCheckout = true
+		case "transient:magit-bisect:--first-parent":
+			opts.FirstParent = true
+		default:
+			return opts, fmt.Errorf("%s is unavailable: no safe typed bisect option", historyOptionUpstream(id))
+		}
+	}
+	return opts, nil
+}
+
+func openBisectStart(m *Model, command WorkflowCommand) tea.Cmd {
+	opts, err := bisectOptions(command)
+	if err != nil {
+		m.setError(err)
+		return nil
+	}
 	fields := []WorkflowField{{Name: "bad", Label: "Known bad revision", Kind: WorkflowText, Value: "HEAD", Required: true}, {Name: "good", Label: "Known good revision", Kind: WorkflowText, Required: true}}
 	return openReviewedHistoryDialog(m, "Review bisect start", fields, func(v WorkflowValues) gitbackend.HistoryUIRequest {
-		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIBisectStart, Bisect: gitbackend.BisectStartOptions{Bad: v["bad"], Good: v["good"]}}
+		opts.Bad, opts.Good = v["bad"], v["good"]
+		return gitbackend.HistoryUIRequest{Action: gitbackend.HistoryUIBisectStart, Bisect: opts}
 	})
 }
 

@@ -92,6 +92,34 @@ func TestRebaseNonInteractiveOntoAndLifecycleGuard(t *testing.T) {
 	}
 }
 
+func TestRebaseTypedOptionsBuildNonInteractiveArgv(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	base := r.commitAll("base")
+	r.git("switch", "-c", "topic")
+	r.write("topic", "topic\n")
+	r.commitAll("topic")
+	r.git("switch", "main")
+	r.write("main", "main\n")
+	onto := r.commitAll("main")
+	r.git("switch", "topic")
+	repo, _ := Discover(r.dir)
+	var records []ProcessRecord
+	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
+
+	err := repo.RebaseStart(ctx, RebaseOptions{Upstream: base, Onto: onto, KeepEmpty: true, RebaseMerges: true, UpdateRefs: true, Autostash: true, ForceRebase: true, Strategy: "ort", Signoff: true})
+	if err != nil {
+		t.Fatalf("RebaseStart: %v", err)
+	}
+	want := []string{"rebase", "--keep-empty", "--rebase-merges", "--update-refs", "--autostash", "--force-rebase", "--strategy=ort", "--signoff", "--onto", onto, "--", base}
+	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
+		t.Fatalf("process records = %#v, want args %#v", records, want)
+	}
+	if parent := r.git("rev-parse", "HEAD^"); parent != onto {
+		t.Fatalf("rebased parent = %s, want %s", parent, onto)
+	}
+}
+
 func TestRebaseTodoValidationAndAtomicAdminWrite(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("file", "base\n")
@@ -166,6 +194,30 @@ func TestResetIndexAndWorktreeDoNotMoveHEAD(t *testing.T) {
 	}
 	if got := r.read("file"); got != "head\n" {
 		t.Fatalf("worktree reset contents = %q", got)
+	}
+}
+
+func TestBisectStartTypedOptionsAndLifecycle(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("n", "0\n")
+	good := r.commitAll("good")
+	r.write("n", "1\n")
+	r.commitAll("middle")
+	r.write("n", "2\n")
+	bad := r.commitAll("bad")
+	repo, _ := Discover(r.dir)
+	var records []ProcessRecord
+	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
+
+	if err := repo.BisectStart(ctx, BisectStartOptions{Bad: bad, Good: good, NoCheckout: true, FirstParent: true}); err != nil {
+		t.Fatalf("BisectStart: %v", err)
+	}
+	want := []string{"bisect", "start", "--no-checkout", "--first-parent", bad, good}
+	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
+		t.Fatalf("process records = %#v, want args %#v", records, want)
+	}
+	if err := repo.BisectReset(context.Background()); err != nil {
+		t.Fatalf("BisectReset: %v", err)
 	}
 }
 

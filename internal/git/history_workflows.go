@@ -169,6 +169,16 @@ type RebaseOptions struct {
 	Upstream string
 	Onto     string
 	Branch   string
+	// These non-interactive flags are deliberately a closed typed set. In
+	// particular there is no Interactive or Exec field: the TUI cannot safely
+	// model Magit's editable multiline todo or arbitrary command semantics.
+	KeepEmpty    bool
+	RebaseMerges bool
+	UpdateRefs   bool
+	Autostash    bool
+	ForceRebase  bool
+	Strategy     string
+	Signoff      bool
 }
 
 // RebaseStart performs a non-interactive rebase. Upstream is required; Onto
@@ -177,11 +187,35 @@ func (r *Repository) RebaseStart(ctx context.Context, opts RebaseOptions) error 
 	if strings.TrimSpace(opts.Upstream) == "" {
 		return errors.New("rebase upstream is empty")
 	}
+	if err := validateHistoryStrategy(opts.Strategy); err != nil {
+		return err
+	}
 	upstream, err := r.resolveHistoryCommit(ctx, opts.Upstream)
 	if err != nil {
 		return fmt.Errorf("rebase upstream: %w", err)
 	}
 	args := []string{"rebase"}
+	if opts.KeepEmpty {
+		args = append(args, "--keep-empty")
+	}
+	if opts.RebaseMerges {
+		args = append(args, "--rebase-merges")
+	}
+	if opts.UpdateRefs {
+		args = append(args, "--update-refs")
+	}
+	if opts.Autostash {
+		args = append(args, "--autostash")
+	}
+	if opts.ForceRebase {
+		args = append(args, "--force-rebase")
+	}
+	if opts.Strategy != "" {
+		args = append(args, "--strategy="+opts.Strategy)
+	}
+	if opts.Signoff {
+		args = append(args, "--signoff")
+	}
 	if opts.Onto != "" {
 		onto, err := r.resolveHistoryCommit(ctx, opts.Onto)
 		if err != nil {
@@ -402,8 +436,10 @@ func (r *Repository) Reset(ctx context.Context, opts ResetOptions) error {
 }
 
 type BisectStartOptions struct {
-	Bad, Good string
-	Paths     []string
+	Bad, Good   string
+	Paths       []string
+	NoCheckout  bool
+	FirstParent bool
 }
 
 func (r *Repository) BisectStart(ctx context.Context, o BisectStartOptions) error {
@@ -414,6 +450,12 @@ func (r *Repository) BisectStart(ctx context.Context, o BisectStartOptions) erro
 		return errors.New("bisect start cannot supply good without bad")
 	}
 	args := []string{"bisect", "start"}
+	if o.NoCheckout {
+		args = append(args, "--no-checkout")
+	}
+	if o.FirstParent {
+		args = append(args, "--first-parent")
+	}
 	if o.Bad != "" {
 		bad, err := r.resolveHistoryCommit(ctx, o.Bad)
 		if err != nil {

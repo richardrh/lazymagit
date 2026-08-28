@@ -49,6 +49,7 @@ func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("a"))
 	historyE2EReplaceField(t, m, source)
 	historyE2ESubmit(t, m)
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if got := r.git("rev-parse", "HEAD"); got != base {
 		t.Fatalf("apply moved HEAD to %s, want %s", got, base)
 	}
@@ -117,6 +118,45 @@ func TestHistoryE2ERebaseOntoPushRemoteByKeys(t *testing.T) {
 	}
 }
 
+func TestHistoryE2EBisectFirstParentOptionByKeys(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("number", "0\n")
+	good := func() string { r.git("add", "--all"); r.git("commit", "-m", "good"); return r.git("rev-parse", "HEAD") }()
+	r.write("number", "1\n")
+	r.git("add", "--all")
+	r.git("commit", "-m", "middle")
+	r.write("number", "2\n")
+	r.git("add", "--all")
+	r.git("commit", "-m", "bad")
+	m := newE2EModel(t, r)
+	sendE2EKey(t, m, keyMsg("f2"))
+
+	sendE2EKey(t, m, keyMsg("B"))
+	sendE2EKey(t, m, keyMsg("-p"))
+	sendE2EKey(t, m, keyMsg("B"))
+	if m.workflow == nil {
+		t.Fatalf("bisect start did not open: %q", m.message)
+	}
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
+	historyE2EReplaceField(t, m, good)
+	historyE2ESubmit(t, m)
+	if m.workflow == nil || m.workflow.review == nil || !strings.Contains(strings.Join(m.workflow.review.Plan, "\n"), "Follow only first parents") {
+		t.Fatalf("bisect review = %#v", m.workflow)
+	}
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "BISECT_START")); err != nil {
+		t.Fatalf("bisect did not start: %v; message=%q", err, m.message)
+	}
+
+	sendE2EKey(t, m, keyMsg("B"))
+	sendE2EKey(t, m, keyMsg("r"))
+	historyE2ESubmit(t, m)
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "BISECT_START")); !os.IsNotExist(err) {
+		t.Fatalf("bisect reset did not clear state: %v", err)
+	}
+}
+
 func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 	for _, finish := range []string{"continue", "abort"} {
 		t.Run(finish, func(t *testing.T) {
@@ -148,6 +188,7 @@ func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 			}
 			historyE2EReplaceField(t, m, source)
 			historyE2ESubmit(t, m)
+			sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 			headName := "REVERT_HEAD"
 			if finish == "continue" {
 				headName = "CHERRY_PICK_HEAD"
@@ -165,6 +206,8 @@ func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 				r.git("add", "--", "conflict.txt")
 				sendE2EKey(t, m, keyMsg("A"))
 				sendE2EKey(t, m, keyMsg("A"))
+				historyE2ESubmit(t, m)
+				sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 				if got := r.git("rev-parse", "HEAD^"); got != main {
 					t.Fatalf("continue parent=%s want %s", got, main)
 				}

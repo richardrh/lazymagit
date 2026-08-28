@@ -72,6 +72,34 @@ func TestReviewedHistoryResetSuccessPreservesExactTargetState(t *testing.T) {
 	}
 }
 
+func TestReviewedHistoryCherryPickBindsResolvedCommitAndWorktree(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	r.git("switch", "-c", "source")
+	r.write("picked.txt", "picked\n")
+	picked := r.commitAll("picked")
+	r.git("switch", "main")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := repo.ReviewHistoryUIAction(context.Background(), HistoryUIRequest{Action: HistoryUICherryStart, Pick: PickOptions{NoCommit: true, NoEdit: true}, Revisions: []string{picked}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Request.Revisions[0] != picked || len(review.Plan) < 2 {
+		t.Fatalf("review = %#v", review)
+	}
+	r.write("base.txt", "changed after review\n")
+	if err := repo.ExecuteReviewedHistoryUIAction(context.Background(), review); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("execute stale cherry-pick = %v", err)
+	}
+	if got := r.git("diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("stale cherry-pick changed index = %q", got)
+	}
+}
+
 func TestReviewedHistoryActionBindsOperationState(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("file.txt", "one\n")
