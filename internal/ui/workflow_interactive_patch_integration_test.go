@@ -70,4 +70,42 @@ func TestInteractivePatchKeysStageFocusedHunkAndLineRange(t *testing.T) {
 			t.Fatalf("line-range stage = %q, want %q", got, want)
 		}
 	})
+
+	t.Run("search query does not steal range extension in Magit mode", func(t *testing.T) {
+		r := newUIE2ERepo(t)
+		r.write("file.txt", "one\ntwo\nthree\n")
+		r.git("add", "--", "file.txt")
+		r.git("commit", "-m", "base")
+		r.write("file.txt", "one\nTWO\nthree\n")
+		m := newE2EModel(t, r)
+		selectE2EPath(t, m, "file.txt", rowUnstaged)
+		runE2ECmd(t, m, m.loadDetailCmd())
+
+		// Switch to Magit mode, then enter and complete a status search.
+		sendE2EKey(t, m, keyMsg("f2"))
+		sendE2EKey(t, m, keyMsg("/"))
+		for _, char := range "file" {
+			sendE2EKey(t, m, keyMsg(string(char)))
+		}
+		sendE2EKey(t, m, keyMsg("enter"))
+		if m.searching || len(m.searchMatches) == 0 {
+			t.Fatalf("search should finish with matches, got searching=%v matches=%d", m.searching, len(m.searchMatches))
+		}
+
+		target := m.tree.Cursor()
+		sendE2EKey(t, m, keyMsg("]"))
+		sendE2EKey(t, m, keyMsg("v"))
+		if m.detailRangeStart < 0 || m.detailRangeEnd < 0 {
+			t.Fatalf("line range did not start")
+		}
+		startLine := m.detailLine
+
+		sendE2EKey(t, m, keyMsg("n"))
+		if m.tree.Cursor() != target {
+			t.Fatalf("search cursor moved during range extension: %q", m.tree.Cursor())
+		}
+		if m.detailLine == startLine {
+			t.Fatalf("range n did not extend selected lines")
+		}
+	})
 }
