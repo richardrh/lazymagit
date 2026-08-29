@@ -654,14 +654,6 @@ func editWorkflowSearch(field *WorkflowField, key, text string) bool {
 	return true
 }
 
-func editWorkflowMultiline(field *WorkflowField, key, text string) bool {
-	if key == "ctrl+j" || key == "shift+enter" {
-		field.Value += "\n"
-		return true
-	}
-	return editWorkflowText(field, key, text)
-}
-
 func editWorkflowText(field *WorkflowField, key, text string) bool {
 	if key == "backspace" || key == "ctrl+h" {
 		if field.Value == "" {
@@ -682,7 +674,7 @@ func editWorkflowText(field *WorkflowField, key, text string) bool {
 // line break and Tab moves to the next workflow field. Paste is preserved as
 // text, so no external editor or shell is involved.
 func editWorkflowMultiline(field *WorkflowField, key, text string) bool {
-	if key == "enter" || key == "ctrl+j" {
+	if key == "enter" || key == "ctrl+j" || key == "shift+enter" {
 		field.Value += "\n"
 		return true
 	}
