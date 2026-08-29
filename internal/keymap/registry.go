@@ -72,6 +72,9 @@ const (
 	CommandEditThing          CommandID = "status.edit-thing"
 	CommandBrowseThing        CommandID = "status.browse-thing"
 	CommandNextReference      CommandID = "status.next-reference"
+	// CommandBlame is a terminal-native extension, intentionally separate from
+	// the pinned Magit manifest because Magit does not bind blame in status mode.
+	CommandBlame CommandID = "inspect.blame"
 )
 
 type View uint8
@@ -316,6 +319,7 @@ func buildRegistry() []Binding {
 		vim("G", CommandLast, "Last row", HandlerExecute),
 		vim("x", CommandDiscard, "Discard", HandlerExecute),
 	)
+	out = append(out, portable("ctrl+b", CommandBlame, "Blame selected file")...)
 	out = append(out, transientBindings(m)...)
 	return out
 }
@@ -430,6 +434,16 @@ func classifyTop(b *Binding, transientNames map[string]bool) {
 	if b.UpstreamCommand == "magit-dired-jump" || strings.Contains(b.UpstreamKey, "<left-fringe>") || strings.Contains(b.UpstreamKey, "<remap>") {
 		b.Parity, b.Unavailable, b.UnavailableCategory = ParityNotApplicable, "Emacs-only input or integration", UnavailableNotApplicable
 	}
+}
+
+// portable adds a terminal-native binding that is intentionally outside the
+// pinned Magit keymap manifest. It must be available in both input schemes.
+func portable(sequence string, command CommandID, label string) []Binding {
+	seq := strings.Split(sequence, " ")
+	binding := Binding{Sequence: seq, Display: displaySequence(seq), Command: command, Label: label, Context: ContextStatus, Parity: ParityAdapted, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	vim, magit := binding, binding
+	vim.Scheme, magit.Scheme = SchemeVim, SchemeMagit
+	return []Binding{vim, magit}
 }
 
 func vim(sequence string, command CommandID, label string, handler Handler) Binding {

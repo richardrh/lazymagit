@@ -65,6 +65,13 @@ func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 	}
 }
 
+func TestInspectBlameThroughModelUpdate(t *testing.T) {
+	m := newInspectE2EModel(t)
+	// The initial cursor is the Unstaged heading; select its tracked file.
+	sendInspectSequence(t, m, "n", "ctrl+b")
+	assertInspectDetail(t, m, "Blame story.txt", "inspection second", "| one", "| two", "| working")
+}
+
 func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
 	m := newInspectE2EModel(t)
 

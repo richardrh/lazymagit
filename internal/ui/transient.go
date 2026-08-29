@@ -480,7 +480,7 @@ func dispatcherCatalog(scheme keyScheme, contexts ...keymap.Context) []dispatche
 		}},
 		{Title: "Essential commands", Columns: [][]menuEntry{
 			{entry("g", "Refresh current buffer", keymap.CommandRefresh), entry("q", "Close dispatcher", keymap.CommandQuit), {Key: "tab", Display: "Tab", Label: "Toggle section", Available: true, Command: keymap.CommandToggleSection}, {Key: "enter", Display: "Enter", Label: "Visit thing"}},
-			{entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
+			{entry("ctrl+b", "Blame selected file", keymap.CommandBlame), entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
 		}},
 	}
 	for sectionIndex := range sections {

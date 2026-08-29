@@ -104,6 +104,9 @@ func init() {
 				handlers[binding.Command] = handler
 			}
 		}
+		// Ctrl-B is a portable terminal extension rather than a Magit status-map
+		// binding; it is registered explicitly in keymap alongside both schemes.
+		handlers[keymap.CommandBlame] = inspectBlame
 		return handlers
 	})
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-diff", map[string][]string{
@@ -247,6 +250,49 @@ func inspectShowCommit(m *Model, _ WorkflowCommand) tea.Cmd {
 		result, err := m.repo.QueryShowRevision(ctx, gitbackend.ShowRevisionQuery{Revision: revision, Stat: true, Patch: true, OutputLimit: inspectOutputLimit})
 		return truncationNote(result.Truncated) + result.Detail, err
 	})
+}
+
+// inspectBlame displays current-worktree line provenance for the selected
+// status file. It is read-only and remains in the standard cancellable detail
+// pane; no editor, pager, or ambient Git configuration is invoked.
+func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
+	paths := selectedInspectPath(m)
+	if len(paths) != 1 {
+		m.setError(errors.New("select a tracked status file to blame"))
+		return nil
+	}
+	path := paths[0]
+	return loadInspection(m, "Blame "+path, func(ctx context.Context) (string, error) {
+		result, err := m.repo.QueryBlame(ctx, gitbackend.BlameQuery{Path: path, OutputLimit: inspectOutputLimit})
+		if err != nil {
+			return "", err
+		}
+		return formatBlameResult(result), nil
+	})
+}
+
+func formatBlameResult(result gitbackend.BlameResult) string {
+	lines := make([]string, 0, len(result.Lines))
+	for _, line := range result.Lines {
+		id := line.CommitID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		author := strings.TrimSpace(line.Author)
+		if author == "" {
+			author = "unknown"
+		}
+		date := "unknown date"
+		if !line.AuthorTime.IsZero() {
+			date = line.AuthorTime.Format("2006-01-02")
+		}
+		summary := strings.TrimSpace(line.Summary)
+		if summary != "" {
+			summary = " " + summary
+		}
+		lines = append(lines, fmt.Sprintf("%6d  %s  %s  %s%s | %s", line.Line, id, author, date, summary, line.Content))
+	}
+	return truncationNote(result.Truncated) + strings.Join(lines, "\n")
 }
 
 func inspectShowLatestStash(m *Model, _ WorkflowCommand) tea.Cmd {
