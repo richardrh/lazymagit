@@ -75,6 +75,8 @@ const (
 	// CommandBlame is a terminal-native extension, intentionally separate from
 	// the pinned Magit manifest because Magit does not bind blame in status mode.
 	CommandBlame CommandID = "inspect.blame"
+	// CommandGraph opens the all-refs terminal graph browser.
+	CommandGraph CommandID = "inspect.graph"
 )
 
 type View uint8
@@ -320,6 +322,7 @@ func buildRegistry() []Binding {
 		vim("x", CommandDiscard, "Discard", HandlerExecute),
 	)
 	out = append(out, portable("ctrl+b", CommandBlame, "Blame selected file")...)
+	out = append(out, portable("ctrl+g", CommandGraph, "Browse all-refs graph")...)
 	out = append(out, transientBindings(m)...)
 	return out
 }

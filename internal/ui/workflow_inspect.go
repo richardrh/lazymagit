@@ -107,6 +107,7 @@ func init() {
 		// Ctrl-B is a portable terminal extension rather than a Magit status-map
 		// binding; it is registered explicitly in keymap alongside both schemes.
 		handlers[keymap.CommandBlame] = inspectBlame
+		handlers[keymap.CommandGraph] = inspectGraph
 		return handlers
 	})
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-diff", map[string][]string{
@@ -269,6 +270,14 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 		}
 		return formatBlameResult(result), nil
 	})
+}
+
+// inspectGraph is a bounded all-refs graph browser. Git computes lanes from
+// the full ref topology, while this UI renders its sanitized ASCII graph and
+// decorations in the pageable terminal detail pane.
+func inspectGraph(m *Model, _ WorkflowCommand) tea.Cmd {
+	query := gitbackend.LogQuery{All: true, Graph: true, Decorations: true, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
+	return runLogInspection(m, "All refs graph", query)
 }
 
 func formatBlameResult(result gitbackend.BlameResult) string {

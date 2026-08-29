@@ -79,15 +79,17 @@ func TestInspectionRegistrationCoversSafeExpandedOccurrences(t *testing.T) {
 	}
 }
 
-func TestInspectionRegistersPortableBlameInBothSchemes(t *testing.T) {
+func TestInspectionRegistersPortableBlameAndGraphInBothSchemes(t *testing.T) {
 	m := New(nil)
 	for _, scheme := range []keymap.Scheme{keymap.SchemeVim, keymap.SchemeMagit} {
-		binding, ok := keymap.Find(scheme, keymap.ContextStatus, "ctrl+b")
-		if !ok || binding.Command != keymap.CommandBlame || binding.Handler != keymap.HandlerExecute {
-			t.Fatalf("%s blame binding = %#v, found=%t", scheme, binding, ok)
-		}
-		if m.workflowHandlers[keymap.CommandBlame] == nil {
-			t.Fatal("portable blame binding has no workflow handler")
+		for key, command := range map[string]keymap.CommandID{"ctrl+b": keymap.CommandBlame, "ctrl+g": keymap.CommandGraph} {
+			binding, ok := keymap.Find(scheme, keymap.ContextStatus, key)
+			if !ok || binding.Command != command || binding.Handler != keymap.HandlerExecute {
+				t.Fatalf("%s %s binding = %#v, found=%t", scheme, key, binding, ok)
+			}
+			if m.workflowHandlers[command] == nil {
+				t.Fatalf("portable %s binding has no workflow handler", key)
+			}
 		}
 	}
 }

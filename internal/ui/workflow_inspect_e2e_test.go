@@ -72,6 +72,26 @@ func TestInspectBlameThroughModelUpdate(t *testing.T) {
 	assertInspectDetail(t, m, "Blame story.txt", "inspection second", "| one", "| two", "| working")
 }
 
+func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base.txt", "base\n")
+	r.git("add", "--", "base.txt")
+	r.git("commit", "-m", "graph base")
+	r.git("switch", "-c", "topic")
+	r.write("topic.txt", "topic\n")
+	r.git("add", "--", "topic.txt")
+	r.git("commit", "-m", "graph topic")
+	r.git("switch", "main")
+	r.write("main.txt", "main\n")
+	r.git("add", "--", "main.txt")
+	r.git("commit", "-m", "graph main")
+
+	m := newE2EModel(t, r)
+	sendE2EKey(t, m, keyMsg("f2"))
+	sendInspectSequence(t, m, "ctrl+g")
+	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main", "topic", "* ")
+}
+
 func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
 	m := newInspectE2EModel(t)
 
