@@ -630,7 +630,9 @@ func TransientByName(name string) (Transient, bool) {
 // installed by workflow domains, so the registry and generated ledger never
 // call a connected workflow "missing" merely because keymap cannot import ui.
 var transientCapability = map[string]map[string]bool{
-	"magit-branch":        setOf("magit-checkout", "magit-branch-checkout", "magit-branch-orphan", "magit-branch-and-checkout", "magit-worktree-checkout", "magit-branch-create", "magit-worktree-branch", "magit-branch-configure", "magit-branch-rename", "magit-branch-reset", "magit-branch-delete"),
+	"magit-clone":         setOf("magit-clone-regular", "magit-clone-shallow", "magit-clone-bare", "magit-clone-mirror"),
+	"magit-cherry-pick":   setOf("magit-cherry-copy", "magit-cherry-apply"),
+	"magit-branch":        setOf("magit-checkout", "magit-checkout-remote-ref", "magit-branch-checkout", "magit-branch-orphan", "magit-branch-and-checkout", "magit-worktree-checkout", "magit-branch-create", "magit-worktree-branch", "magit-branch-configure", "magit-branch-rename", "magit-branch-reset", "magit-branch-delete"),
 	"magit-commit":        setOf("magit-commit-create", "magit-commit-extend", "magit-commit-amend", "magit-commit-reword", "magit-commit-fixup", "magit-commit-squash", "magit-commit-alter", "magit-commit-augment", "magit-commit-revise"),
 	"magit-diff":          setOf("magit-diff-dwim", "magit-diff-range", "magit-diff-paths", "magit-diff-unstaged", "magit-diff-staged", "magit-diff-working-tree", "magit-show-commit", "magit-stash-show"),
 	"magit-fetch":         setOf("magit-fetch-from-pushremote", "magit-fetch-from-upstream", "magit-fetch-other", "magit-fetch-all", "magit-fetch-branch", "magit-fetch-refspec", "magit-fetch-modules", "magit-branch-configure"),
@@ -644,6 +646,8 @@ var transientCapability = map[string]map[string]bool{
 	"magit-show-refs":     setOf("magit-show-refs-head", "magit-show-refs-current", "magit-show-refs-other"),
 	"magit-patch-apply":   setOf("magit-patch-apply"),
 	"magit-patch-create":  setOf("magit-patch-create"),
+	"magit-pull":          setOf("magit-pull-from-pushremote", "magit-pull-from-upstream", "magit-pull-branch", "magit-fetch-all-no-prune", "magit-fetch-all-prune", "magit-fetch-branch", "magit-fetch-refspec", "magit-fetch-modules", "magit-branch-configure"),
+	"magit-merge":         setOf("magit-merge-plain", "magit-merge-nocommit", "magit-merge-preview", "magit-merge-squash"),
 	"magit-push":          setOf("magit-push-current-to-pushremote", "magit-push-current-to-upstream", "magit-push-current", "magit-push-other", "magit-push-refspecs", "magit-push-matching", "magit-push-tag", "magit-push-tags", "magit-push-notes-ref", "magit-branch-configure"),
 	"magit-remote":        setOf("magit-remote-add", "magit-remote-rename", "magit-remote-remove", "magit-remote-configure", "magit-remote-prune", "magit-remote-unshallow", "magit-update-default-branch"),
 	"magit-rebase":        setOf("magit-rebase-branch", "magit-rebase-subset", "magit-rebase-onto-upstream", "magit-rebase-onto-pushremote", "magit-rebase-interactive", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit", "magit-rebase-edit", "magit-rebase-continue", "magit-rebase-skip", "magit-rebase-abort"),
@@ -677,6 +681,30 @@ func OptionConsumerCommands(prefix, option string) []string {
 		return out
 	}
 	switch prefix {
+	case "C":
+		switch option {
+		case "transient:magit-clone:--single-branch", "transient:magit-clone:--no-tags", "transient:magit-clone:--recurse-submodules", "transient:magit-clone:--origin=", "transient:magit-clone:--branch=":
+			return all("magit-clone")
+		}
+	case "A":
+		switch option {
+		case "magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff":
+			return []string{"magit-cherry-copy", "magit-cherry-apply"}
+		}
+	case "b":
+		if option == "transient:magit-branch:--recurse-submodules" {
+			return []string{"magit-checkout", "magit-checkout-remote-ref", "magit-branch-checkout"}
+		}
+	case "m":
+		switch option {
+		case "transient:magit-merge:--ff-only", "transient:magit-merge:--no-ff", "magit-merge:--strategy", "magit-merge:--strategy-option", "transient:magit-merge:-Xignore-space-change", "transient:magit-merge:-Xignore-all-space", "magit:--signoff":
+			return []string{"magit-merge-plain", "magit-merge-nocommit", "magit-merge-preview", "magit-merge-squash"}
+		}
+	case "F":
+		switch option {
+		case "transient:magit-pull:--ff-only", "magit-pull:--rebase", "transient:magit-pull:--autostash", "transient:magit-pull:--force":
+			return []string{"magit-pull-from-pushremote", "magit-pull-from-upstream", "magit-pull-branch"}
+		}
 	case "c":
 		if option == "transient:magit-commit:--verbose" {
 			return nil

@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -20,7 +22,10 @@ func TestReviewedMergeExecutesAndRejectsHeadOrConfigChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan, err := repo.ReviewMerge(ctx, MergeArgs{Target: "topic", Mode: MergeFFOnly})
+	var records []ProcessRecord
+	ctx = WithProcessRecorder(ctx, func(record ProcessRecord) { records = append(records, record) })
+	advanced := MergeArgs{Target: "topic", Mode: MergeNoFF, Strategy: "ort", StrategyOptions: []string{"ignore-space-change"}, Signoff: true}
+	plan, err := repo.ReviewMerge(ctx, advanced)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,15 +33,23 @@ func TestReviewedMergeExecutesAndRejectsHeadOrConfigChanges(t *testing.T) {
 	if _, err := repo.ExecuteReviewedMerge(ctx, plan); !errors.Is(err, ErrStalePlan) {
 		t.Fatalf("config-changed execute error = %v, want ErrStalePlan", err)
 	}
-	plan, err = repo.ReviewMerge(ctx, MergeArgs{Target: "topic", Mode: MergeFFOnly})
+	plan, err = repo.ReviewMerge(ctx, advanced)
 	if err != nil {
 		t.Fatal(err)
+	}
+	mutated := plan
+	mutated.Args.Signoff = false
+	if _, err := repo.ExecuteReviewedMerge(ctx, mutated); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("option-mutated execute error = %v, want ErrStalePlan", err)
 	}
 	if _, err := repo.ExecuteReviewedMerge(ctx, plan); err != nil {
 		t.Fatalf("execute reviewed merge: %v", err)
 	}
-	if got := r.git("rev-parse", "HEAD"); got != r.git("rev-parse", "topic") {
-		t.Fatalf("HEAD = %s, want topic", got)
+	if len(records) != 1 || !reflect.DeepEqual(records[0].Args[:5], []string{"merge", "--no-ff", "--no-edit", "--strategy=ort", "--strategy-option=ignore-space-change"}) || records[0].Args[5] != "--signoff" {
+		t.Fatalf("advanced merge argv = %#v", records)
+	}
+	if parents := r.git("rev-list", "--parents", "-n", "1", "HEAD"); len(strings.Fields(parents)) != 3 {
+		t.Fatalf("advanced merge did not create a merge commit: %s", parents)
 	}
 }
 

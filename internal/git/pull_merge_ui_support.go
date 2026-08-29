@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -14,10 +15,11 @@ const mergeReviewConfigLimit = 1 << 20
 // by the TUI.  It binds approval to HEAD, the resolved target and effective Git
 // configuration; callers cannot reuse an approval after any of those change.
 type ReviewedMerge struct {
-	Args      MergeArgs
-	Preflight MergePreflight
-	HeadOID   string
-	Config    []byte
+	Args         MergeArgs
+	ArgsIdentity string
+	Preflight    MergePreflight
+	HeadOID      string
+	Config       []byte
 }
 
 func (r *Repository) ReviewMerge(ctx context.Context, args MergeArgs) (ReviewedMerge, error) {
@@ -33,11 +35,12 @@ func (r *Repository) ReviewMerge(ctx context.Context, args MergeArgs) (ReviewedM
 		return ReviewedMerge{}, err
 	}
 	args.Target = preflight.Target
-	return ReviewedMerge{Args: args, Preflight: preflight, HeadOID: head, Config: config}, nil
+	args.StrategyOptions = append([]string(nil), args.StrategyOptions...)
+	return ReviewedMerge{Args: args, ArgsIdentity: mergeArgsIdentity(args), Preflight: preflight, HeadOID: head, Config: config}, nil
 }
 
 func (r *Repository) ExecuteReviewedMerge(ctx context.Context, reviewed ReviewedMerge) (MergePreflight, error) {
-	if reviewed.HeadOID == "" || reviewed.Preflight.TargetOID == "" || reviewed.Args.Target == "" {
+	if reviewed.HeadOID == "" || reviewed.Preflight.TargetOID == "" || reviewed.Args.Target == "" || reviewed.ArgsIdentity == "" || reviewed.ArgsIdentity != mergeArgsIdentity(reviewed.Args) {
 		return MergePreflight{}, ErrStalePlan
 	}
 	head, config, err := r.mergeReviewIdentity(ctx)
@@ -54,6 +57,10 @@ func (r *Repository) ExecuteReviewedMerge(ctx context.Context, reviewed Reviewed
 		return current, ErrStalePlan
 	}
 	return r.MergeWithArgs(ctx, reviewed.Args)
+}
+
+func mergeArgsIdentity(args MergeArgs) string {
+	return strings.Join([]string{args.Target, strconv.Itoa(int(args.Mode)), strconv.FormatBool(args.NoCommit), strconv.FormatBool(args.Squash), strconv.FormatBool(args.ConfirmDirty), args.Strategy, strings.Join(args.StrategyOptions, "\x01"), strconv.FormatBool(args.Signoff)}, "\x00")
 }
 
 // ReviewedMergeAbort binds destructive merge abort approval to the exact merge

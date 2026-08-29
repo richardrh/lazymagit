@@ -23,6 +23,9 @@ const (
 )
 
 func init() {
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-remote", map[string][]string{
+		"magit-remote-add": {"transient:magit-remote:-f"},
+	})...)
 	RegisterWorkflowDomain(func(m *Model) map[keymap.CommandID]WorkflowHandler {
 		return map[keymap.CommandID]WorkflowHandler{
 			keymap.CommandAddRemote:    remoteAddWorkflow,

@@ -24,6 +24,18 @@ const (
 )
 
 func init() {
+	pushOptions := []string{"transient:magit-push:--force-with-lease", "transient:magit-push:--force", "transient:magit-push:--no-verify", "transient:magit-push:--dry-run", "transient:magit-push:--set-upstream", "transient:magit-push:--tags", "transient:magit-push:--follow-tags", "magit-push:--push-option"}
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-push", map[string][]string{
+		"magit-push-current-to-pushremote": pushOptions,
+		"magit-push-current-to-upstream":   pushOptions,
+		"magit-push-current":               pushOptions,
+		"magit-push-other":                 pushOptions,
+		"magit-push-refspecs":              pushOptions,
+		"magit-push-matching":              pushOptions,
+		"magit-push-tag":                   pushOptions,
+		"magit-push-tags":                  pushOptions,
+		"magit-push-notes-ref":             pushOptions,
+	})...)
 	RegisterWorkflowDomain(func(_ *Model) map[keymap.CommandID]WorkflowHandler {
 		return map[keymap.CommandID]WorkflowHandler{
 			keymap.CommandPush: pushWorkflowHandler(pushCurrentRemote),

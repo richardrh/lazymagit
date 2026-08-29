@@ -36,7 +36,7 @@ const (
 
 func init() {
 	pullOptions := []string{"transient:magit-pull:--ff-only", "magit-pull:--rebase", "transient:magit-pull:--autostash", "transient:magit-pull:--force"}
-	mergeOptions := []string{"transient:magit-merge:--ff-only", "transient:magit-merge:--no-ff"}
+	mergeOptions := []string{"transient:magit-merge:--ff-only", "transient:magit-merge:--no-ff", "magit-merge:--strategy", "magit-merge:--strategy-option", "transient:magit-merge:-Xignore-space-change", "transient:magit-merge:-Xignore-all-space", "magit:--signoff"}
 	RegisterWorkflowCapabilities(
 		WorkflowCapability{ID: pullPushRemoteID, Transient: "magit-pull", UpstreamCommand: "magit-pull-from-pushremote", Consumes: pullOptions},
 		WorkflowCapability{ID: pullUpstreamID, Transient: "magit-pull", UpstreamCommand: "magit-pull-from-upstream", Consumes: pullOptions},
@@ -179,15 +179,27 @@ func mergeArgs(options map[keymap.CommandID]OptionValue) (gitbackend.MergeArgs, 
 	if ff && noFF {
 		return gitbackend.MergeArgs{}, errors.New("fast-forward-only and no-fast-forward are mutually exclusive")
 	}
-	// MergeWithArgs intentionally has no strategy/signing contract. Keeping these
-	// options unavailable is safer than silently dropping an argv-affecting infix.
+	args := gitbackend.MergeArgs{Mode: gitbackend.MergePlain}
 	for id, value := range options {
-		name := string(id)
-		if (strings.Contains(name, "strategy") || strings.Contains(name, "ignore-space") || strings.Contains(name, "diff-algorithm") || strings.Contains(name, "gpg-sign") || strings.Contains(name, "signoff")) && (value.Enabled || value.Value != "") {
+		if !value.Enabled && value.Value == "" {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(string(id), "--strategy"):
+			args.Strategy = value.Value
+		case strings.HasSuffix(string(id), "--strategy-option"):
+			args.StrategyOptions = append(args.StrategyOptions, value.Value)
+		case strings.HasSuffix(string(id), "-Xignore-space-change"):
+			args.StrategyOptions = append(args.StrategyOptions, "ignore-space-change")
+		case strings.HasSuffix(string(id), "-Xignore-all-space"):
+			args.StrategyOptions = append(args.StrategyOptions, "ignore-all-space")
+		case strings.HasSuffix(string(id), "--signoff"):
+			args.Signoff = true
+		case strings.Contains(string(id), "diff-algorithm") || strings.Contains(string(id), "gpg-sign"):
 			return gitbackend.MergeArgs{}, fmt.Errorf("%s is unsupported by the typed merge backend", id)
 		}
 	}
-	args := gitbackend.MergeArgs{Mode: gitbackend.MergePlain}
+	args.Mode = gitbackend.MergePlain
 	if ff {
 		args.Mode = gitbackend.MergeFFOnly
 	} else if noFF {
@@ -267,6 +279,15 @@ func mergePlan(p gitbackend.MergePreflight, args gitbackend.MergeArgs) []string 
 	}
 	if args.Squash {
 		plan = append(plan, "Squash changes without creating a merge commit")
+	}
+	if args.Strategy != "" {
+		plan = append(plan, "Strategy: "+args.Strategy)
+	}
+	for _, option := range args.StrategyOptions {
+		plan = append(plan, "Strategy option: "+option)
+	}
+	if args.Signoff {
+		plan = append(plan, "Add Signed-off-by trailer")
 	}
 	if p.State.Dirty {
 		plan = append(plan, "WARNING: merge into a dirty worktree")

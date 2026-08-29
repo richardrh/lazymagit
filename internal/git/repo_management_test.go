@@ -151,6 +151,14 @@ func TestCloneRawArgvCaptureAndRedaction(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(destination, ".git")); err != nil {
 		t.Fatal(err)
 	}
+	noTagsDestination := filepath.Join(t.TempDir(), "no tags clone")
+	if err := CloneRepository(ctx, r.dir, noTagsDestination, CloneOptions{NoTags: true}); err != nil {
+		t.Fatalf("clone with --no-tags: %v", err)
+	}
+	out, err := managementOutput(ctx, noTagsDestination, "config", "--get", "remote.origin.tagOpt")
+	if err != nil || trimLine(out) != "--no-tags" {
+		t.Fatalf("clone --no-tags config = %q, %v", out, err)
+	}
 	nonempty := t.TempDir()
 	if err := os.WriteFile(filepath.Join(nonempty, "keep"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)

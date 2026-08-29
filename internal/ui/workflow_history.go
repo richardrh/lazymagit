@@ -15,7 +15,7 @@ import (
 // contains no copied command IDs and remains correct for conditional duplicate
 // rows in the Magit 4.7 manifest.
 func init() {
-	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "magit:--signoff"}
+	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff"}
 	rebaseOptions := []string{"transient:magit-rebase:--keep-empty", "transient:magit-rebase:--rebase-merges=", "transient:magit-rebase:--update-refs", "transient:magit-rebase:--autostash", "transient:magit-rebase:--force-rebase", "magit-merge:--strategy", "magit:--signoff"}
 	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent"}
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-cherry-pick", map[string][]string{
@@ -210,6 +210,10 @@ func historyPickOptions(command WorkflowCommand) (gitbackend.PickOptions, error)
 			opts.Strategy = value.Value
 		case "magit:--signoff":
 			opts.Signoff = true
+		case "transient:magit-cherry-pick:--ff":
+			opts.FastForward = true
+		case "transient:magit-cherry-pick:-x":
+			opts.RecordOrigin = true
 		case "transient:magit-cherry-pick:--edit":
 			return opts, errors.New("cherry-pick edit is adapted out: the TUI cannot safely preserve the editor session")
 		case "transient:magit-revert:--no-edit":

@@ -49,11 +49,13 @@ type DestructivePreflight struct {
 }
 
 type PickOptions struct {
-	NoCommit bool
-	Mainline int
-	Strategy string
-	Signoff  bool
-	NoEdit   bool
+	NoCommit     bool
+	Mainline     int
+	Strategy     string
+	Signoff      bool
+	NoEdit       bool
+	FastForward  bool
+	RecordOrigin bool
 }
 
 // The aliases make call sites self-documenting while retaining one shared set
@@ -70,6 +72,9 @@ func (r *Repository) RevertStart(ctx context.Context, commits []string, opts Pic
 }
 
 func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisions []string, opts PickOptions) error {
+	if verb != "cherry-pick" && (opts.FastForward || opts.RecordOrigin) {
+		return fmt.Errorf("%s does not support cherry-pick fast-forward or origin recording", verb)
+	}
 	if len(revisions) == 0 {
 		return errors.New(verb + ": no commits supplied")
 	}
@@ -102,6 +107,12 @@ func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisio
 	}
 	if opts.NoEdit {
 		args = append(args, "--no-edit")
+	}
+	if opts.FastForward {
+		args = append(args, "--ff")
+	}
+	if opts.RecordOrigin {
+		args = append(args, "-x")
 	}
 	if verb == "revert" && !opts.NoEdit {
 		// Revert's backend default is deliberately non-interactive.

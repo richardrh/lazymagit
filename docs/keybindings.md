@@ -165,11 +165,11 @@ All manifest transients are generated from effective status bindings and transie
 | `R` | `magit-pull.rebase` | **infix** | Configure repository defaults | if-non-nil: magit-branch-direct-configure | `partial` | actionable in corresponding Configure dialog |
 | `P` | `magit-remote.pushDefault` | **infix** | Configure repository defaults | if-non-nil: magit-branch-direct-configure | `partial` | actionable in corresponding Configure dialog |
 | `B` | `magit-update-default-branch` | **suffix** | Configure repository defaults | if-non-nil: magit-branch-direct-configure; inapt-if-not: magit-get-some-remote; inapt-if-not: magit-get-some-remote | `missing` | suffix: not implemented |
-| `-r` | `transient:magit-branch:--recurse-submodules` | **infix** | Arguments |  | `missing` | infix: argument editing is not implemented |
+| `-r` | `transient:magit-branch:--recurse-submodules` | **infix** | Arguments |  | `partial` | actionable TUI option |
 | `b` | `magit-checkout` | **suffix** | Checkout |  | `partial` | TUI workflow handler (startup-validated) |
 | `l` | `magit-branch-checkout` | **suffix** | Checkout |  | `partial` | TUI workflow handler (startup-validated) |
 | `o` | `magit-branch-orphan` | **suffix** | Checkout |  | `partial` | TUI workflow handler (startup-validated) |
-| `r` | `magit-checkout-remote-ref` | **suffix** | Checkout |  | `missing` | suffix: not implemented |
+| `r` | `magit-checkout-remote-ref` | **suffix** | Checkout |  | `partial` | TUI workflow handler (startup-validated) |
 | `c` | `magit-branch-and-checkout` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
 | `s` | `magit-branch-spinoff` | **suffix** |  |  | `missing` | backend explicitly reports this branch workflow as unsupported |
 | `w` | `magit-worktree-checkout` | **suffix** |  |  | `partial` | TUI workflow handler (startup-validated) |
@@ -201,15 +201,15 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-m` | `magit-cherry-pick:--mainline` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `=s` | `magit-merge:--strategy` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-F` | `transient:magit-cherry-pick:--ff` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-x` | `transient:magit-cherry-pick:-x` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
+| `-m` | `magit-cherry-pick:--mainline` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `partial` | actionable TUI option |
+| `=s` | `magit-merge:--strategy` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `partial` | actionable TUI option |
+| `-F` | `transient:magit-cherry-pick:--ff` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `partial` | actionable TUI option |
+| `-x` | `transient:magit-cherry-pick:-x` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `partial` | actionable TUI option |
 | `-e` | `transient:magit-cherry-pick:--edit` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
 | `-S` | `magit:--gpg-sign` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `+s` | `magit:--signoff` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `A` | `magit-cherry-copy` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `missing` | suffix: not implemented |
-| `a` | `magit-cherry-apply` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `missing` | suffix: not implemented |
+| `+s` | `magit:--signoff` | **infix** | Arguments | if-not: magit-sequencer-in-progress-p | `partial` | actionable TUI option |
+| `A` | `magit-cherry-copy` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `a` | `magit-cherry-apply` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 | `h` | `magit-cherry-harvest` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `missing` | suffix: not implemented |
 | `m` | `magit-merge-squash` | **suffix** | Apply here | if-not: magit-sequencer-in-progress-p | `missing` | suffix: not implemented |
 | `d` | `magit-cherry-donate` | **suffix** | Apply elsewhere | if-not: magit-sequencer-in-progress-p | `missing` | suffix: not implemented |
@@ -223,24 +223,24 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-B` | `transient:magit-clone:--single-branch` | **infix** | Fetch arguments |  | `missing` | infix: argument editing is not implemented |
-| `-n` | `transient:magit-clone:--no-tags` | **infix** | Fetch arguments |  | `missing` | infix: argument editing is not implemented |
-| `-S` | `transient:magit-clone:--recurse-submodules` | **infix** | Fetch arguments |  | `missing` | infix: argument editing is not implemented |
+| `-B` | `transient:magit-clone:--single-branch` | **infix** | Fetch arguments |  | `partial` | actionable TUI option |
+| `-n` | `transient:magit-clone:--no-tags` | **infix** | Fetch arguments |  | `partial` | actionable TUI option |
+| `-S` | `transient:magit-clone:--recurse-submodules` | **infix** | Fetch arguments |  | `partial` | actionable TUI option |
 | `-l` | `transient:magit-clone:--no-local` | **infix** | Fetch arguments |  | `missing` | infix: argument editing is not implemented |
-| `-o` | `transient:magit-clone:--origin=` | **infix** | Setup arguments |  | `missing` | infix: argument editing is not implemented |
-| `-b` | `transient:magit-clone:--branch=` | **infix** | Setup arguments |  | `missing` | infix: argument editing is not implemented |
+| `-o` | `transient:magit-clone:--origin=` | **infix** | Setup arguments |  | `partial` | actionable TUI option |
+| `-b` | `transient:magit-clone:--branch=` | **infix** | Setup arguments |  | `partial` | actionable TUI option |
 | `-f` | `magit-clone:--filter` | **infix** | Setup arguments |  | `missing` | infix: argument editing is not implemented |
 | `-g` | `transient:magit-clone:--separate-git-dir=` | **infix** | Setup arguments |  | `missing` | infix: argument editing is not implemented |
 | `-t` | `transient:magit-clone:--template=` | **infix** | Setup arguments |  | `missing` | infix: argument editing is not implemented |
 | `-s` | `transient:magit-clone:--shared` | **infix** | Local sharing arguments |  | `missing` | infix: argument editing is not implemented |
 | `-h` | `transient:magit-clone:--no-hardlinks` | **infix** | Local sharing arguments |  | `missing` | infix: argument editing is not implemented |
-| `C` | `magit-clone-regular` | **suffix** | Clone |  | `missing` | suffix: not implemented |
-| `s` | `magit-clone-shallow` | **suffix** | Clone |  | `missing` | suffix: not implemented |
+| `C` | `magit-clone-regular` | **suffix** | Clone |  | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-clone-shallow` | **suffix** | Clone |  | `partial` | TUI workflow handler (startup-validated) |
 | `d` | `magit-clone-shallow-since` | **suffix** | Clone |  | `missing` | suffix: not implemented |
 | `e` | `magit-clone-shallow-exclude` | **suffix** | Clone |  | `missing` | suffix: not implemented |
 | `>` | `magit-clone-sparse` | **suffix** | Clone |  | `missing` | suffix: not implemented |
-| `b` | `magit-clone-bare` | **suffix** | Clone |  | `missing` | suffix: not implemented |
-| `m` | `magit-clone-mirror` | **suffix** | Clone |  | `missing` | suffix: not implemented |
+| `b` | `magit-clone-bare` | **suffix** | Clone |  | `partial` | TUI workflow handler (startup-validated) |
+| `m` | `magit-clone-mirror` | **suffix** | Clone |  | `partial` | TUI workflow handler (startup-validated) |
 
 ### `c` — magit-commit (26 occurrences)
 
@@ -484,21 +484,21 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-f` | `transient:magit-merge:--ff-only` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-n` | `transient:magit-merge:--no-ff` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-s` | `magit-merge:--strategy` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-X` | `magit-merge:--strategy-option` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-b` | `transient:magit-merge:-Xignore-space-change` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-w` | `transient:magit-merge:-Xignore-all-space` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
+| `-f` | `transient:magit-merge:--ff-only` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `-n` | `transient:magit-merge:--no-ff` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `-s` | `magit-merge:--strategy` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `-X` | `magit-merge:--strategy-option` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `-b` | `transient:magit-merge:-Xignore-space-change` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `-w` | `transient:magit-merge:-Xignore-all-space` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
 | `-A` | `magit-diff:--diff-algorithm` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
 | `-S` | `magit:--gpg-sign` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `+s` | `magit:--signoff` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `m` | `magit-merge-plain` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
+| `+s` | `magit:--signoff` | **infix** | Arguments | if-not: magit-merge-in-progress-p | `partial` | actionable TUI option |
+| `m` | `magit-merge-plain` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 | `e` | `magit-merge-editmsg` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
-| `n` | `magit-merge-nocommit` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
+| `n` | `magit-merge-nocommit` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 | `a` | `magit-merge-absorb` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
-| `p` | `magit-merge-preview` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
-| `s` | `magit-merge-squash` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
+| `p` | `magit-merge-preview` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-merge-squash` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `partial` | TUI workflow handler (startup-validated) |
 | `d` | `magit-merge-dissolve` | **suffix** | Actions | if-not: magit-merge-in-progress-p | `missing` | suffix: not implemented |
 | `m` | `magit-commit-create` | **suffix** | Actions | if: magit-merge-in-progress-p | `missing` | suffix: not implemented |
 | `a` | `magit-merge-abort` | **suffix** | Actions | if: magit-merge-in-progress-p | `missing` | suffix: not implemented |
@@ -572,18 +572,18 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-f` | `transient:magit-pull:--ff-only` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `missing` | infix: argument editing is not implemented |
-| `-r` | `magit-pull:--rebase` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `missing` | infix: argument editing is not implemented |
-| `-A` | `transient:magit-pull:--autostash` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `missing` | infix: argument editing is not implemented |
-| `-F` | `transient:magit-pull:--force` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `missing` | infix: argument editing is not implemented |
-| `p` | `magit-pull-from-pushremote` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] | if: magit-get-current-branch | `missing` | suffix: not implemented |
-| `u` | `magit-pull-from-upstream` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] | if: magit-get-current-branch | `missing` | suffix: not implemented |
-| `e` | `magit-pull-branch` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] |  | `missing` | suffix: not implemented |
+| `-f` | `transient:magit-pull:--ff-only` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `partial` | actionable TUI option |
+| `-r` | `magit-pull:--rebase` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `partial` | actionable TUI option |
+| `-A` | `transient:magit-pull:--autostash` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `partial` | actionable TUI option |
+| `-F` | `transient:magit-pull:--force` | **infix** | #[nil ((if magit-pull-or-fetch "Pull arguments" "Arguments")) (t)] |  | `partial` | actionable TUI option |
+| `p` | `magit-pull-from-pushremote` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] | if: magit-get-current-branch | `partial` | TUI workflow handler (startup-validated) |
+| `u` | `magit-pull-from-upstream` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] | if: magit-get-current-branch | `partial` | TUI workflow handler (startup-validated) |
+| `e` | `magit-pull-branch` | **suffix** | #[nil ((let (anon2595) (if (setq anon2595 (magit-get-current-branch)) (let ((branch anon2595)) (concat (propertize "Pull into " 'face 'transient-heading) (propertize branch 'face 'magit-branch-local) (propertize " from" 'face 'transient-heading))) (propertize "Pull from" 'face 'transient-heading)))) (t)] |  | `partial` | TUI workflow handler (startup-validated) |
 | `U` | `magit-pull-into-upstream` | **suffix** | #[nil ((format (propertize "Pull into %s from" 'face 'transient-heading) (magit-get-upstream-branch))) (t)] | if: magit-pull--upstreams | `missing` | suffix: not implemented |
-| `f` | `magit-fetch-all-no-prune` | **suffix** | Fetch from | if-non-nil: magit-pull-or-fetch | `missing` | suffix: not implemented |
-| `F` | `magit-fetch-all-prune` | **suffix** | Fetch from | if-non-nil: magit-pull-or-fetch | `missing` | suffix: not implemented |
-| `o` | `magit-fetch-branch` | **suffix** | Fetch | if-non-nil: magit-pull-or-fetch | `missing` | suffix: not implemented |
-| `s` | `magit-fetch-refspec` | **suffix** | Fetch | if-non-nil: magit-pull-or-fetch | `missing` | suffix: not implemented |
+| `f` | `magit-fetch-all-no-prune` | **suffix** | Fetch from | if-non-nil: magit-pull-or-fetch | `partial` | TUI workflow handler (startup-validated) |
+| `F` | `magit-fetch-all-prune` | **suffix** | Fetch from | if-non-nil: magit-pull-or-fetch | `partial` | TUI workflow handler (startup-validated) |
+| `o` | `magit-fetch-branch` | **suffix** | Fetch | if-non-nil: magit-pull-or-fetch | `partial` | TUI workflow handler (startup-validated) |
+| `s` | `magit-fetch-refspec` | **suffix** | Fetch | if-non-nil: magit-pull-or-fetch | `partial` | TUI workflow handler (startup-validated) |
 | `m` | `magit-fetch-modules` | **suffix** | Fetch | if-non-nil: magit-pull-or-fetch | `partial` |  |
 | `r` | `magit-branch.<branch>.rebase` | **infix** | Configure | if: magit-get-current-branch | `missing` | infix: argument editing is not implemented |
 | `C` | `magit-branch-configure` | **suffix** | Configure |  | `partial` |  |

@@ -23,7 +23,7 @@ func TestCherryPickOrderedNoCommitAndProcessRecord(t *testing.T) {
 	var records []ProcessRecord
 	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
 
-	if err := repo.CherryPickStart(ctx, []string{one, two}, PickOptions{NoCommit: true, Signoff: true, NoEdit: true}); err != nil {
+	if err := repo.CherryPickStart(ctx, []string{one, two}, PickOptions{NoCommit: true, Signoff: true, NoEdit: true, RecordOrigin: true}); err != nil {
 		t.Fatalf("CherryPickStart: %v", err)
 	}
 	if got := r.git("rev-parse", "HEAD"); got != base {
@@ -32,7 +32,31 @@ func TestCherryPickOrderedNoCommitAndProcessRecord(t *testing.T) {
 	if got := r.git("diff", "--cached", "--name-only"); got != "one\ntwo" {
 		t.Fatalf("staged paths = %q", got)
 	}
-	want := []string{"cherry-pick", "--no-commit", "--signoff", "--no-edit", "--", one, two}
+	want := []string{"cherry-pick", "--no-commit", "--signoff", "--no-edit", "-x", "--", one, two}
+	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
+		t.Fatalf("process records = %#v, want args %#v", records, want)
+	}
+}
+
+func TestCherryPickFastForwardOptionUsesTypedArgv(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	base := r.commitAll("base")
+	r.git("switch", "-c", "source")
+	r.write("topic", "topic\n")
+	tip := r.commitAll("topic")
+	r.git("switch", "main")
+	repo, _ := Discover(r.dir)
+	var records []ProcessRecord
+	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
+
+	if err := repo.CherryPickStart(ctx, []string{tip}, PickOptions{FastForward: true, NoEdit: true}); err != nil {
+		t.Fatalf("fast-forward cherry-pick: %v", err)
+	}
+	if got := r.git("rev-parse", "HEAD"); got != tip || got == base {
+		t.Fatalf("fast-forward cherry-pick HEAD = %s, want %s", got, tip)
+	}
+	want := []string{"cherry-pick", "--no-edit", "--ff", "--", tip}
 	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
 		t.Fatalf("process records = %#v, want args %#v", records, want)
 	}

@@ -230,6 +230,9 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 	case HistoryUICherryStart, HistoryUIRevertStart:
 		verb := "Cherry-pick"
 		if q.Action == HistoryUIRevertStart {
+			if q.Pick.FastForward || q.Pick.RecordOrigin {
+				return q, nil, errors.New("revert does not support cherry-pick fast-forward or origin recording")
+			}
 			verb = "Revert"
 		}
 		if len(q.Revisions) == 0 {
@@ -261,6 +264,12 @@ func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIR
 		}
 		if q.Pick.Signoff {
 			plan = append(plan, "Add Signed-off-by trailer")
+		}
+		if q.Pick.FastForward {
+			plan = append(plan, "Fast-forward when the picked commit is a direct descendant")
+		}
+		if q.Pick.RecordOrigin {
+			plan = append(plan, "Record the source commit in the commit message")
 		}
 		if q.Pick.NoEdit || q.Action == HistoryUIRevertStart {
 			plan = append(plan, "Git editors are disabled")
@@ -391,7 +400,7 @@ func historyUIRequestIdentity(q HistoryUIRequest) string {
 		strconv.FormatBool(q.Rebase.KeepEmpty), strconv.FormatBool(q.Rebase.RebaseMerges), strconv.FormatBool(q.Rebase.UpdateRefs),
 		strconv.FormatBool(q.Rebase.Autostash), strconv.FormatBool(q.Rebase.ForceRebase), q.Rebase.Strategy, strconv.FormatBool(q.Rebase.Signoff),
 		strconv.Itoa(int(q.Reset.Mode)), q.Reset.Target, strings.Join(q.Reset.Paths, "\x01"),
-		strings.Join(q.Revisions, "\x01"), strconv.FormatBool(q.Pick.NoCommit), strconv.Itoa(q.Pick.Mainline), q.Pick.Strategy, strconv.FormatBool(q.Pick.Signoff), strconv.FormatBool(q.Pick.NoEdit),
+		strings.Join(q.Revisions, "\x01"), strconv.FormatBool(q.Pick.NoCommit), strconv.Itoa(q.Pick.Mainline), q.Pick.Strategy, strconv.FormatBool(q.Pick.Signoff), strconv.FormatBool(q.Pick.NoEdit), strconv.FormatBool(q.Pick.FastForward), strconv.FormatBool(q.Pick.RecordOrigin),
 		q.Bisect.Bad, q.Bisect.Good, strings.Join(q.Bisect.Paths, "\x01"), strconv.FormatBool(q.Bisect.NoCheckout), strconv.FormatBool(q.Bisect.FirstParent), q.Revision}, "\x00")
 }
 

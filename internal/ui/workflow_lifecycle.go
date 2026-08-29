@@ -20,6 +20,13 @@ const (
 )
 
 func init() {
+	cloneOptions := []string{"transient:magit-clone:--single-branch", "transient:magit-clone:--no-tags", "transient:magit-clone:--recurse-submodules", "transient:magit-clone:--origin=", "transient:magit-clone:--branch="}
+	RegisterWorkflowCapabilities(capabilitiesForTransient(lifecycleCloneUpstream, map[string][]string{
+		"magit-clone-regular": cloneOptions,
+		"magit-clone-shallow": cloneOptions,
+		"magit-clone-bare":    cloneOptions,
+		"magit-clone-mirror":  cloneOptions,
+	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := make(map[keymap.CommandID]WorkflowHandler, 6)
 		for _, binding := range keymap.Registry() {
@@ -68,7 +75,8 @@ func cloneRepositoryWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 	return cloneRepositoryDialog(m, command, cloneRegular)
 }
 
-func cloneRepositoryDialog(m *Model, _ WorkflowCommand, mode lifecycleCloneMode) tea.Cmd {
+func cloneRepositoryDialog(m *Model, command WorkflowCommand, mode lifecycleCloneMode) tea.Cmd {
+	options := cloneOptionsFromCommand(command)
 	title := "Clone repository"
 	depth := ""
 	if mode == cloneShallow {
@@ -88,12 +96,13 @@ func cloneRepositoryDialog(m *Model, _ WorkflowCommand, mode lifecycleCloneMode)
 		Fields: []WorkflowField{
 			{Name: "source", Label: "Repository URL or source path", Kind: WorkflowText, Required: true},
 			{Name: "path", Label: "New destination path", Kind: WorkflowText, Required: true},
-			{Name: "branch", Label: "Branch (optional)", Kind: WorkflowText},
-			{Name: "origin", Label: "Remote name (optional)", Kind: WorkflowText},
+			{Name: "branch", Label: "Branch (optional)", Kind: WorkflowText, Value: options.Branch},
+			{Name: "origin", Label: "Remote name (optional)", Kind: WorkflowText, Value: options.Origin},
 			{Name: "depth", Label: "Depth (optional positive integer)", Kind: WorkflowText, Value: depth},
 			{Name: "bare", Label: "Bare clone", Kind: WorkflowBool, Bool: mode == cloneBare},
-			{Name: "recurse", Label: "Recurse submodules", Kind: WorkflowBool},
-			{Name: "single", Label: "Single branch", Kind: WorkflowBool},
+			{Name: "recurse", Label: "Recurse submodules", Kind: WorkflowBool, Bool: options.RecurseSubmodules},
+			{Name: "single", Label: "Single branch", Kind: WorkflowBool, Bool: options.SingleBranch},
+			{Name: "no-tags", Label: "Do not fetch tags", Kind: WorkflowBool, Bool: options.NoTags},
 			{Name: "no-checkout", Label: "Do not checkout", Kind: WorkflowBool},
 		},
 	}
@@ -139,11 +148,39 @@ func cloneRepositoryDialog(m *Model, _ WorkflowCommand, mode lifecycleCloneMode)
 		return gitbackend.CloneRepositoryForUI(ctx, values["source"], values["path"], gitbackend.CloneOptions{
 			Branch: values["branch"], Origin: values["origin"], Depth: depth, Bare: values["bare"] == "true" || mode == cloneBare,
 			Mirror:            mode == cloneMirror,
-			RecurseSubmodules: values["recurse"] == "true", SingleBranch: values["single"] == "true",
+			RecurseSubmodules: values["recurse"] == "true", SingleBranch: values["single"] == "true", NoTags: values["no-tags"] == "true",
 			NoCheckout: values["no-checkout"] == "true",
 		})
 	}
 	return m.OpenWorkflow(dialog)
+}
+
+func cloneOptionsFromCommand(command WorkflowCommand) gitbackend.CloneOptions {
+	var options gitbackend.CloneOptions
+	for id, value := range command.Options {
+		if !value.Enabled && value.Value == "" {
+			continue
+		}
+		for _, binding := range keymap.Registry() {
+			if binding.Command != id {
+				continue
+			}
+			switch binding.UpstreamCommand {
+			case "transient:magit-clone:--single-branch":
+				options.SingleBranch = true
+			case "transient:magit-clone:--no-tags":
+				options.NoTags = true
+			case "transient:magit-clone:--recurse-submodules":
+				options.RecurseSubmodules = true
+			case "transient:magit-clone:--origin=":
+				options.Origin = value.Value
+			case "transient:magit-clone:--branch=":
+				options.Branch = value.Value
+			}
+			break
+		}
+	}
+	return options
 }
 
 func initRepositoryWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

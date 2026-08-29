@@ -74,21 +74,43 @@ func (r *Repository) resolveBranchCommit(ctx context.Context, revision string) (
 	return trimLine(out), nil
 }
 
+// CheckoutOptions is the deliberately small portable subset of switch's
+// checkout controls used by the branch transient.
+type CheckoutOptions struct{ RecurseSubmodules bool }
+
 // CheckoutRevision checks out a commit with detached HEAD. Resolving first
 // prevents an option-like revision from becoming a switch argument.
 func (r *Repository) CheckoutRevision(ctx context.Context, revision string) error {
+	return r.CheckoutRevisionWithOptions(ctx, revision, CheckoutOptions{})
+}
+
+func (r *Repository) CheckoutRevisionWithOptions(ctx context.Context, revision string, options CheckoutOptions) error {
 	oid, err := r.resolveBranchCommit(ctx, revision)
 	if err != nil {
 		return err
 	}
-	return r.run(ctx, "switch", "--detach", oid)
+	args := []string{"switch"}
+	if options.RecurseSubmodules {
+		args = append(args, "--recurse-submodules")
+	}
+	args = append(args, "--detach", oid)
+	return r.run(ctx, args...)
 }
 
 func (r *Repository) CheckoutBranch(ctx context.Context, name string) error {
+	return r.CheckoutBranchWithOptions(ctx, name, CheckoutOptions{})
+}
+
+func (r *Repository) CheckoutBranchWithOptions(ctx context.Context, name string, options CheckoutOptions) error {
 	if _, err := r.localBranchOID(ctx, name); err != nil {
 		return err
 	}
-	return r.run(ctx, "switch", "--", name)
+	args := []string{"switch"}
+	if options.RecurseSubmodules {
+		args = append(args, "--recurse-submodules")
+	}
+	args = append(args, "--", name)
+	return r.run(ctx, args...)
 }
 
 func (r *Repository) CreateAndCheckoutBranch(ctx context.Context, name, startPoint string) error {

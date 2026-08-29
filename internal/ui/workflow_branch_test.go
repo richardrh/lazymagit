@@ -67,17 +67,17 @@ func TestBranchWorkflowExactHandlerRegistrationAndAvailability(t *testing.T) {
 			t.Errorf("unsupported %s is available", upstream)
 		}
 	}
-	// The generic transient editor presents registry infixes. The branch domain
-	// never registers -r and every connected suffix rejects it, so toggling it
-	// cannot silently approximate recursive checkout semantics.
+	// -r has consumers only among existing checkout suffixes. It remains an
+	// infix (not an executable command), and its typed option reaches the
+	// checkout dialog rather than being silently dropped.
 	recurse := branchBinding(t, "transient:magit-branch:--recurse-submodules")
 	if _, ok := m.workflowHandlers[recurse.Command]; ok {
 		t.Fatal("recursive checkout infix acquired an execution handler")
 	}
 	checkout := branchBinding(t, "magit-checkout")
 	cmd, handled := m.performWorkflow(WorkflowCommand{ID: checkout.Command, Options: map[keymap.CommandID]OptionValue{recurse.Command: {Enabled: true}}})
-	if !handled || cmd != nil || !m.isError || !strings.Contains(m.message, "recursive-submodule") {
-		t.Fatalf("recursive option was not rejected: handled=%v cmd=%v message=%q", handled, cmd != nil, m.message)
+	if !handled || cmd == nil || m.isError {
+		t.Fatalf("recursive option did not open typed checkout: handled=%v cmd=%v message=%q", handled, cmd != nil, m.message)
 	}
 }
 

@@ -26,6 +26,16 @@ const (
 )
 
 func init() {
+	fetchOptions := []string{"transient:magit-fetch:--prune", "transient:magit-fetch:--tags", "transient:magit-fetch:--unshallow", "transient:magit-fetch:--force"}
+	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-fetch", map[string][]string{
+		"magit-fetch-from-pushremote": fetchOptions,
+		"magit-fetch-from-upstream":   fetchOptions,
+		"magit-fetch-other":           fetchOptions,
+		"magit-fetch-all":             fetchOptions,
+		"magit-fetch-branch":          fetchOptions,
+		"magit-fetch-refspec":         fetchOptions,
+		"magit-fetch-modules":         fetchOptions,
+	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		return map[keymap.CommandID]WorkflowHandler{
 			keymap.CommandFetchPush:      fetchPushWorkflow,

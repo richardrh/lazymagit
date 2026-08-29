@@ -217,6 +217,25 @@ func TestReviewedHistoryRejectsInactiveContinuationActions(t *testing.T) {
 	}
 }
 
+func TestReviewedHistoryOptionsBindConfirmationIdentity(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file.txt", "one\n")
+	r.commitAll("one")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err := repo.ReviewHistoryUIAction(context.Background(), HistoryUIRequest{Action: HistoryUICherryStart, Revisions: []string{"HEAD"}, Pick: PickOptions{FastForward: true, RecordOrigin: true, NoEdit: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := review
+	mutated.Request.Pick.FastForward = false
+	if err := repo.ExecuteReviewedHistoryUIAction(context.Background(), mutated); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("option-mutated execute error = %v, want ErrStalePlan", err)
+	}
+}
+
 func TestReviewedHistoryActionBindsOperationState(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("file.txt", "one\n")

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -42,7 +43,7 @@ func TestLifecycleCloneAndInitDialogsAreKeyDrivenAndKeepCurrentRepository(t *tes
 	typeLifecycleValue(t, m, source.dir)
 	tabLifecycle(t, m, 1)
 	typeLifecycleValue(t, m, cloneDestination)
-	tabLifecycle(t, m, 8)
+	tabLifecycle(t, m, 9)
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if _, err := os.Stat(filepath.Join(cloneDestination, ".git")); err != nil {
 		t.Fatalf("key-driven clone did not create repository: %v", err)
@@ -70,6 +71,46 @@ func TestLifecycleCloneAndInitDialogsAreKeyDrivenAndKeepCurrentRepository(t *tes
 	}
 }
 
+func TestCloneTransientOptionsReachTypedCloneBackend(t *testing.T) {
+	source := newUIE2ERepo(t)
+	source.write("tracked.txt", "content\n")
+	source.git("add", "--", "tracked.txt")
+	source.git("commit", "-m", "source")
+	source.git("tag", "v1")
+	m := newE2EModel(t, source)
+	destination := filepath.Join(t.TempDir(), "option clone")
+
+	// C's high-value fetch/setup infixes remain portable terminal sequences.
+	sendE2EKey(t, m, keyMsg("C"))
+	for _, key := range []string{"-", "B", "-", "n", "-", "S"} {
+		sendE2EKey(t, m, keyMsg(key))
+	}
+	sendE2EKey(t, m, keyMsg("C"))
+	if m.workflow == nil {
+		t.Fatalf("clone workflow did not open: %q", m.message)
+	}
+	for _, name := range []string{"recurse", "single", "no-tags"} {
+		found := false
+		for _, field := range m.workflow.dialog.Fields {
+			if field.Name == name {
+				found = field.Bool
+			}
+		}
+		if !found {
+			t.Fatalf("clone option %s was not carried into the typed dialog", name)
+		}
+	}
+	typeLifecycleValue(t, m, source.dir)
+	tabLifecycle(t, m, 1)
+	typeLifecycleValue(t, m, destination)
+	tabLifecycle(t, m, 9)
+	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
+	out, err := exec.Command("git", "-C", destination, "config", "--get", "remote.origin.tagOpt").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "--no-tags" {
+		t.Fatalf("clone did not consume --no-tags: %q (%v)", out, err)
+	}
+}
+
 func TestLifecycleDialogCancellationAndValidationAreNonMutating(t *testing.T) {
 	source := newUIE2ERepo(t)
 	m := newE2EModel(t, source)
@@ -90,7 +131,7 @@ func TestLifecycleDialogCancellationAndValidationAreNonMutating(t *testing.T) {
 	typeLifecycleValue(t, m, "https://user:secret@example.invalid/repo.git")
 	tabLifecycle(t, m, 1)
 	typeLifecycleValue(t, m, destination)
-	tabLifecycle(t, m, 8)
+	tabLifecycle(t, m, 9)
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if m.workflow == nil || !strings.Contains(m.workflow.error, "credential helper") {
 		t.Fatalf("credential-bearing URL validation = workflow %#v", m.workflow)

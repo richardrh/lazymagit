@@ -23,7 +23,8 @@ func TestPullAndMergeOptionMapping(t *testing.T) {
 	if err != nil || merge.Mode != gitbackend.MergeNoFF {
 		t.Fatalf("merge args = %#v, %v", merge, err)
 	}
-	if _, err := mergeArgs(map[keymap.CommandID]OptionValue{"merge.--strategy": {Value: "ours"}}); err == nil {
-		t.Fatal("merge silently accepted an unsupported strategy")
+	merge, err = mergeArgs(map[keymap.CommandID]OptionValue{"merge.--strategy": {Value: "ours"}, "merge.--strategy-option": {Value: "ignore-space-change"}, "merge.--signoff": {Enabled: true}})
+	if err != nil || merge.Strategy != "ours" || len(merge.StrategyOptions) != 1 || !merge.Signoff {
+		t.Fatalf("merge advanced args = %#v, %v", merge, err)
 	}
 }

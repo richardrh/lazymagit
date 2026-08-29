@@ -281,11 +281,14 @@ const (
 )
 
 type MergeArgs struct {
-	Target       string
-	Mode         MergeMode
-	NoCommit     bool
-	Squash       bool
-	ConfirmDirty bool
+	Target          string
+	Mode            MergeMode
+	NoCommit        bool
+	Squash          bool
+	ConfirmDirty    bool
+	Strategy        string
+	StrategyOptions []string
+	Signoff         bool
 }
 
 type MergeState struct {
@@ -376,6 +379,14 @@ func (r *Repository) MergePreflight(ctx context.Context, target string) (MergePr
 }
 
 func (r *Repository) MergeWithArgs(ctx context.Context, in MergeArgs) (MergePreflight, error) {
+	if err := validateHistoryStrategy(in.Strategy); err != nil {
+		return MergePreflight{}, err
+	}
+	for _, option := range in.StrategyOptions {
+		if err := validateMergeStrategyOption(option); err != nil {
+			return MergePreflight{}, err
+		}
+	}
 	p, err := r.MergePreflight(ctx, in.Target)
 	if err != nil {
 		return p, err
@@ -406,8 +417,24 @@ func (r *Repository) MergeWithArgs(ctx context.Context, in MergeArgs) (MergePref
 	if in.Squash {
 		args = append(args, "--squash")
 	}
+	if in.Strategy != "" {
+		args = append(args, "--strategy="+in.Strategy)
+	}
+	for _, option := range in.StrategyOptions {
+		args = append(args, "--strategy-option="+option)
+	}
+	if in.Signoff {
+		args = append(args, "--signoff")
+	}
 	args = append(args, "--", p.TargetOID)
 	return p, r.run(ctx, args...)
+}
+
+func validateMergeStrategyOption(option string) error {
+	if strings.TrimSpace(option) != option || option == "" || strings.HasPrefix(option, "-") || strings.ContainsAny(option, "\x00\r\n") {
+		return fmt.Errorf("invalid merge strategy option %q", option)
+	}
+	return nil
 }
 
 func (r *Repository) ContinueMerge(ctx context.Context) error {

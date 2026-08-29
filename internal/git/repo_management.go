@@ -1110,12 +1110,19 @@ func (r *Repository) PushSubtree(ctx context.Context, o SubtreeOptions) error {
 }
 
 type CloneOptions struct {
-	Bare, Mirror, NoCheckout, SingleBranch bool
-	Branch                                 string
-	Depth                                  int
-	RecurseSubmodules                      bool
-	Jobs                                   int
-	Origin                                 string
+	Bare, Mirror, NoCheckout, SingleBranch, NoTags bool
+	Branch                                         string
+	Depth                                          int
+	RecurseSubmodules                              bool
+	Jobs                                           int
+	Origin                                         string
+}
+
+func appendCloneNoTags(args []string, noTags bool) []string {
+	if noTags {
+		return append(args, "--no-tags")
+	}
+	return args
 }
 
 // CloneRepository clones into destination without discovering it and therefore
@@ -1146,6 +1153,7 @@ func CloneRepository(ctx context.Context, source, destination string, o CloneOpt
 	if o.SingleBranch {
 		args = append(args, "--single-branch")
 	}
+	args = appendCloneNoTags(args, o.NoTags)
 	if o.Branch != "" {
 		args = append(args, "--branch", o.Branch)
 	}

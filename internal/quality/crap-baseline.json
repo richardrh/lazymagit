@@ -1,7 +1,6 @@
 {
   "threshold": 30,
   "scores": {
-    "github.com/richard/lazymagit/internal/git/-/CloneRepository": 30.896318557475585,
     "github.com/richard/lazymagit/internal/git/-/RemoteChangePlanLines": 156,
     "github.com/richard/lazymagit/internal/git/-/copyFileExclusive": 42,
     "github.com/richard/lazymagit/internal/git/-/restoreConfigFile": 72,
