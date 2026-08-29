@@ -90,6 +90,19 @@ func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("f2"))
 	sendInspectSequence(t, m, "ctrl+g")
 	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main", "topic", "* ")
+	if !m.graphActive || m.graphCursor < 0 {
+		t.Fatalf("graph was not made selectable: active=%t cursor=%d", m.graphActive, m.graphCursor)
+	}
+	first := m.graphCursor
+	sendInspectSequence(t, m, "n")
+	if m.graphCursor == first {
+		t.Fatalf("graph next did not advance from line %d", first)
+	}
+	sendInspectSequence(t, m, "enter")
+	if m.graphActive {
+		t.Fatal("opening a graph commit left graph selection active")
+	}
+	assertInspectDetail(t, m, "Commit", "graph")
 }
 
 func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {

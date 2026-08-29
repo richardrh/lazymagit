@@ -133,6 +133,8 @@ func (m *Model) renderCompactDetail(width, height int) string {
 		absoluteIndex := start + visibleIndex
 		style := lipgloss.NewStyle().Foreground(colorText)
 		switch {
+		case m.graphActive && absoluteIndex == m.graphCursor:
+			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
 			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
 		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
@@ -255,6 +257,8 @@ func (m *Model) renderDetailPanel(width, height int) string {
 		absoluteIndex := start + visibleIndex
 		style := lipgloss.NewStyle()
 		switch {
+		case m.graphActive && absoluteIndex == m.graphCursor:
+			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
 			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
 		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
@@ -336,6 +340,8 @@ func (m *Model) renderFooter() string {
 		} else {
 			left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] g …  g → first")
 		}
+	} else if m.mode == modeStatus && m.graphActive {
+		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Graph") + lipgloss.NewStyle().Foreground(colorMuted).Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
 	} else if m.mode == modeStatus {
 		workflow := func(key, label string) string {
 			return lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(key) + " " + label

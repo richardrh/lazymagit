@@ -93,6 +93,16 @@ type branchesMsg struct {
 	err      error
 }
 
+// graphMsg carries the immutable all-refs graph result back to the UI thread.
+// It is distinct from diffMsg because graph rows remain selectable after load.
+type graphMsg struct {
+	id      sectionmodel.SectionID
+	request uint64
+	text    string
+	entries map[int]gitbackend.LogEntry
+	err     error
+}
+
 // Model is the Bubble Tea application model.
 type Model struct {
 	repo     *gitbackend.Repository
@@ -132,6 +142,9 @@ type Model struct {
 	detailSelectedHunks   map[int]bool
 	detailSelections      []gitbackend.InteractiveChangeSelection
 	inspectionActive      bool
+	graphActive           bool
+	graphCursor           int
+	graphEntries          map[int]gitbackend.LogEntry
 	transientOffset       int
 	vimGToken             uint64
 	snapshotRequest       uint64
@@ -334,6 +347,29 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.OpenWorkflow(msg.dialog)
+	case graphMsg:
+		if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
+			return m, nil
+		}
+		m.cancelDetail()
+		m.detailID, m.detail = msg.id, sanitizeDiff("All refs graph\n\n"+msg.text)
+		m.detailOffset, m.graphEntries, m.graphActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
+		m.graphCursor = -1
+		if msg.err != nil {
+			m.detail = "Unable to load graph:\n" + sanitizeSingleLine(msg.err.Error())
+			m.graphEntries = nil
+		} else {
+			for line := range msg.entries {
+				if m.graphCursor < 0 || line < m.graphCursor {
+					m.graphCursor = line
+				}
+			}
+			if m.graphCursor >= 0 {
+				m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
+			}
+		}
+		m.resetDetailSelection()
+		return m, nil
 	case diffMsg:
 		if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || (m.mode != modeStatus && m.mode != modeProcess) || !m.appActive() {
 			return m, nil
@@ -394,7 +430,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	if key == "esc" && m.inspectionActive && m.resolver.PendingPrefix() == "" {
-		m.inspectionActive = false
+		m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
 		m.setMessage("Inspection closed")
 		return m, m.loadDetailCmd()
 	}
@@ -613,6 +649,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.handlePatchHunkSelectionKey(key) || m.handlePatchRangeKey(key) {
 		m.cancelPrefix()
 		return m, nil
+	}
+	if m.graphActive {
+		if cmd, handled := m.handleGraphKey(key); handled {
+			return m, cmd
+		}
 	}
 	if cmd, handled := m.handleDetailScroll(key); handled {
 		m.cancelPrefix()

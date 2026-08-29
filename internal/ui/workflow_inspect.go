@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -159,7 +160,7 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 		return nil
 	}
 	m.cancelDetail()
-	m.inspectionActive = true
+	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
@@ -246,7 +247,10 @@ func inspectDiffRange(m *Model, _ WorkflowCommand) tea.Cmd {
 }
 
 func inspectShowCommit(m *Model, _ WorkflowCommand) tea.Cmd {
-	revision := selectedInspectRevision(m)
+	return inspectRevision(m, selectedInspectRevision(m))
+}
+
+func inspectRevision(m *Model, revision string) tea.Cmd {
 	return loadInspection(m, "Commit "+revision, func(ctx context.Context) (string, error) {
 		result, err := m.repo.QueryShowRevision(ctx, gitbackend.ShowRevisionQuery{Revision: revision, Stat: true, Patch: true, OutputLimit: inspectOutputLimit})
 		return truncationNote(result.Truncated) + result.Detail, err
@@ -277,7 +281,76 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 // decorations in the pageable terminal detail pane.
 func inspectGraph(m *Model, _ WorkflowCommand) tea.Cmd {
 	query := gitbackend.LogQuery{All: true, Graph: true, Decorations: true, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
-	return runLogInspection(m, "All refs graph", query)
+	return loadGraphInspection(m, query)
+}
+
+func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	m.cancelDetail()
+	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.detailOffset = 0
+	m.detailRequest++
+	request, id := m.detailRequest, m.tree.Cursor()
+	m.detailID, m.detail = id, "Loading all refs graph…"
+	m.setMessage("Loading all refs graph…")
+	ctx, cancel := context.WithCancel(m.appCtx)
+	m.detailCtx, m.detailCancel = ctx, cancel
+	return func() tea.Msg {
+		result, err := m.repo.QueryLog(ctx, query)
+		if err != nil {
+			return graphMsg{id: id, request: request, err: err}
+		}
+		text, entries := graphResultText(result)
+		return graphMsg{id: id, request: request, text: text, entries: entries}
+	}
+}
+
+func graphResultText(result gitbackend.LogResult) (string, map[int]gitbackend.LogEntry) {
+	lines := make([]string, 0, len(result.Items)+1)
+	entries := make(map[int]gitbackend.LogEntry, len(result.Items))
+	if result.Truncated {
+		lines = append(lines, strings.TrimSuffix(truncationNote(true), "\n"))
+	}
+	// The detail view prepends the title and a blank line, so graph rows begin
+	// at line two. The map makes only real commit rows selectable.
+	for _, item := range result.Items {
+		entries[len(lines)+2] = item
+		lines = append(lines, logEntryText(item))
+	}
+	return strings.Join(lines, "\n"), entries
+}
+
+func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
+	lines := make([]int, 0, len(m.graphEntries))
+	for line := range m.graphEntries {
+		lines = append(lines, line)
+	}
+	sort.Ints(lines)
+	if len(lines) == 0 {
+		return nil, false
+	}
+	index := sort.SearchInts(lines, m.graphCursor)
+	if index == len(lines) || lines[index] != m.graphCursor {
+		index = 0
+	}
+	switch key {
+	case "up", "k", "p":
+		index = max(0, index-1)
+	case "down", "j", "n":
+		index = min(len(lines)-1, index+1)
+	case "enter":
+		entry := m.graphEntries[m.graphCursor]
+		m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
+		return inspectRevision(m, entry.ID), true
+	default:
+		return nil, false
+	}
+	m.graphCursor = lines[index]
+	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
+	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects")
+	return nil, true
 }
 
 func formatBlameResult(result gitbackend.BlameResult) string {
@@ -413,15 +486,19 @@ func inspectOption(command WorkflowCommand, upstream string) (OptionValue, bool)
 }
 
 func logResultText(result gitbackend.LogResult) string {
-	var lines []string
+	lines := make([]string, 0, len(result.Items))
 	for _, item := range result.Items {
-		line := strings.TrimSpace(item.Graph + " " + item.ShortID)
-		if item.Decorations != "" {
-			line += " (" + item.Decorations + ")"
-		}
-		lines = append(lines, line+" "+item.Subject)
+		lines = append(lines, logEntryText(item))
 	}
 	return truncationNote(result.Truncated) + strings.Join(lines, "\n")
+}
+
+func logEntryText(item gitbackend.LogEntry) string {
+	line := strings.TrimSpace(item.Graph + " " + item.ShortID)
+	if item.Decorations != "" {
+		line += " (" + item.Decorations + ")"
+	}
+	return line + " " + item.Subject
 }
 
 func runLogInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
