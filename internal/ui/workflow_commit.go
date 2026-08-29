@@ -136,7 +136,7 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 					return WorkflowDialog{}, fmt.Errorf("load reedit message: %w", err)
 				}
 			}
-			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Message", Kind: WorkflowText, Value: message, Required: required})
+			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Message (internal editor)", Kind: WorkflowMultiline, Value: message, Required: required})
 		}
 		signing := options.Sign || options.SigningKey != ""
 		if signing {

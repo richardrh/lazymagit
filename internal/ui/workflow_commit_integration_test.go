@@ -33,15 +33,18 @@ func TestCommitWorkflowReeditMessageUsesInternalEditorIntegration(t *testing.T) 
 	if m.workflow == nil {
 		t.Fatalf("reedit dialog missing: %s", m.message)
 	}
+	if field := m.workflow.dialog.Fields[0]; field.Name != commitMessageField || field.Kind != WorkflowMultiline {
+		t.Fatalf("commit message field = %#v; want terminal-native multiline editor", field)
+	}
 	values := m.workflowValues()
 	if values[commitMessageField] != "source message\n\n" {
 		t.Fatalf("prefilled reedit message = %q", values[commitMessageField])
 	}
-	values[commitMessageField] = "edited internally"
+	values[commitMessageField] = "edited internally\n\nwith a body"
 	if err := m.workflow.dialog.Submit(context.Background(), values); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.git("log", "-1", "--format=%B"); got != "edited internally" {
+	if got := r.git("log", "-1", "--format=%B"); got != "edited internally\n\nwith a body" {
 		t.Fatalf("reedit message = %q", got)
 	}
 }
