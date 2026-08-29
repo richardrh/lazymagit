@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/mail"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richard/lazymagit/internal/git"
@@ -22,9 +24,11 @@ const (
 	patchCreateID    keymap.CommandID = "patch.patch-create"
 	patchSaveID      keymap.CommandID = "patch.patch-save"
 
-	patchPathLimit  = 4096
-	patchInputLimit = 64 << 10
-	patchFileLimit  = 256
+	patchPathLimit       = 4096
+	patchInputLimit      = 64 << 10
+	patchFileLimit       = 256
+	patchRecipientLimit  = 128
+	patchHeaderByteLimit = 998
 )
 
 func init() {
@@ -36,7 +40,7 @@ func init() {
 		"magit-patch-apply": {"transient:magit-patch-apply:--index", "transient:magit-patch-apply:--cached", "transient:magit-patch-apply:--3way"},
 	})...)
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-patch-create", map[string][]string{
-		"magit-patch-create": {"magit-format-patch:--thread", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--cover-letter"},
+		"magit-patch-create": {"magit-format-patch:--in-reply-to", "magit-format-patch:--thread", "magit-format-patch:--from", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--base", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--rfc", "transient:magit-patch-create:--cover-letter", "magit-format-patch:--output-directory"},
 	})...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := map[keymap.CommandID]WorkflowHandler{
@@ -168,14 +172,18 @@ func formatPatchWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 		Title: "Format patches", Operation: "format patches", Confirmation: "Review the exact bounded patch series before publishing it",
 		Fields: []WorkflowField{
 			{Name: "range", Label: "Revision range", Kind: WorkflowText, Value: "HEAD~1..HEAD", Required: true},
-			{Name: "directory", Label: "Output directory", Kind: WorkflowText, Value: ".", Required: true},
+			{Name: "directory", Label: "Output directory", Kind: WorkflowText, Value: defaults.OutputDirectory, Required: true},
 			{Name: "numbered", Label: "Number patches", Kind: WorkflowBool, Bool: defaults.Numbered},
 			{Name: "cover", Label: "Create cover letter", Kind: WorkflowBool, Bool: defaults.CoverLetter},
+			{Name: "cover-message", Label: "Cover letter message (internal editor, max 64 KiB)", Kind: WorkflowMultiline, Value: defaults.CoverLetterBody},
 			{Name: "signoff", Label: "Add signoff", Kind: WorkflowBool, Bool: defaults.Signoff},
 			{Name: "thread", Label: "Thread messages", Kind: WorkflowBool, Bool: defaults.Thread},
 			{Name: "subject", Label: "Subject prefix", Kind: WorkflowText, Value: defaults.SubjectPrefix},
 			{Name: "reroll", Label: "Reroll count", Kind: WorkflowText, Value: strconv.Itoa(defaults.RerollCount)},
 			{Name: "start", Label: "Start number (0 for Git default)", Kind: WorkflowText, Value: strconv.Itoa(defaults.StartNumber)},
+			{Name: "from", Label: "From identity", Kind: WorkflowText, Value: defaults.From},
+			{Name: "in-reply-to", Label: "In-Reply-To message ID", Kind: WorkflowText, Value: defaults.InReplyTo},
+			{Name: "base", Label: "Base commit (optional)", Kind: WorkflowText, Value: defaults.Base},
 			{Name: "to", Label: "To recipients (comma-separated)", Kind: WorkflowText, Value: strings.Join(defaults.To, ", ")},
 			{Name: "cc", Label: "Cc recipients (comma-separated)", Kind: WorkflowText, Value: strings.Join(defaults.Cc, ", ")},
 		},
@@ -186,8 +194,20 @@ func formatPatchWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 			if err := validPatchPath(values["directory"]); err != nil {
 				return err
 			}
-			if values["subject"] != "" {
-				if err := validBoundedText("subject prefix", values["subject"]); err != nil {
+			if err := patchHeader("subject prefix", values["subject"], true); err != nil {
+				return err
+			}
+			if err := patchCoverMessage(values["cover-message"]); err != nil {
+				return err
+			}
+			if err := patchMailAddress("From identity", values["from"], true); err != nil {
+				return err
+			}
+			if err := patchMessageID(values["in-reply-to"]); err != nil {
+				return err
+			}
+			if values["base"] != "" {
+				if err := validBoundedText("base commit", values["base"]); err != nil {
 					return err
 				}
 			}
@@ -305,7 +325,7 @@ func amOptions(options map[keymap.CommandID]OptionValue) (gitbackend.AMOptions, 
 }
 
 func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.FormatPatchOptions, error) {
-	var out gitbackend.FormatPatchOptions
+	out := gitbackend.FormatPatchOptions{OutputDirectory: "."}
 	for id, value := range values {
 		if !value.Enabled && value.Value == "" {
 			continue
@@ -315,8 +335,22 @@ func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.For
 			continue
 		}
 		switch upstream {
+		case "magit-format-patch:--in-reply-to":
+			if err := patchMessageID(value.Value); err != nil {
+				return out, err
+			}
+			out.InReplyTo = value.Value
 		case "magit-format-patch:--thread":
-			out.Thread = value.Enabled || value.Value != ""
+			style, err := patchThreadStyle(value.Value)
+			if err != nil {
+				return out, err
+			}
+			out.Thread, out.ThreadStyle = true, style
+		case "magit-format-patch:--from":
+			if err := patchMailAddress("From identity", value.Value, false); err != nil {
+				return out, err
+			}
+			out.From = value.Value
 		case "magit-format-patch:--to":
 			addresses, err := patchAddresses("To recipients", value.Value)
 			if err != nil {
@@ -329,6 +363,11 @@ func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.For
 				return out, err
 			}
 			out.Cc = addresses
+		case "magit-format-patch:--base":
+			if err := validBoundedText("base commit", value.Value); err != nil {
+				return out, err
+			}
+			out.Base = value.Value
 		case "magit-format-patch:--reroll-count":
 			count, err := patchNonNegative("reroll count", value.Value)
 			if err != nil {
@@ -336,12 +375,19 @@ func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.For
 			}
 			out.RerollCount = count
 		case "magit-format-patch:--subject-prefix":
-			if err := validBoundedText("subject prefix", value.Value); err != nil {
+			if err := patchHeader("subject prefix", value.Value, false); err != nil {
 				return out, err
 			}
 			out.SubjectPrefix = value.Value
+		case "transient:magit-patch-create:--rfc":
+			out.RFC = value.Enabled
 		case "transient:magit-patch-create:--cover-letter":
-			out.CoverLetter = true
+			out.CoverLetter = value.Enabled
+		case "magit-format-patch:--output-directory":
+			if err := validPatchPath(value.Value); err != nil {
+				return out, err
+			}
+			out.OutputDirectory = value.Value
 		default:
 			return out, fmt.Errorf("%s is unavailable: the format-patch backend does not safely support this option", upstream)
 		}
@@ -353,6 +399,13 @@ func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values
 	out := defaults
 	var err error
 	out.OutputDirectory, out.Numbered, out.CoverLetter, out.Signoff, out.Thread, out.SubjectPrefix = values["directory"], values["numbered"] == "true", values["cover"] == "true", values["signoff"] == "true", values["thread"] == "true", values["subject"]
+	out.CoverLetterBody, out.From, out.InReplyTo, out.Base = values["cover-message"], values["from"], values["in-reply-to"], values["base"]
+	if !out.Thread {
+		out.ThreadStyle = ""
+	}
+	if out.CoverLetterBody != "" {
+		out.CoverLetter = true
+	}
 	if out.RerollCount, err = patchNonNegative("reroll count", values["reroll"]); err != nil {
 		return out, err
 	}
@@ -363,7 +416,27 @@ func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values
 		return out, err
 	}
 	out.Cc, err = patchAddresses("Cc recipients", values["cc"])
-	return out, err
+	if err != nil {
+		return out, err
+	}
+	if err := patchHeader("subject prefix", out.SubjectPrefix, true); err != nil {
+		return out, err
+	}
+	if err := patchCoverMessage(out.CoverLetterBody); err != nil {
+		return out, err
+	}
+	if err := patchMailAddress("From identity", out.From, true); err != nil {
+		return out, err
+	}
+	if err := patchMessageID(out.InReplyTo); err != nil {
+		return out, err
+	}
+	if out.Base != "" {
+		if err := validBoundedText("base commit", out.Base); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
 }
 
 func patchNonNegative(name, value string) (int, error) {
@@ -382,16 +455,83 @@ func patchAddresses(name, value string) ([]string, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil
 	}
-	parts := strings.Split(value, ",")
-	addresses := make([]string, 0, len(parts))
-	for _, part := range parts {
-		address := strings.TrimSpace(part)
-		if err := validBoundedText(name, address); err != nil {
-			return nil, err
+	if err := patchHeader(name, value, false); err != nil {
+		return nil, err
+	}
+	parsed, err := mail.ParseAddressList(value)
+	if err != nil || len(parsed) == 0 || len(parsed) > patchRecipientLimit {
+		return nil, fmt.Errorf("%s must contain at most %d valid recipients", name, patchRecipientLimit)
+	}
+	addresses := make([]string, 0, len(parsed))
+	for _, address := range parsed {
+		if address.Name == "" {
+			addresses = append(addresses, address.Address)
+		} else {
+			addresses = append(addresses, address.String())
 		}
-		addresses = append(addresses, address)
 	}
 	return addresses, nil
+}
+
+func patchMailAddress(name, value string, optional bool) error {
+	if value == "" && optional {
+		return nil
+	}
+	if err := patchHeader(name, value, false); err != nil {
+		return err
+	}
+	if _, err := mail.ParseAddress(value); err != nil {
+		return fmt.Errorf("%s is not a valid recipient", name)
+	}
+	return nil
+}
+
+func patchMessageID(value string) error {
+	if value == "" {
+		return nil
+	}
+	if err := patchHeader("In-Reply-To", value, false); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(value, "<") || !strings.HasSuffix(value, ">") || strings.Count(value, "@") != 1 || strings.ContainsAny(value[1:len(value)-1], " <>\t") {
+		return errors.New("In-Reply-To must be a message ID such as <id@example.test>")
+	}
+	return nil
+}
+
+func patchThreadStyle(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "shallow" || value == "deep" {
+		return value, nil
+	}
+	return "", errors.New("thread style must be shallow or deep")
+}
+
+func patchCoverMessage(value string) error {
+	if len(value) > patchInputLimit || !utf8.ValidString(value) || strings.ContainsRune(value, 0) || strings.ContainsRune(value, '\r') {
+		return errors.New("cover letter message is invalid or exceeds 64 KiB")
+	}
+	for _, r := range value {
+		if r < 32 && r != '\n' || r == 127 {
+			return errors.New("cover letter message contains a control character")
+		}
+	}
+	return nil
+}
+
+func patchHeader(name, value string, optional bool) error {
+	if value == "" && optional {
+		return nil
+	}
+	if value == "" || len(value) > patchHeaderByteLimit || !utf8.ValidString(value) {
+		return fmt.Errorf("%s is empty, invalid, or too long", name)
+	}
+	for _, r := range value {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("%s contains a control character", name)
+		}
+	}
+	return nil
 }
 
 func optionEnabled(options map[keymap.CommandID]OptionValue, upstream string) bool {

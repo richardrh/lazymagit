@@ -677,6 +677,17 @@ func editWorkflowText(field *WorkflowField, key, text string) bool {
 	return true
 }
 
+// editWorkflowMultiline is a small terminal-native editor: Enter inserts a
+// line break and Tab moves to the next workflow field. Paste is preserved as
+// text, so no external editor or shell is involved.
+func editWorkflowMultiline(field *WorkflowField, key, text string) bool {
+	if key == "enter" || key == "ctrl+j" {
+		field.Value += "\n"
+		return true
+	}
+	return editWorkflowText(field, key, text)
+}
+
 func (m *Model) submitWorkflow(values WorkflowValues) tea.Cmd {
 	w := m.workflow
 	if w.dialog.Run != nil {

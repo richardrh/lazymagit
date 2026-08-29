@@ -205,6 +205,142 @@ func TestReviewedFormatPatchPublishesExactNewFilesAndRejectsStaleDirectory(t *te
 	}
 }
 
+func TestReviewedFormatPatchMailMetadataAndEditableCoverLetter(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	base := r.commitAll("base")
+	r.write("topic.txt", "topic\n")
+	r.commitAll("topic")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(r.dir, "patches")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	options := FormatPatchOptions{
+		OutputDirectory: out,
+		CoverLetterBody: "A terminal-edited cover letter.\n\nIt never opens an external editor.",
+		RFC:             true,
+		ThreadStyle:     "deep",
+		From:            "Series Author <author@example.test>",
+		InReplyTo:       "<previous-series@example.test>",
+		Base:            base,
+		To:              []string{"list@example.test"},
+		Cc:              []string{"review@example.test"},
+	}
+	review, err := repo.ReviewFormatPatchUI(ctx, base+"..HEAD", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(review.Files) != 2 { // a cover letter plus one patch
+		t.Fatalf("review files = %#v", review.Files)
+	}
+	// Every mail argument and the terminal-edited body are bound to the review
+	// token, not merely represented by the staged file digest.
+	changed := review
+	changed.Options.CoverLetterBody = "changed after review"
+	if err := repo.ExecuteReviewedFormatPatch(ctx, changed); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("changed metadata execution = %v", err)
+	}
+	if entries, err := os.ReadDir(out); err != nil || len(entries) != 0 {
+		t.Fatalf("stale metadata published output: %v, %v", entries, err)
+	}
+	review, err = repo.ReviewFormatPatchUI(ctx, base+"..HEAD", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.ExecuteReviewedFormatPatch(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	var cover, patch string
+	for _, file := range review.Files {
+		data, err := os.ReadFile(filepath.Join(out, file.Name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "A terminal-edited cover letter.") {
+			cover = string(data)
+		} else {
+			patch = string(data)
+		}
+	}
+	for _, want := range []string{"A terminal-edited cover letter.", "It never opens an external editor.", "From: Series Author <author@example.test>", "In-Reply-To: <previous-series@example.test>", "To: list@example.test", "Cc: review@example.test", "Subject: [RFC PATCH 0/1]", "base-commit: " + base} {
+		if !strings.Contains(cover, want) {
+			t.Errorf("cover letter lacks %q:\n%s", want, cover)
+		}
+	}
+	for _, want := range []string{"From: Series Author <author@example.test>", "References: <previous-series@example.test>"} {
+		if !strings.Contains(patch, want) {
+			t.Errorf("patch lacks %q:\n%s", want, patch)
+		}
+	}
+}
+
+func TestFormatPatchMailOptionsHaveDistinctReviewIdentities(t *testing.T) {
+	options := FormatPatchOptions{
+		ThreadStyle: "deep", RFC: true, From: "author@example.test", InReplyTo: "<series@example.test>", Base: "HEAD~1", To: []string{"to@example.test"}, Cc: []string{"cc@example.test"}, CoverLetterBody: "overview\n",
+	}
+	token := NewConfirmationToken(formatPatchOptionsIdentity(options))
+	variants := []FormatPatchOptions{
+		func() FormatPatchOptions { out := options; out.ThreadStyle = "shallow"; return out }(),
+		func() FormatPatchOptions { out := options; out.RFC = false; return out }(),
+		func() FormatPatchOptions { out := options; out.From = "other@example.test"; return out }(),
+		func() FormatPatchOptions { out := options; out.InReplyTo = "<other@example.test>"; return out }(),
+		func() FormatPatchOptions { out := options; out.Base = "HEAD~2"; return out }(),
+		func() FormatPatchOptions {
+			out := options
+			out.To = []string{"to@example.test", "extra@example.test"}
+			return out
+		}(),
+		func() FormatPatchOptions { out := options; out.Cc = nil; return out }(),
+		func() FormatPatchOptions { out := options; out.CoverLetterBody = "changed"; return out }(),
+	}
+	for _, variant := range variants {
+		if token.validFor(formatPatchOptionsIdentity(variant)) {
+			t.Errorf("changed mail option retained its confirmation identity: %#v", variant)
+		}
+	}
+	if formatPatchOptionsIdentity(FormatPatchOptions{To: []string{"a", "b"}}) == formatPatchOptionsIdentity(FormatPatchOptions{To: []string{"a"}, Cc: []string{"b"}}) {
+		t.Fatal("recipient-list boundaries collide in format-patch review identity")
+	}
+}
+
+func TestFormatPatchRejectsUnboundedOrInjectedMailHeaders(t *testing.T) {
+	invalid := []FormatPatchOptions{
+		{OutputDirectory: ".", From: "sender@example.test\r\nBcc: injected@example.test"},
+		{OutputDirectory: ".", To: []string{"not an address"}},
+		{OutputDirectory: ".", InReplyTo: "previous@example.test"},
+		{OutputDirectory: ".", CoverLetterBody: strings.Repeat("x", maxFormatPatchCoverBody+1)},
+		{OutputDirectory: ".", ThreadStyle: "arbitrary"},
+	}
+	for _, options := range invalid {
+		if err := validateFormatPatchOptions(options); err == nil {
+			t.Errorf("invalid mail options accepted: %#v", options)
+		}
+	}
+}
+
+func TestEditableCoverLetterRefusesSymlinkOutput(t *testing.T) {
+	dir := t.TempDir()
+	external := filepath.Join(dir, "external")
+	if err := os.WriteFile(external, []byte("*** BLURB HERE ***"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cover := filepath.Join(dir, "0000-cover-letter.patch")
+	if err := os.Symlink(external, cover); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceFormatPatchCoverLetter([]string{cover}, "must not be written"); err == nil {
+		t.Fatal("symlink cover letter was accepted")
+	}
+	if got, err := os.ReadFile(external); err != nil || string(got) != "*** BLURB HERE ***" {
+		t.Fatalf("symlink replacement wrote external file: %q, %v", got, err)
+	}
+}
+
 func TestReviewFormatPatchRejectsInvalidOrEmptyInputBeforePublication(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)

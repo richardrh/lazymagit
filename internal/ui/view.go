@@ -494,6 +494,9 @@ func renderWorkflowField(field WorkflowField, selected bool) []string {
 	if field.Kind == WorkflowSearch {
 		return renderWorkflowSearchField(field, mark, selected)
 	}
+	if field.Kind == WorkflowMultiline {
+		return renderWorkflowMultilineField(field, mark, selected)
+	}
 	value := workflowFieldValue(field)
 	if field.Kind == WorkflowMultiline {
 		lines := []string{mark + sanitizeSingleLine(field.Label) + " (Ctrl-J new line):"}
@@ -509,6 +512,22 @@ func renderWorkflowField(field WorkflowField, selected bool) []string {
 		value += "█"
 	}
 	return []string{mark + sanitizeSingleLine(field.Label) + ": " + sanitizeSingleLine(value)}
+}
+
+func renderWorkflowMultilineField(field WorkflowField, mark string, selected bool) []string {
+	lines := []string{mark + sanitizeSingleLine(field.Label) + ":"}
+	body := strings.Split(field.Value, "\n")
+	if len(body) == 1 && body[0] == "" {
+		body[0] = ""
+	}
+	for i, line := range body {
+		cursor := ""
+		if selected && i == len(body)-1 {
+			cursor = "█"
+		}
+		lines = append(lines, "    "+sanitizeSingleLine(line)+cursor)
+	}
+	return lines
 }
 
 func workflowFieldValue(field WorkflowField) string {

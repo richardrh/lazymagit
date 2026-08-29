@@ -24,6 +24,25 @@ func TestPatchDomainRegistersOnlyExecutablePatchSuffixes(t *testing.T) {
 	}
 }
 
+func TestFormatPatchTransientOnlyExposesSeriesChangingOptions(t *testing.T) {
+	available := map[string]bool{}
+	for _, upstream := range []string{
+		"magit-format-patch:--in-reply-to", "magit-format-patch:--thread", "magit-format-patch:--from", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--base", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--rfc", "transient:magit-patch-create:--cover-letter", "magit-format-patch:--output-directory",
+	} {
+		available[upstream] = len(keymap.OptionConsumerCommands("W c", upstream)) > 0
+	}
+	for upstream, enabled := range available {
+		if !enabled {
+			t.Errorf("series-changing option %s was not exposed", upstream)
+		}
+	}
+	for _, upstream := range []string{"magit-format-patch:--interdiff", "magit-format-patch:--range-diff", "magit-format-patch:--notes", "magit-format-patch:--cover-from-description", "magit-diff:--diff-algorithm"} {
+		if got := keymap.OptionConsumerCommands("W c", upstream); len(got) != 0 {
+			t.Errorf("unsupported option %s was exposed to a format-patch workflow: %v", upstream, got)
+		}
+	}
+}
+
 func TestFormatPatchOptionsMapEverySupportedInfix(t *testing.T) {
 	option := func(t *testing.T, upstream string) keymap.CommandID {
 		t.Helper()
@@ -36,17 +55,22 @@ func TestFormatPatchOptionsMapEverySupportedInfix(t *testing.T) {
 		return ""
 	}
 	options, err := formatPatchOptions(map[keymap.CommandID]OptionValue{
-		option(t, "magit-format-patch:--thread"):                 {Enabled: true},
+		option(t, "magit-format-patch:--in-reply-to"):            {Value: "<series@example.test>"},
+		option(t, "magit-format-patch:--thread"):                 {Value: "deep"},
+		option(t, "magit-format-patch:--from"):                   {Value: "Author <author@example.test>"},
 		option(t, "magit-format-patch:--to"):                     {Value: "dev@example.test, second@example.test"},
 		option(t, "magit-format-patch:--cc"):                     {Value: "review@example.test"},
+		option(t, "magit-format-patch:--base"):                   {Value: "HEAD~2"},
 		option(t, "magit-format-patch:--reroll-count"):           {Value: "2"},
 		option(t, "magit-format-patch:--subject-prefix"):         {Value: "RFC"},
+		option(t, "transient:magit-patch-create:--rfc"):          {Enabled: true},
 		option(t, "transient:magit-patch-create:--cover-letter"): {Enabled: true},
+		option(t, "magit-format-patch:--output-directory"):       {Value: "out"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !options.Thread || !options.CoverLetter || options.RerollCount != 2 || options.SubjectPrefix != "RFC" || strings.Join(options.To, ",") != "dev@example.test,second@example.test" || strings.Join(options.Cc, ",") != "review@example.test" {
+	if !options.Thread || options.ThreadStyle != "deep" || !options.CoverLetter || !options.RFC || options.OutputDirectory != "out" || options.From != "Author <author@example.test>" || options.InReplyTo != "<series@example.test>" || options.Base != "HEAD~2" || options.RerollCount != 2 || options.SubjectPrefix != "RFC" || strings.Join(options.To, ",") != "dev@example.test,second@example.test" || strings.Join(options.Cc, ",") != "review@example.test" {
 		t.Fatalf("format options = %#v", options)
 	}
 	if _, err := formatPatchOptions(map[keymap.CommandID]OptionValue{option(t, "magit:--signoff"): {Enabled: true}}); err == nil {
@@ -59,19 +83,40 @@ func TestFormatPatchOptionsMapEverySupportedInfix(t *testing.T) {
 
 func TestFormatPatchWorkflowValuesExposeTypedRecipientsAndNumbering(t *testing.T) {
 	options, err := formatPatchOptionsFromValues(gitbackend.FormatPatchOptions{}, WorkflowValues{
-		"directory": "out", "numbered": "true", "cover": "true", "signoff": "true", "thread": "true", "subject": "RFC", "reroll": "3", "start": "7", "to": "dev@example.test, second@example.test", "cc": "review@example.test",
+		"directory": "out", "numbered": "true", "cover": "true", "cover-message": "series overview\n\nChanges since v2", "signoff": "true", "thread": "true", "subject": "RFC", "reroll": "3", "start": "7", "from": "Author <author@example.test>", "in-reply-to": "<series@example.test>", "base": "HEAD~2", "to": "dev@example.test, second@example.test", "cc": "review@example.test",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !options.Numbered || !options.CoverLetter || !options.Signoff || !options.Thread || options.SubjectPrefix != "RFC" || options.RerollCount != 3 || options.StartNumber != 7 || strings.Join(options.To, ",") != "dev@example.test,second@example.test" || strings.Join(options.Cc, ",") != "review@example.test" {
+	if !options.Numbered || !options.CoverLetter || !options.Signoff || !options.Thread || options.SubjectPrefix != "RFC" || options.CoverLetterBody != "series overview\n\nChanges since v2" || options.From != "Author <author@example.test>" || options.InReplyTo != "<series@example.test>" || options.Base != "HEAD~2" || options.RerollCount != 3 || options.StartNumber != 7 || strings.Join(options.To, ",") != "dev@example.test,second@example.test" || strings.Join(options.Cc, ",") != "review@example.test" {
 		t.Fatalf("format options = %#v", options)
 	}
 	if _, err := patchNonNegative("reroll count", "-1"); err == nil {
 		t.Fatal("negative reroll count was accepted")
 	}
-	if _, err := patchAddresses("To recipients", "ok@example.test,\x00bad"); err == nil {
-		t.Fatal("NUL recipient was accepted")
+	if _, err := patchAddresses("To recipients", "\"Display, Name\" <named@example.test>, ok@example.test"); err != nil {
+		t.Fatalf("quoted recipient list rejected: %v", err)
+	}
+	for _, value := range []string{"ok@example.test,\x00bad", "ok@example.test\r\nBcc: injected@example.test"} {
+		if _, err := patchAddresses("To recipients", value); err == nil {
+			t.Fatalf("unsafe recipient was accepted: %q", value)
+		}
+	}
+	if err := patchMessageID("bad@example.test"); err == nil {
+		t.Fatal("bare In-Reply-To was accepted")
+	}
+	if err := patchCoverMessage(strings.Repeat("x", patchInputLimit+1)); err == nil {
+		t.Fatal("oversized cover message was accepted")
+	}
+}
+
+func TestWorkflowMultilineEditorUsesEnterForNewlines(t *testing.T) {
+	field := WorkflowField{Kind: WorkflowMultiline, Value: "first"}
+	if !editWorkflowMultiline(&field, "enter", "") || field.Value != "first\n" {
+		t.Fatalf("multiline enter = %q", field.Value)
+	}
+	if !editWorkflowMultiline(&field, "x", "second") || field.Value != "first\nsecond" {
+		t.Fatalf("multiline text = %q", field.Value)
 	}
 }
 

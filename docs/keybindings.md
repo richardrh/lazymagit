@@ -544,21 +544,21 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `C-m C-r` | `magit-format-patch:--in-reply-to` | **infix** | Mail arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m s  ` | `magit-format-patch:--thread` | **infix** | Mail arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m C-f` | `magit-format-patch:--from` | **infix** | Mail arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m C-t` | `magit-format-patch:--to` | **infix** | Mail arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m C-c` | `magit-format-patch:--cc` | **infix** | Mail arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m b  ` | `magit-format-patch:--base` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m v  ` | `magit-format-patch:--reroll-count` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
+| `C-m C-r` | `magit-format-patch:--in-reply-to` | **infix** | Mail arguments |  | `partial` | actionable TUI option |
+| `C-m s  ` | `magit-format-patch:--thread` | **infix** | Mail arguments |  | `partial` | actionable TUI option |
+| `C-m C-f` | `magit-format-patch:--from` | **infix** | Mail arguments |  | `partial` | actionable TUI option |
+| `C-m C-t` | `magit-format-patch:--to` | **infix** | Mail arguments |  | `partial` | actionable TUI option |
+| `C-m C-c` | `magit-format-patch:--cc` | **infix** | Mail arguments |  | `partial` | actionable TUI option |
+| `C-m b  ` | `magit-format-patch:--base` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
+| `C-m v  ` | `magit-format-patch:--reroll-count` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
 | `C-m d i` | `magit-format-patch:--interdiff` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
 | `C-m d r` | `magit-format-patch:--range-diff` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m p  ` | `magit-format-patch:--subject-prefix` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m r  ` | `transient:magit-patch-create:--rfc` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m l  ` | `transient:magit-patch-create:--cover-letter` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
+| `C-m p  ` | `magit-format-patch:--subject-prefix` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
+| `C-m r  ` | `transient:magit-patch-create:--rfc` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
+| `C-m l  ` | `transient:magit-patch-create:--cover-letter` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
 | `C-m D  ` | `magit-format-patch:--cover-from-description` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
 | `C-m n  ` | `magit-format-patch:--notes` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
-| `C-m o  ` | `magit-format-patch:--output-directory` | **infix** | Patch arguments |  | `missing` | infix: argument editing is not implemented |
+| `C-m o  ` | `magit-format-patch:--output-directory` | **infix** | Patch arguments |  | `partial` | actionable TUI option |
 | `-U` | `magit-diff:-U` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |
 | `-M` | `magit-diff:-M` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |
 | `-C` | `magit-diff:-C` | **infix** | Diff arguments |  | `missing` | infix: argument editing is not implemented |

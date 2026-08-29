@@ -509,15 +509,33 @@ func amStartReviewIdentity(review ReviewedAMStart) string {
 }
 
 func formatPatchReviewIdentity(review ReviewedFormatPatch) string {
-	parts := []string{review.Directory, review.Range, strings.Join(review.Revisions, "\x00"), strings.Join(review.Before, "\x00"), formatPatchOptionsIdentity(review.Options)}
+	parts := []string{review.Directory, review.Range, patchIdentity(review.Revisions...), patchIdentity(review.Before...), formatPatchOptionsIdentity(review.Options)}
 	for _, file := range review.Files {
 		parts = append(parts, file.Name, strconv.FormatInt(file.Size, 10), file.Digest)
 	}
-	return strings.Join(parts, "\x01")
+	return patchIdentity(parts...)
+}
+
+// patchIdentity length-prefixes every value, including editable cover text.
+// Delimiter joins would let a control character in a user-provided body blur
+// the boundary between fields covered by a confirmation token.
+func patchIdentity(parts ...string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		b.WriteString(strconv.Itoa(len(part)))
+		b.WriteByte(':')
+		b.WriteString(part)
+	}
+	return b.String()
 }
 
 func formatPatchOptionsIdentity(options FormatPatchOptions) string {
-	return strings.Join([]string{strconv.FormatBool(options.Numbered), strconv.FormatBool(options.CoverLetter), strconv.FormatBool(options.Signoff), strconv.FormatBool(options.Thread), options.SubjectPrefix, strconv.Itoa(options.RerollCount), strconv.Itoa(options.StartNumber), strings.Join(options.To, "\x00"), strings.Join(options.Cc, "\x00")}, "\x00")
+	parts := []string{strconv.FormatBool(options.Numbered), strconv.FormatBool(options.CoverLetter), strconv.FormatBool(options.Signoff), strconv.FormatBool(options.Thread), options.ThreadStyle, strconv.FormatBool(options.RFC), options.SubjectPrefix, strconv.Itoa(options.RerollCount), strconv.Itoa(options.StartNumber), options.From, options.InReplyTo, options.Base, strconv.Itoa(len(options.To))}
+	parts = append(parts, options.To...)
+	parts = append(parts, strconv.Itoa(len(options.Cc)))
+	parts = append(parts, options.Cc...)
+	parts = append(parts, options.CoverLetterBody)
+	return patchIdentity(parts...)
 }
 
 func containsPatchName(names []string, name string) bool {

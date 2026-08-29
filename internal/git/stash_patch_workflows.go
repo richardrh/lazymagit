@@ -6,13 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/mail"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 var ErrNoAMInProgress = errors.New("no git am operation in progress")
@@ -386,17 +389,36 @@ func (r *Repository) existingInputPath(name string) (string, error) {
 	return path, nil
 }
 
+const (
+	maxFormatPatchHeaderBytes = 998 // RFC 5322's physical header-line limit.
+	maxFormatPatchRecipients  = 128
+	maxFormatPatchCoverBody   = 64 << 10
+	maxFormatPatchRevision    = 4096
+)
+
+var messageIDRE = regexp.MustCompile(`^<[^<>[:space:]@]+@[^<>[:space:]]+>$`)
+
 type FormatPatchOptions struct {
 	OutputDirectory string
 	Numbered        bool
 	CoverLetter     bool
 	Signoff         bool
 	Thread          bool
-	SubjectPrefix   string
-	RerollCount     int
-	StartNumber     int
-	To              []string
-	Cc              []string
+	// ThreadStyle is deliberately limited to Git's portable styles. An empty
+	// value means Git's --thread default when Thread is set.
+	ThreadStyle   string
+	RFC           bool
+	SubjectPrefix string
+	RerollCount   int
+	StartNumber   int
+	From          string
+	InReplyTo     string
+	Base          string
+	To            []string
+	Cc            []string
+	// CoverLetterBody is edited in the terminal and replaces Git's generated
+	// cover-letter placeholder. A non-empty body implies CoverLetter.
+	CoverLetterBody string
 }
 
 // FormatPatch writes a revision range into an existing output directory and
@@ -404,6 +426,12 @@ type FormatPatchOptions struct {
 func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, options FormatPatchOptions) ([]string, error) {
 	if err := safeRevisionArgument(revisionRange); err != nil {
 		return nil, err
+	}
+	if err := validateFormatPatchOptions(options); err != nil {
+		return nil, err
+	}
+	if options.CoverLetterBody != "" {
+		options.CoverLetter = true
 	}
 	dir, before, err := r.patchOutputDirectory(options.OutputDirectory)
 	if err != nil {
@@ -419,8 +447,13 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if options.Signoff {
 		args = append(args, "--signoff")
 	}
-	if options.Thread {
+	if options.ThreadStyle != "" {
+		args = append(args, "--thread="+options.ThreadStyle)
+	} else if options.Thread {
 		args = append(args, "--thread")
+	}
+	if options.RFC {
+		args = append(args, "--rfc")
 	}
 	if options.SubjectPrefix != "" {
 		args = append(args, "--subject-prefix="+options.SubjectPrefix)
@@ -433,6 +466,15 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	}
 	if options.StartNumber > 0 {
 		args = append(args, "--start-number="+strconv.Itoa(options.StartNumber))
+	}
+	if options.From != "" {
+		args = append(args, "--from="+options.From)
+	}
+	if options.InReplyTo != "" {
+		args = append(args, "--in-reply-to="+options.InReplyTo)
+	}
+	if options.Base != "" {
+		args = append(args, "--base="+options.Base)
 	}
 	for _, address := range options.To {
 		args = append(args, "--to="+address)
@@ -451,15 +493,155 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	for _, name := range entries {
 		if !before[name] && strings.HasSuffix(name, ".patch") {
 			path := filepath.Join(dir, name)
-			if info, statErr := os.Stat(path); statErr != nil {
+			info, statErr := os.Lstat(path)
+			if statErr != nil {
 				return nil, fmt.Errorf("inspect format-patch output: %w", statErr)
-			} else if !info.IsDir() {
-				created = append(created, path)
 			}
+			if !info.Mode().IsRegular() {
+				return nil, errors.New("format-patch created a non-regular output")
+			}
+			created = append(created, path)
 		}
 	}
 	sort.Strings(created)
+	if options.CoverLetterBody != "" {
+		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
+			return nil, err
+		}
+	}
 	return created, nil
+}
+
+func validateFormatPatchOptions(options FormatPatchOptions) error {
+	if options.RerollCount < 0 || options.StartNumber < 0 {
+		return errors.New("format-patch numeric options cannot be negative")
+	}
+	if options.ThreadStyle != "" && options.ThreadStyle != "shallow" && options.ThreadStyle != "deep" {
+		return errors.New("format-patch thread style must be shallow or deep")
+	}
+	if err := validFormatPatchHeader("subject prefix", options.SubjectPrefix, true); err != nil {
+		return err
+	}
+	if err := validFormatPatchAddress("from", options.From, true); err != nil {
+		return err
+	}
+	if options.InReplyTo != "" && (!messageIDRE.MatchString(options.InReplyTo) || validFormatPatchHeader("in-reply-to", options.InReplyTo, false) != nil) {
+		return errors.New("format-patch in-reply-to must be a bounded message ID")
+	}
+	if options.Base != "" {
+		if err := safeRevisionArgument(options.Base); err != nil {
+			return fmt.Errorf("format-patch base: %w", err)
+		}
+	}
+	if err := validFormatPatchAddresses("to", options.To); err != nil {
+		return err
+	}
+	if err := validFormatPatchAddresses("cc", options.Cc); err != nil {
+		return err
+	}
+	if len(options.CoverLetterBody) > maxFormatPatchCoverBody || !utf8.ValidString(options.CoverLetterBody) || strings.ContainsRune(options.CoverLetterBody, 0) || strings.ContainsRune(options.CoverLetterBody, '\r') {
+		return errors.New("format-patch cover letter body is invalid or exceeds 64 KiB")
+	}
+	for _, r := range options.CoverLetterBody {
+		if r < 32 && r != '\n' || r == 127 {
+			return errors.New("format-patch cover letter body contains a control character")
+		}
+	}
+	return nil
+}
+
+func validFormatPatchAddresses(name string, addresses []string) error {
+	if len(addresses) > maxFormatPatchRecipients {
+		return fmt.Errorf("format-patch %s recipients exceed %d", name, maxFormatPatchRecipients)
+	}
+	for _, address := range addresses {
+		if err := validFormatPatchAddress(name, address, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validFormatPatchAddress(name, value string, optional bool) error {
+	if value == "" && optional {
+		return nil
+	}
+	if err := validFormatPatchHeader(name, value, false); err != nil {
+		return err
+	}
+	if _, err := mail.ParseAddress(value); err != nil {
+		return fmt.Errorf("format-patch %s recipient is invalid", name)
+	}
+	return nil
+}
+
+func validFormatPatchHeader(name, value string, optional bool) error {
+	if value == "" && optional {
+		return nil
+	}
+	if value == "" || len(value) > maxFormatPatchHeaderBytes || !utf8.ValidString(value) {
+		return fmt.Errorf("format-patch %s header is empty, invalid, or too long", name)
+	}
+	for _, r := range value {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("format-patch %s header contains a control character", name)
+		}
+	}
+	return nil
+}
+
+func replaceFormatPatchCoverLetter(paths []string, body string) error {
+	const placeholder = "*** BLURB HERE ***"
+	var cover string
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("read generated cover letter: %w", err)
+		}
+		if bytes.Count(data, []byte(placeholder)) == 1 {
+			if cover != "" {
+				return errors.New("format-patch generated multiple cover letters")
+			}
+			cover = path
+		}
+	}
+	if cover == "" {
+		return errors.New("format-patch did not generate an editable cover letter")
+	}
+	info, err := os.Lstat(cover)
+	if err != nil {
+		return fmt.Errorf("inspect generated cover letter: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("generated cover letter is not a regular file")
+	}
+	data, err := os.ReadFile(cover)
+	if err != nil {
+		return fmt.Errorf("read generated cover letter: %w", err)
+	}
+	updated := bytes.Replace(data, []byte(placeholder), []byte(body), 1)
+	// Do not reopen the final pathname for writing: a concurrent replacement
+	// with a symlink must never redirect a cover-letter edit outside its output
+	// directory. Rename replaces that final entry rather than following it.
+	temporary, err := os.CreateTemp(filepath.Dir(cover), ".lazymagit-cover-")
+	if err != nil {
+		return fmt.Errorf("create generated cover letter replacement: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(info.Mode().Perm()); err == nil {
+		_, err = temporary.Write(updated)
+	}
+	if closeErr := temporary.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("write generated cover letter replacement: %w", err)
+	}
+	if err := os.Rename(temporaryName, cover); err != nil {
+		return fmt.Errorf("install generated cover letter replacement: %w", err)
+	}
+	return nil
 }
 
 func (r *Repository) FormatPatchFromStash(ctx context.Context, ref string, options FormatPatchOptions) ([]string, error) {
@@ -496,8 +678,13 @@ func safeRevisionArgument(revision string) error {
 	if strings.TrimSpace(revision) == "" {
 		return errors.New("revision range is empty")
 	}
-	if strings.HasPrefix(revision, "-") || strings.ContainsRune(revision, 0) {
+	if len(revision) > maxFormatPatchRevision || strings.HasPrefix(revision, "-") || !utf8.ValidString(revision) || strings.ContainsRune(revision, 0) || strings.ContainsAny(revision, "\r\n") {
 		return fmt.Errorf("unsafe revision range %q", revision)
+	}
+	for _, r := range revision {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("unsafe revision range %q", revision)
+		}
 	}
 	return nil
 }

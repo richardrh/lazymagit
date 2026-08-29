@@ -732,6 +732,11 @@ func OptionConsumerCommands(prefix, option string) []string {
 		case "magit-notes:--strategy":
 			return []string{"magit-notes-merge"}
 		}
+	case "W c":
+		switch option {
+		case "magit-format-patch:--in-reply-to", "magit-format-patch:--thread", "magit-format-patch:--from", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--base", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--rfc", "transient:magit-patch-create:--cover-letter", "magit-format-patch:--output-directory":
+			return all("magit-patch-create")
+		}
 	case "z":
 		return []string{"magit-stash-both", "magit-stash-keep-index"}
 	case "z P":
