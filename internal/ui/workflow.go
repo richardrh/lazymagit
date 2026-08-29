@@ -188,6 +188,7 @@ var builtinUICommands = map[keymap.CommandID]bool{
 	keymap.CommandDiffMoreContext: true, keymap.CommandDiffLessContext: true, keymap.CommandDiffDefaultContext: true,
 	keymap.CommandDescribeSection: true, keymap.CommandStatusJump: true, keymap.CommandDisplayRepository: true,
 	keymap.CommandCopyThing: true, keymap.CommandCopySectionValue: true, keymap.CommandCopyBufferRevision: true,
+	keymap.CommandEditThing: true, keymap.CommandBrowseThing: true, keymap.CommandNextReference: true,
 }
 
 func (m *Model) performWorkflow(command WorkflowCommand) (tea.Cmd, bool) {

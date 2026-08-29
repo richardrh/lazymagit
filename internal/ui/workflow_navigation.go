@@ -64,7 +64,8 @@ func navigationCommand(command keymap.CommandID) bool {
 		keymap.CommandVisitThing, keymap.CommandCycleDiffs, keymap.CommandDetailBackward,
 		keymap.CommandDiffMoreContext, keymap.CommandDiffLessContext, keymap.CommandDiffDefaultContext,
 		keymap.CommandDescribeSection, keymap.CommandStatusJump, keymap.CommandDisplayRepository,
-		keymap.CommandCopyThing, keymap.CommandCopySectionValue, keymap.CommandCopyBufferRevision:
+		keymap.CommandCopyThing, keymap.CommandCopySectionValue, keymap.CommandCopyBufferRevision,
+		keymap.CommandEditThing, keymap.CommandBrowseThing, keymap.CommandNextReference:
 		return true
 	default:
 		return false
@@ -133,6 +134,12 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 		return m.copySelectedSection(), true
 	case keymap.CommandCopyBufferRevision:
 		return m.copySelectedRevision(), true
+	case keymap.CommandEditThing:
+		return m.openSelectedTerminalThing("Edit"), true
+	case keymap.CommandBrowseThing:
+		return m.openSelectedTerminalThing("Browse"), true
+	case keymap.CommandNextReference:
+		return m.nextVisibleReference(), true
 	default:
 		return nil, false
 	}
@@ -197,6 +204,44 @@ func (m *Model) cycleSelectedDetail() tea.Cmd {
 	m.detailHidden = !m.detailHidden
 	m.detailOffset = 0
 	m.setMessage(map[bool]string{true: "Diff hidden", false: "Diff shown"}[m.detailHidden])
+	return nil
+}
+
+// openSelectedTerminalThing adapts Magit's remappable edit/browse placeholders
+// to the status pane. It deliberately does not consult EDITOR, BROWSER, or a
+// URL handler: opening an ambient process from a TUI is neither observable nor
+// safely cancellable here.
+func (m *Model) openSelectedTerminalThing(action string) tea.Cmd {
+	r, ok := m.rows[m.tree.Cursor()]
+	if !ok || (r.kind != rowUntracked && r.kind != rowUnstaged && r.kind != rowStaged && r.kind != rowCommit && r.kind != rowStash) {
+		m.setMessage("No terminal item to " + strings.ToLower(action))
+		return nil
+	}
+	m.detailHidden = false
+	m.setMessage(action + " opened selected item in terminal detail (read-only)")
+	return m.loadDetailCmd()
+}
+
+// nextVisibleReference follows the rendered status rows rather than parsing
+// arbitrary detail text. Commit decorations are the only typed Git references
+// represented in this status buffer; folded rows are not currently visible.
+func (m *Model) nextVisibleReference() tea.Cmd {
+	ids := m.tree.VisibleSectionIDs()
+	current := -1
+	for i, id := range ids {
+		if id == m.tree.Cursor() {
+			current = i
+			break
+		}
+	}
+	for _, id := range ids[current+1:] {
+		r := m.rows[id]
+		if r.kind == rowCommit && strings.TrimSpace(r.commit.Refs) != "" {
+			m.setMessage("Next visible reference: " + sanitizeSingleLine(r.commit.Refs))
+			return m.finishNavigationMove(m.tree.SetCursor(id))
+		}
+	}
+	m.setMessage("No more visible references")
 	return nil
 }
 

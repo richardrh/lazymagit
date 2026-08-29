@@ -41,7 +41,13 @@ buffer lifecycle and controls.
 
 Status history follows Magit's bounded presentation: ten recent commits and at
 most 256 commits on each upstream side, with `256+` shown when a side is known
-to be truncated. Push-remote fetch honors a branch setting or
+to be truncated. In the Magit key scheme, `C-c C-r` advances through visible
+commit rows carrying Git `%D` decorations and stops at the final visible
+reference. `C-c C-e` and `C-c C-o` open a selected file, revision, or stash in
+the read-only terminal detail pane. They deliberately do not invoke an ambient
+editor, browser, or URL handler; this standalone status model has no safe
+equivalent for Magit's buffer-local remaps. Vim `C-c` remains quit. Push-remote
+fetch honors a branch setting or
 `remote.pushDefault`; when neither exists, the TUI can set the current branch's
 push remote before fetching. A dedicated `remote.pushDefault` prompt is not
 implemented.

@@ -88,9 +88,9 @@ Generated from the vendored manifest for Magit 4.7.0 (`v4.7.0`, `67f203853e74e92
 | 82 | `!` | `!` | `magit-run` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:420 (magit-mode-map)` | `partial` | registered transient |
 | 83 | `>` | `>` | `magit-sparse-checkout` | binding | git | `magit-mode-map` | `lisp/magit-mode.el:421 (magit-mode-map)` | `partial` | registered transient |
 | 84 | `C-c C-c` | `ctrl+c ctrl+c` | `magit-dispatch` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:422 (magit-mode-map)` | `partial` | registered transient |
-| 85 | `C-c C-r` | `ctrl+c ctrl+r` | `magit-next-reference` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:423 (magit-mode-map)` | `missing` | not implemented |
-| 86 | `C-c C-e` | `ctrl+c ctrl+e` | `magit-edit-thing` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:424 (magit-mode-map)` | `missing` | not implemented |
-| 87 | `C-c C-o` | `ctrl+c ctrl+o` | `magit-browse-thing` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:425 (magit-mode-map)` | `missing` | not implemented |
+| 85 | `C-c C-r` | `ctrl+c ctrl+r` | `magit-next-reference` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:423 (magit-mode-map)` | `adapted` | registered handler |
+| 86 | `C-c C-e` | `ctrl+c ctrl+e` | `magit-edit-thing` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:424 (magit-mode-map)` | `adapted` | registered handler |
+| 87 | `C-c C-o` | `ctrl+c ctrl+o` | `magit-browse-thing` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:425 (magit-mode-map)` | `adapted` | registered handler |
 | 88 | `C-c C-w` | `ctrl+c ctrl+w` | `magit-copy-thing` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:426 (magit-mode-map)` | `partial` | registered handler |
 | 89 | `C-w` | `ctrl+w` | `magit-copy-section-value` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:427 (magit-mode-map)` | `partial` | registered handler |
 | 90 | `M-w` | `alt+w` | `magit-copy-buffer-revision` | binding | ui | `magit-mode-map` | `lisp/magit-mode.el:428 (magit-mode-map)` | `partial` | registered handler |

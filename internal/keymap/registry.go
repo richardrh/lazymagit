@@ -69,6 +69,9 @@ const (
 	CommandCopyThing          CommandID = "status.copy-thing"
 	CommandCopySectionValue   CommandID = "section.copy-value"
 	CommandCopyBufferRevision CommandID = "status.copy-revision"
+	CommandEditThing          CommandID = "status.edit-thing"
+	CommandBrowseThing        CommandID = "status.browse-thing"
+	CommandNextReference      CommandID = "status.next-reference"
 )
 
 type View uint8
@@ -293,7 +296,7 @@ func buildRegistry() []Binding {
 		b := Binding{Sequence: seq, Display: displaySequence(seq), Command: CommandID("missing/" + top.Command), Label: friendlyLabel(top.Command), Scheme: SchemeMagit, Context: ContextStatus, Parity: ParityMissing, UpstreamCommand: top.Command, UpstreamKey: top.Key, Kind: EntryKind(top.Kind), Domain: top.Domain, Layer: top.Layer, Source: top.Source, Handler: HandlerUnsupported, Availability: AvailabilityNever, Unavailable: "not implemented", UnavailableCategory: UnavailableMissing, EffectiveTop: true}
 		classifyTop(&b, transientNames)
 		out = append(out, b)
-		if keyAvailableInVim(strings.Join(b.Sequence, " ")) {
+		if keyAvailableInVim(strings.Join(b.Sequence, " ")) && vimCanUseTopBinding(b) {
 			copy := b
 			copy.Scheme = SchemeVim
 			if copy.Handler != HandlerUnsupported {
@@ -315,6 +318,18 @@ func buildRegistry() []Binding {
 	)
 	out = append(out, transientBindings(m)...)
 	return out
+}
+
+// vimCanUseTopBinding excludes sequences whose Ctrl-c prefix is the explicit
+// Vim-scheme quit command. Do not advertise a terminal sequence that cannot
+// run before the TUI exits.
+func vimCanUseTopBinding(b Binding) bool {
+	switch b.Command {
+	case CommandEditThing, CommandBrowseThing, CommandNextReference:
+		return false
+	default:
+		return true
+	}
 }
 
 func keyAvailableInVim(key string) bool {
@@ -352,12 +367,20 @@ func classifyTop(b *Binding, transientNames map[string]bool) {
 		"magit-copy-thing":                CommandCopyThing,
 		"magit-copy-section-value":        CommandCopySectionValue,
 		"magit-copy-buffer-revision":      CommandCopyBufferRevision,
+		"magit-edit-thing":                CommandEditThing,
+		"magit-browse-thing":              CommandBrowseThing,
+		"magit-next-reference":            CommandNextReference,
 	}
 	if command, ok := navigation[b.UpstreamCommand]; ok {
 		b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
-		if command == CommandCycleDiffs {
+		switch command {
+		case CommandCycleDiffs:
 			// A terminal has no inline diff sections. The UI safely cycles the
 			// selected row's detail pane instead.
+			b.Parity = ParityAdapted
+		case CommandEditThing, CommandBrowseThing, CommandNextReference:
+			// The terminal has neither Emacs remaps nor text properties. These
+			// commands use the typed status rows and internal detail pane only.
 			b.Parity = ParityAdapted
 		}
 		return

@@ -141,11 +141,19 @@ func TestPortableNavigationBindingsAreClassifiedAndKeepSchemeCollisions(t *testi
 		{[]string{"+"}, CommandDiffMoreContext, ParityPartial},
 		{[]string{"-"}, CommandDiffLessContext, ParityPartial},
 		{[]string{"0"}, CommandDiffDefaultContext, ParityPartial},
+		{[]string{"ctrl+c", "ctrl+e"}, CommandEditThing, ParityAdapted},
+		{[]string{"ctrl+c", "ctrl+o"}, CommandBrowseThing, ParityAdapted},
+		{[]string{"ctrl+c", "ctrl+r"}, CommandNextReference, ParityAdapted},
 	}
 	for _, test := range magit {
 		binding, ok := Find(SchemeMagit, ContextStatus, test.sequence...)
 		if !ok || binding.Handler != HandlerExecute || binding.Command != test.command || binding.Parity != test.parity {
 			t.Errorf("Magit %v = %+v, want execute %s/%s", test.sequence, binding, test.command, test.parity)
+		}
+	}
+	for _, sequence := range [][]string{{"ctrl+c", "ctrl+e"}, {"ctrl+c", "ctrl+o"}, {"ctrl+c", "ctrl+r"}} {
+		if binding, ok := Find(SchemeVim, ContextStatus, sequence...); ok {
+			t.Errorf("Vim Ctrl-c quit collision exposed %v as %+v", sequence, binding)
 		}
 	}
 

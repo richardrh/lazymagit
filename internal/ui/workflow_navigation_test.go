@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -150,6 +151,61 @@ func TestVisitTerminalRowsAndCycleSelectedDetail(t *testing.T) {
 	m.tree.SetCursor("status/unstaged")
 	if _, handled := m.handleNavigationKey(keyMsg("alt+tab")); !handled || !strings.Contains(m.message, "No terminal diff") {
 		t.Fatalf("heading detail cycle was unsafe: %q", m.message)
+	}
+}
+
+func TestEditBrowseAndNextReferenceStayInsideTerminalStatus(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.scheme = schemeMagit
+	m.showCommit = func(_ context.Context, id string) (string, error) {
+		return "commit " + id + "\n\nterminal detail", nil
+	}
+	m.install(snapshot{recent: []gitbackend.Commit{
+		{ID: "plain", Subject: "plain"},
+		{ID: "tagged", Refs: "tag: v1", Subject: "tagged"},
+		{ID: "tracked", Refs: "origin/main", Subject: "tracked"},
+	}})
+	m.tree.ToggleFold("status/recent")
+	m.tree.SetCursor("status/recent/commit/plain")
+
+	pressControlSequence := func(key rune) tea.Cmd {
+		t.Helper()
+		_, cmd := m.Update(tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}))
+		if cmd != nil || m.resolver.PendingPrefix() != "ctrl+c" {
+			t.Fatalf("C-c prefix cmd=%v pending=%q", cmd != nil, m.resolver.PendingPrefix())
+		}
+		_, cmd = m.Update(tea.KeyPressMsg(tea.Key{Code: key, Mod: tea.ModCtrl}))
+		return cmd
+	}
+
+	for key, action := range map[rune]string{'e': "Edit", 'o': "Browse"} {
+		m.tree.SetCursor("status/recent/commit/plain")
+		cmd := pressControlSequence(key)
+		if cmd == nil || !strings.Contains(m.message, action+" opened selected item in terminal detail (read-only)") || m.busy || m.mode != modeStatus {
+			t.Fatalf("C-c C-%c cmd=%v message=%q busy=%v mode=%d", key, cmd != nil, m.message, m.busy, m.mode)
+		}
+		_, _ = m.Update(cmd())
+		if !strings.Contains(m.detail, "commit plain") {
+			t.Fatalf("C-c C-%c did not load internal detail: %q", key, m.detail)
+		}
+	}
+
+	m.tree.SetCursor("status/recent/commit/plain")
+	if cmd := pressControlSequence('r'); cmd == nil || m.tree.Cursor() != "status/recent/commit/tagged" || !strings.Contains(m.message, "tag: v1") {
+		t.Fatalf("first C-c C-r cmd=%v cursor=%q message=%q", cmd != nil, m.tree.Cursor(), m.message)
+	}
+	if cmd := pressControlSequence('r'); cmd == nil || m.tree.Cursor() != "status/recent/commit/tracked" || !strings.Contains(m.message, "origin/main") {
+		t.Fatalf("second C-c C-r cmd=%v cursor=%q message=%q", cmd != nil, m.tree.Cursor(), m.message)
+	}
+	if cmd := pressControlSequence('r'); cmd != nil || m.tree.Cursor() != "status/recent/commit/tracked" || m.message != "No more visible references" {
+		t.Fatalf("terminal reference end cmd=%v cursor=%q message=%q", cmd != nil, m.tree.Cursor(), m.message)
+	}
+
+	m.tree.SetCursor("status/recent")
+	m.tree.ToggleFold("status/recent")
+	if cmd, handled := m.performNavigationCommand(keymap.CommandNextReference); !handled || cmd != nil || m.message != "No more visible references" {
+		t.Fatalf("folded references handled=%v cmd=%v message=%q", handled, cmd != nil, m.message)
 	}
 }
 

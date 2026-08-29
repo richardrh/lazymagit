@@ -85,6 +85,12 @@ unavailable are catalogued for discoverability but are never executed. `q` or
 In Magit mode, `x` is recognized as Magit's quick-reset command and reports its
 explicit `missing` status; it never falls through to Vim discard behavior.
 
+In the Magit key scheme, `Ctrl-c Ctrl-e` and `Ctrl-c Ctrl-o` open the selected
+file, revision, or stash in the internal read-only detail pane; they never
+launch `$EDITOR`, `$BROWSER`, or a URL handler. `Ctrl-c Ctrl-r` advances to the
+next visible decorated commit row and stops at the end; it does not parse
+arbitrary detail text or wrap. Vim `Ctrl-c` remains quit.
+
 `S` stages all tracked modifications and deletions while intentionally leaving
 untracked files alone. `U` clears all index changes while preserving worktree
 content. Both keys work anywhere in the status view, independent of the

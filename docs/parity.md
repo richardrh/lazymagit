@@ -13,7 +13,8 @@ not.
 |---|---|---|---|
 | Repository discovery/init | Exact slice | Nested discovery, bare detection, safe init prompt | Bare status UI |
 | Status file sections | Partial | Magit headings/order, independent staged/unstaged state, stable folds, and unresolved-path selection | Inline hunks and operation headers |
-| Status commit sections | Partial | Magit hash/ref/subject rows, recent fallback, upstream ranges | Full decoration ordering/faces and configurable log arguments |
+| Status commit sections | Partial | Magit hash/ref/subject rows, recent fallback, upstream ranges; `C-c C-r` advances visible decorated rows without wrapping | Full decoration ordering/faces and configurable log arguments |
+| Top-level thing controls | Adapted | `C-c C-e`/`C-c C-o` open typed status items in the read-only detail pane | No ambient editor/browser/URL handler or Emacs buffer-local remaps |
 | Revision inspection | Partial | Metadata, changed-file stat/names, bounded full patch | Revision-local commands and parent navigation |
 | Whole-file stage/unstage | Partial | `s`/`u`; `S` stages all tracked changes excluding untracked; `U` clears index changes while preserving the worktree; unborn branches, renames/deletions, literal paths | Multi-selection operations |
 | Hunk/region operations | Partial | `[`/`]` focus hunks; `V` toggles noncontiguous hunks; `v`/`Space` collects disjoint typed changed-line regions; reviewed stage, unstage, and discard regenerate and stale-check the exact patch before mutation | Binary/rename region operations and semantic patch editing beyond typed region refinement |
