@@ -69,6 +69,8 @@ func ThemeNames() []string {
 
 func ApplyTheme(name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, "_", "-")
+	name = strings.Join(strings.Fields(name), "-")
 	if name == "catppuccin" {
 		name = "catppuccin-mocha"
 	}

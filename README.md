@@ -33,6 +33,10 @@ Requirements: Go 1.25 or newer and Git available on `PATH`.
 go test ./...
 CGO_ENABLED=0 go build -o lazymagit ./cmd/lazymagit
 ./lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]
+
+# Theme names may use their display spelling or canonical slug.
+./lazymagit --theme "Tokyo Night" --layout compact
+# Equivalent: ./lazymagit --theme tokyo-night --layout compact
 ```
 
 The resulting executable contains the Go application and TUI dependencies in

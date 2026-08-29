@@ -25,8 +25,10 @@ func TestBundledThemesApplyAndRender(t *testing.T) {
 			t.Fatalf("theme %q did not render styled TUI", name)
 		}
 	}
-	if err := ApplyTheme("catppuccin"); err != nil {
-		t.Fatalf("catppuccin alias: %v", err)
+	for _, alias := range []string{"catppuccin", "Catppuccin Mocha", "Tokyo Night", "gruvbox_dark"} {
+		if err := ApplyTheme(alias); err != nil {
+			t.Fatalf("ApplyTheme(%q) alias: %v", alias, err)
+		}
 	}
 	if err := ApplyTheme("missing"); err == nil || !strings.Contains(err.Error(), "available themes") {
 		t.Fatalf("unknown theme error = %v", err)
