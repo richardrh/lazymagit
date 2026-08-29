@@ -161,6 +161,7 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 	}
 	m.cancelDetail()
 	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
@@ -251,10 +252,29 @@ func inspectShowCommit(m *Model, _ WorkflowCommand) tea.Cmd {
 }
 
 func inspectRevision(m *Model, revision string) tea.Cmd {
-	return loadInspection(m, "Commit "+revision, func(ctx context.Context) (string, error) {
+	if !m.canOperate() {
+		return nil
+	}
+	m.cancelDetail()
+	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
+	m.detailOffset = 0
+	m.detailRequest++
+	request, id := m.detailRequest, m.tree.Cursor()
+	m.detailID, m.detail = id, "Loading commit "+sanitizeSingleLine(revision)+"…"
+	m.setMessage("Loading commit " + sanitizeSingleLine(revision) + "…")
+	ctx, cancel := context.WithCancel(m.appCtx)
+	m.detailCtx, m.detailCancel = ctx, cancel
+	return func() tea.Msg {
 		result, err := m.repo.QueryShowRevision(ctx, gitbackend.ShowRevisionQuery{Revision: revision, Stat: true, Patch: true, OutputLimit: inspectOutputLimit})
-		return truncationNote(result.Truncated) + result.Detail, err
-	})
+		if err != nil {
+			return revisionMsg{id: id, request: request, err: err}
+		}
+		return revisionMsg{
+			id: id, request: request, revision: result.Revision,
+			text: "Commit " + result.Revision.ShortID + "\n\n" + truncationNote(result.Truncated) + result.Detail,
+		}
+	}
 }
 
 // inspectBlame displays current-worktree line provenance for the selected
@@ -290,6 +310,7 @@ func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
 	}
 	m.cancelDetail()
 	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
@@ -342,6 +363,7 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 		index = min(len(lines)-1, index+1)
 	case "enter":
 		entry := m.graphEntries[m.graphCursor]
+		m.graphReturn = m.captureGraphInspection()
 		m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
 		return inspectRevision(m, entry.ID), true
 	default:
@@ -351,6 +373,37 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
 	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects")
 	return nil, true
+}
+
+func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
+	if key != "p" {
+		return nil, false
+	}
+	if len(m.revisionParents) == 0 {
+		m.setMessage("This commit has no parent")
+		return nil, true
+	}
+	m.setMessage("Opening first parent commit")
+	return inspectRevision(m, m.revisionParents[0]), true
+}
+
+func (m *Model) captureGraphInspection() *graphInspection {
+	entries := make(map[int]gitbackend.LogEntry, len(m.graphEntries))
+	for line, entry := range m.graphEntries {
+		entries[line] = entry
+	}
+	return &graphInspection{detail: m.detail, id: m.detailID, entries: entries, cursor: m.graphCursor, offset: m.detailOffset}
+}
+
+func (m *Model) restoreGraphInspection() {
+	if m.graphReturn == nil {
+		return
+	}
+	state := m.graphReturn
+	m.detail, m.detailID, m.detailOffset = state.detail, state.id, state.offset
+	m.graphEntries, m.graphCursor, m.graphActive = state.entries, state.cursor, true
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
+	m.clampDetailOffset()
 }
 
 func formatBlameResult(result gitbackend.BlameResult) string {

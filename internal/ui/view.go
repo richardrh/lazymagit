@@ -342,6 +342,12 @@ func (m *Model) renderFooter() string {
 		}
 	} else if m.mode == modeStatus && m.graphActive {
 		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Graph") + lipgloss.NewStyle().Foreground(colorMuted).Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
+	} else if m.mode == modeStatus && m.revisionActive {
+		controls := "  p first parent  Esc close"
+		if m.graphReturn != nil {
+			controls = "  p first parent  Esc return graph"
+		}
+		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Revision") + lipgloss.NewStyle().Foreground(colorMuted).Render(controls)
 	} else if m.mode == modeStatus {
 		workflow := func(key, label string) string {
 			return lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(key) + " " + label

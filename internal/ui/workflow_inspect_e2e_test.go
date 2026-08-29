@@ -98,11 +98,21 @@ func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
 	if m.graphCursor == first {
 		t.Fatalf("graph next did not advance from line %d", first)
 	}
+	selected := m.graphCursor
 	sendInspectSequence(t, m, "enter")
-	if m.graphActive {
-		t.Fatal("opening a graph commit left graph selection active")
+	if m.graphActive || !m.revisionActive {
+		t.Fatalf("opening a graph commit did not enter revision inspection: graph=%t revision=%t", m.graphActive, m.revisionActive)
 	}
 	assertInspectDetail(t, m, "Commit", "graph")
+
+	// The selected topic commit has the base commit as its first parent.
+	sendInspectSequence(t, m, "p")
+	assertInspectDetail(t, m, "Commit", "graph base")
+	sendInspectSequence(t, m, "esc")
+	if !m.graphActive || m.graphCursor != selected {
+		t.Fatalf("Esc did not restore graph selection: active=%t cursor=%d want=%d", m.graphActive, m.graphCursor, selected)
+	}
+	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main")
 }
 
 func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {

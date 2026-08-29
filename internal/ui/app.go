@@ -103,6 +103,24 @@ type graphMsg struct {
 	err     error
 }
 
+// revisionMsg retains resolved parent IDs so revision inspection can navigate
+// commit ancestry without parsing display text.
+type revisionMsg struct {
+	id       sectionmodel.SectionID
+	request  uint64
+	text     string
+	revision gitbackend.Revision
+	err      error
+}
+
+type graphInspection struct {
+	detail  string
+	id      sectionmodel.SectionID
+	entries map[int]gitbackend.LogEntry
+	cursor  int
+	offset  int
+}
+
 // Model is the Bubble Tea application model.
 type Model struct {
 	repo     *gitbackend.Repository
@@ -145,6 +163,10 @@ type Model struct {
 	graphActive           bool
 	graphCursor           int
 	graphEntries          map[int]gitbackend.LogEntry
+	revisionActive        bool
+	revisionID            string
+	revisionParents       []string
+	graphReturn           *graphInspection
 	transientOffset       int
 	vimGToken             uint64
 	snapshotRequest       uint64
@@ -370,6 +392,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.resetDetailSelection()
 		return m, nil
+	case revisionMsg:
+		return m, m.handleRevisionMsg(msg)
 	case diffMsg:
 		if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || (m.mode != modeStatus && m.mode != modeProcess) || !m.appActive() {
 			return m, nil
@@ -423,14 +447,38 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) handleRevisionMsg(msg revisionMsg) tea.Cmd {
+	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || (m.mode != modeStatus && m.mode != modeProcess) || !m.appActive() {
+		return nil
+	}
+	m.cancelDetail()
+	m.detailID, m.detailOffset = msg.id, 0
+	m.resetDetailSelection()
+	if msg.err != nil {
+		m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
+		m.detail = "Unable to load commit/revision:\n" + sanitizeSingleLine(msg.err.Error())
+		return nil
+	}
+	m.revisionActive, m.revisionID = true, msg.revision.ID
+	m.revisionParents = append(m.revisionParents[:0], msg.revision.ParentIDs...)
+	m.detail = sanitizeDiff(msg.text)
+	return nil
+}
+
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	if key == "ctrl+c" && m.scheme == schemeVim {
 		m.shutdown()
 		return m, tea.Quit
 	}
+	if key == "esc" && m.revisionActive && m.graphReturn != nil && m.resolver.PendingPrefix() == "" {
+		m.restoreGraphInspection()
+		m.setMessage("Returned to graph")
+		return m, nil
+	}
 	if key == "esc" && m.inspectionActive && m.resolver.PendingPrefix() == "" {
 		m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
+		m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 		m.setMessage("Inspection closed")
 		return m, m.loadDetailCmd()
 	}
@@ -652,6 +700,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.graphActive {
 		if cmd, handled := m.handleGraphKey(key); handled {
+			return m, cmd
+		}
+	}
+	if m.revisionActive {
+		if cmd, handled := m.handleRevisionKey(key); handled {
 			return m, cmd
 		}
 	}
