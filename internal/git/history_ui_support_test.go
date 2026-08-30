@@ -8,6 +8,51 @@ import (
 	"testing"
 )
 
+func TestCloneHistoryUIRequestCopiesSlices(t *testing.T) {
+	original := HistoryUIRequest{
+		Reset:     ResetOptions{Paths: []string{"reset"}},
+		Revisions: []string{"revision"},
+		Bisect:    BisectStartOptions{Paths: []string{"bisect"}},
+	}
+	cloned := cloneHistoryUIRequest(original)
+	cloned.Reset.Paths[0] = "changed reset"
+	cloned.Revisions[0] = "changed revision"
+	cloned.Bisect.Paths[0] = "changed bisect"
+	if original.Reset.Paths[0] != "reset" || original.Revisions[0] != "revision" || original.Bisect.Paths[0] != "bisect" {
+		t.Fatalf("clone mutated original: %#v", original)
+	}
+}
+
+func TestHistoryUIActionClassifiers(t *testing.T) {
+	if !isRebaseHistoryUIAction(HistoryUIRebaseStart) {
+		t.Fatal("rebase start must be classified as a rebase action")
+	}
+	if !isSequencerHistoryUIAction(HistoryUIRevertAbort) {
+		t.Fatal("revert abort must be classified as a sequencer action")
+	}
+	if !isBisectHistoryUIAction(HistoryUIBisectGood) {
+		t.Fatal("bisect good must be classified as a bisect action")
+	}
+	if isRebaseHistoryUIAction("unknown") || isSequencerHistoryUIAction("unknown") || isBisectHistoryUIAction("unknown") {
+		t.Fatal("unknown action was classified")
+	}
+}
+
+func TestReviewedHistoryUIActionIsCurrent(t *testing.T) {
+	request := HistoryUIRequest{Action: HistoryUIBisectReset}
+	state := HistoryUIState{HEAD: "head", Operation: "bisect"}
+	reviewed := ReviewedHistoryUIAction{Request: request, State: state}
+	reviewed.Token = NewConfirmationToken(historyUIIdentity(reviewed))
+	if !reviewedHistoryUIActionIsCurrent(reviewed, reviewed) {
+		t.Fatal("identical reviewed actions were stale")
+	}
+	current := reviewed
+	current.State.HEAD = "moved"
+	if reviewedHistoryUIActionIsCurrent(reviewed, current) {
+		t.Fatal("state change was accepted")
+	}
+}
+
 func TestReviewedHistoryResetBindsHEADIndexAndWorktree(t *testing.T) {
 	ctx := context.Background()
 	for _, mutate := range []struct {

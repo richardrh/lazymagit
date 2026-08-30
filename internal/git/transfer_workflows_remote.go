@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -203,54 +201,71 @@ func (r *Repository) RemoveRemoteWithArgs(ctx context.Context, in RemoveRemoteAr
 }
 
 func (r *Repository) rollbackRemoteChange(ctx context.Context, cause error, configPath string, configBefore []byte, configExisted bool, before RemoteChangePreflight, newName string) error {
-	var rollbackErr error
-	if err := restoreConfigFile(configPath, configBefore, configExisted); err != nil {
-		rollbackErr = err
-	}
-	for _, remote := range []string{before.Remote, newName} {
-		if remote == "" {
-			continue
-		}
-		out, err := r.output(ctx, "for-each-ref", "--format=%(refname)", "refs/remotes/"+remote)
-		if err != nil && rollbackErr == nil {
-			rollbackErr = err
-			continue
-		}
-		for _, ref := range strings.Split(trimLine(out), "\n") {
-			if ref != "" {
-				if err := r.run(ctx, "update-ref", "-d", ref); err != nil && rollbackErr == nil {
-					rollbackErr = err
-				}
-			}
-		}
-	}
-	symbols := make(map[string]bool)
-	for _, pair := range before.TrackingRefSymbols {
-		ref, _, _ := strings.Cut(pair, "=")
-		symbols[ref] = true
-	}
-	for _, pair := range before.TrackingRefOIDs {
-		ref, oid, ok := strings.Cut(pair, "=")
-		if !ok || symbols[ref] {
-			continue
-		}
-		if err := r.run(ctx, "update-ref", ref, oid); err != nil && rollbackErr == nil {
-			rollbackErr = err
-		}
-	}
-	for _, pair := range before.TrackingRefSymbols {
-		ref, target, ok := strings.Cut(pair, "=")
-		if !ok {
-			continue
-		}
-		if err := r.run(ctx, "symbolic-ref", ref, target); err != nil && rollbackErr == nil {
-			rollbackErr = err
-		}
-	}
+	rollbackErr := restoreConfigFile(configPath, configBefore, configExisted)
+	rollbackErr = firstRollbackError(rollbackErr, r.removeRemoteTrackingRefs(ctx, before.Remote))
+	rollbackErr = firstRollbackError(rollbackErr, r.removeRemoteTrackingRefs(ctx, newName))
+	rollbackErr = firstRollbackError(rollbackErr, r.restoreDirectTrackingRefs(ctx, before))
+	rollbackErr = firstRollbackError(rollbackErr, r.restoreSymbolicTrackingRefs(ctx, before.TrackingRefSymbols))
 	if rollbackErr != nil {
 		return &PartialMutationError{Operation: "remote change", Cause: cause, Rollback: rollbackErr, State: []string{"remote/config/ref rollback incomplete"}}
 	}
 	return cause
+}
+
+func firstRollbackError(current, candidate error) error {
+	if current != nil {
+		return current
+	}
+	return candidate
+}
+
+func (r *Repository) removeRemoteTrackingRefs(ctx context.Context, remote string) error {
+	if remote == "" {
+		return nil
+	}
+	out, err := r.output(ctx, "for-each-ref", "--format=%(refname)", "refs/remotes/"+remote)
+	if err != nil {
+		return err
+	}
+	var rollbackErr error
+	for _, ref := range strings.Split(trimLine(out), "\n") {
+		if ref != "" {
+			rollbackErr = firstRollbackError(rollbackErr, r.run(ctx, "update-ref", "-d", ref))
+		}
+	}
+	return rollbackErr
+}
+
+func (r *Repository) restoreDirectTrackingRefs(ctx context.Context, before RemoteChangePreflight) error {
+	symbols := trackingRefSymbols(before.TrackingRefSymbols)
+	var rollbackErr error
+	for _, pair := range before.TrackingRefOIDs {
+		ref, oid, ok := strings.Cut(pair, "=")
+		if ok && !symbols[ref] {
+			rollbackErr = firstRollbackError(rollbackErr, r.run(ctx, "update-ref", ref, oid))
+		}
+	}
+	return rollbackErr
+}
+
+func trackingRefSymbols(pairs []string) map[string]bool {
+	symbols := make(map[string]bool, len(pairs))
+	for _, pair := range pairs {
+		ref, _, _ := strings.Cut(pair, "=")
+		symbols[ref] = true
+	}
+	return symbols
+}
+
+func (r *Repository) restoreSymbolicTrackingRefs(ctx context.Context, pairs []string) error {
+	var rollbackErr error
+	for _, pair := range pairs {
+		ref, target, ok := strings.Cut(pair, "=")
+		if ok {
+			rollbackErr = firstRollbackError(rollbackErr, r.run(ctx, "symbolic-ref", ref, target))
+		}
+	}
+	return rollbackErr
 }
 
 func (r *Repository) branchPushRemoteKeys(ctx context.Context) ([]string, error) {
@@ -340,10 +355,26 @@ type RemoteConfigArgs struct {
 }
 
 func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) error {
+	if err := r.validateRemoteConfigArgs(ctx, in); err != nil {
+		return err
+	}
+	configPath, before, configExisted, err := r.snapshotConfigFile(ctx)
+	if err != nil {
+		return fmt.Errorf("snapshot repository config: %w", err)
+	}
+	rollback := func(cause error) error {
+		if err := restoreConfigFile(configPath, before, configExisted); err != nil {
+			return fmt.Errorf("%w (config rollback failed: %v)", cause, err)
+		}
+		return cause
+	}
+	return r.applyRemoteConfig(ctx, in, rollback)
+}
+
+func (r *Repository) validateRemoteConfigArgs(ctx context.Context, in RemoteConfigArgs) error {
 	if err := r.validateTransferRemote(ctx, in.Remote); err != nil {
 		return err
 	}
-	// Validate the complete request before the first config write.
 	for name, value := range map[string]*string{"fetch": in.FetchURL, "push": in.PushURL} {
 		if value != nil && (*value == "" || strings.ContainsAny(*value, "\x00\r\n")) {
 			return fmt.Errorf("%s URL is empty or contains a control character", name)
@@ -365,45 +396,10 @@ func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) e
 	if in.FollowRemoteHEAD != nil && (*in.FollowRemoteHEAD < RemoteFollowRemoteHEADDefault || *in.FollowRemoteHEAD > RemoteFollowRemoteHEADAlways) {
 		return errors.New("invalid remote followRemoteHEAD option")
 	}
-	commonOut, err := r.output(ctx, "rev-parse", "--git-common-dir")
-	if err != nil {
-		return err
-	}
-	commonDir := trimLine(commonOut)
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(r.commandDir, commonDir)
-	}
-	configPath := filepath.Join(filepath.Clean(commonDir), "config")
-	before, readErr := os.ReadFile(configPath)
-	configExisted := readErr == nil
-	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-		return fmt.Errorf("snapshot repository config: %w", readErr)
-	}
-	rollback := func(cause error) error {
-		if configExisted {
-			tmp, err := os.CreateTemp(filepath.Dir(configPath), ".lazymagit-config-rollback-")
-			if err != nil {
-				return fmt.Errorf("%w (config rollback failed: %v)", cause, err)
-			}
-			name := tmp.Name()
-			if _, err = tmp.Write(before); err == nil {
-				err = tmp.Sync()
-			}
-			if closeErr := tmp.Close(); err == nil {
-				err = closeErr
-			}
-			if err == nil {
-				err = os.Rename(name, configPath)
-			}
-			_ = os.Remove(name)
-			if err != nil {
-				return fmt.Errorf("%w (config rollback failed: %v)", cause, err)
-			}
-		} else if err := os.Remove(configPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("%w (config rollback failed: %v)", cause, err)
-		}
-		return cause
-	}
+	return nil
+}
+
+func (r *Repository) applyRemoteConfig(ctx context.Context, in RemoteConfigArgs, rollback func(error) error) error {
 	if in.FetchURL != nil {
 		if err := r.run(ctx, "remote", "set-url", "--", in.Remote, *in.FetchURL); err != nil {
 			return rollback(err)
@@ -414,45 +410,52 @@ func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) e
 			return rollback(err)
 		}
 	}
-	for _, pair := range []struct {
-		key    string
-		values []string
-	}{
-		{"remote." + in.Remote + ".fetch", in.FetchRefspecs}, {"remote." + in.Remote + ".push", in.PushRefspecs},
-	} {
-		if pair.values == nil {
-			continue
-		}
-		// A regexp matching every value avoids treating a refspec as a regexp.
-		if err := r.run(ctx, "config", "--unset-all", pair.key, `.*`); err != nil && commandExitCode(err) != 5 {
-			return rollback(err)
-		}
-		for _, spec := range pair.values {
-			if err := r.run(ctx, "config", "--add", pair.key, spec); err != nil {
-				return rollback(err)
-			}
-		}
+	if err := r.replaceRemoteConfigValues(ctx, "remote."+in.Remote+".fetch", in.FetchRefspecs); err != nil {
+		return rollback(err)
 	}
-	if in.TagOpt != nil {
-		key := "remote." + in.Remote + ".tagOpt"
-		switch *in.TagOpt {
-		case RemoteTagsDefault:
-			if err := r.run(ctx, "config", "--unset-all", key); err != nil && commandExitCode(err) != 5 {
-				return rollback(err)
-			}
-		case RemoteTagsAll:
-			if err := r.run(ctx, "config", key, "--tags"); err != nil {
-				return rollback(err)
-			}
-		case RemoteTagsNone:
-			if err := r.run(ctx, "config", key, "--no-tags"); err != nil {
-				return rollback(err)
-			}
-		default:
-			return errors.New("invalid remote tag option")
-		}
+	if err := r.replaceRemoteConfigValues(ctx, "remote."+in.Remote+".push", in.PushRefspecs); err != nil {
+		return rollback(err)
+	}
+	if err := r.configureRemoteTagOpt(ctx, in.Remote, in.TagOpt); err != nil {
+		return rollback(err)
 	}
 	return r.configureRemoteFollowRemoteHEAD(ctx, in.Remote, in.FollowRemoteHEAD, rollback)
+}
+
+func (r *Repository) replaceRemoteConfigValues(ctx context.Context, key string, values []string) error {
+	if values == nil {
+		return nil
+	}
+	// A regexp matching every value avoids treating a refspec as a regexp.
+	if err := r.run(ctx, "config", "--unset-all", key, `.*`); err != nil && commandExitCode(err) != 5 {
+		return err
+	}
+	for _, value := range values {
+		if err := r.run(ctx, "config", "--add", key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) configureRemoteTagOpt(ctx context.Context, remote string, option *RemoteTagOpt) error {
+	if option == nil {
+		return nil
+	}
+	key := "remote." + remote + ".tagOpt"
+	switch *option {
+	case RemoteTagsDefault:
+		if err := r.run(ctx, "config", "--unset-all", key); err != nil && commandExitCode(err) != 5 {
+			return err
+		}
+		return nil
+	case RemoteTagsAll:
+		return r.run(ctx, "config", key, "--tags")
+	case RemoteTagsNone:
+		return r.run(ctx, "config", key, "--no-tags")
+	default:
+		return errors.New("invalid remote tag option")
+	}
 }
 
 func (r *Repository) configureRemoteFollowRemoteHEAD(ctx context.Context, remote string, follow *RemoteFollowRemoteHEAD, rollback func(error) error) error {

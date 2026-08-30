@@ -74,8 +74,21 @@ func remoteChangeIdentity(p ReviewedRemoteChange) string {
 }
 
 func sameRemotePreflight(a, b RemoteChangePreflight) bool {
-	return a.Remote == b.Remote && a.UsesRemotePushDefault == b.UsesRemotePushDefault &&
-		sameStrings(a.TrackingRefs, b.TrackingRefs) && sameStrings(a.TrackingRefOIDs, b.TrackingRefOIDs) && sameStrings(a.TrackingRefSymbols, b.TrackingRefSymbols) && sameStrings(a.BranchPushRemotes, b.BranchPushRemotes) && sameStrings(a.BranchRemotes, b.BranchRemotes) && sameStrings(a.BranchMerges, b.BranchMerges) && sameStrings(a.RemoteConfig, b.RemoteConfig)
+	if a.Remote != b.Remote || a.UsesRemotePushDefault != b.UsesRemotePushDefault {
+		return false
+	}
+	return sameRemotePreflightLists(a, b)
+}
+
+func sameRemotePreflightLists(a, b RemoteChangePreflight) bool {
+	aLists := [][]string{a.TrackingRefs, a.TrackingRefOIDs, a.TrackingRefSymbols, a.BranchPushRemotes, a.BranchRemotes, a.BranchMerges, a.RemoteConfig}
+	bLists := [][]string{b.TrackingRefs, b.TrackingRefOIDs, b.TrackingRefSymbols, b.BranchPushRemotes, b.BranchRemotes, b.BranchMerges, b.RemoteConfig}
+	for i := range aLists {
+		if !sameStrings(aLists[i], bLists[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // RemoteConfiguration is a lossless snapshot. Nil means the key is absent;

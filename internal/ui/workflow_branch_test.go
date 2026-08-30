@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -8,6 +10,39 @@ import (
 	gitbackend "github.com/richard/lazymagit/internal/git"
 	"github.com/richard/lazymagit/internal/keymap"
 )
+
+func TestApplyBranchDescriptionSetKeepUnsetAndInvalid(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base.txt", "base\n")
+	r.git("add", ".")
+	r.git("commit", "-m", "base")
+	repo, err := gitbackend.Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := applyBranchDescription(ctx, repo, "main", "set", "topic branch"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("config", "--get", "branch.main.description"); got != "topic branch" {
+		t.Fatalf("description = %q", got)
+	}
+	if err := applyBranchDescription(ctx, repo, "main", "keep", "ignored"); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("config", "--get", "branch.main.description"); got != "topic branch" {
+		t.Fatalf("keep changed description to %q", got)
+	}
+	if err := applyBranchDescription(ctx, repo, "main", "unset", ""); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", r.dir, "config", "--get", "branch.main.description").CombinedOutput(); err == nil || len(out) != 0 {
+		t.Fatalf("unset retained description %q (err=%v)", out, err)
+	}
+	if err := applyBranchDescription(ctx, repo, "main", "invalid", ""); err == nil {
+		t.Fatal("invalid action succeeded")
+	}
+}
 
 var connectedBranchCommands = []string{
 	"magit-checkout",

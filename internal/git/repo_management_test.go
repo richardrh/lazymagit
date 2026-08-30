@@ -23,6 +23,84 @@ func managementRepo(t *testing.T) (*testRepo, *Repository) {
 	return r, repo
 }
 
+func TestSubtreeRunRejectsUnsupportedInputBeforeInvokingGit(t *testing.T) {
+	ctx := context.Background()
+	repo := &Repository{}
+	tests := []struct {
+		name   string
+		action string
+		opts   SubtreeOptions
+	}{
+		{"missing prefix", "add", SubtreeOptions{Ref: "main"}},
+		{"option-like repository", "add", SubtreeOptions{Prefix: "vendor/lib", Repository: "--bad", Ref: "main"}},
+		{"option-like ref", "add", SubtreeOptions{Prefix: "vendor/lib", Ref: "--bad"}},
+		{"option-like branch", "add", SubtreeOptions{Prefix: "vendor/lib", Ref: "main", Branch: "--bad"}},
+		{"add requires ref", "add", SubtreeOptions{Prefix: "vendor/lib"}},
+		{"add rejects branch", "add", SubtreeOptions{Prefix: "vendor/lib", Ref: "main", Branch: "topic"}},
+		{"merge requires ref", "merge", SubtreeOptions{Prefix: "vendor/lib"}},
+		{"merge rejects repository", "merge", SubtreeOptions{Prefix: "vendor/lib", Ref: "main", Repository: "origin"}},
+		{"pull requires repository", "pull", SubtreeOptions{Prefix: "vendor/lib", Ref: "main"}},
+		{"pull rejects branch", "pull", SubtreeOptions{Prefix: "vendor/lib", Repository: "origin", Ref: "main", Branch: "topic"}},
+		{"push rejects squash", "push", SubtreeOptions{Prefix: "vendor/lib", Repository: "origin", Ref: "main", Squash: true}},
+		{"split rejects ref", "split", SubtreeOptions{Prefix: "vendor/lib", Ref: "main"}},
+		{"unknown action", "unknown", SubtreeOptions{Prefix: "vendor/lib"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := repo.subtreeRun(ctx, test.action, test.opts); err == nil {
+				t.Fatal("invalid subtree input was accepted")
+			}
+		})
+	}
+}
+
+func TestSubtreeRunSplitBuildsPortableArgv(t *testing.T) {
+	_, repo := managementRepo(t)
+	available, err := repo.HasSubtree(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !available {
+		t.Skip("git subtree is not installed")
+	}
+	if err := repo.subtreeRun(context.Background(), "split", SubtreeOptions{Prefix: "dir", Branch: "split-dir"}); err != nil {
+		t.Fatal(err)
+	}
+	branches, err := repo.Branches(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range branches {
+		if branch.Name == "split-dir" {
+			return
+		}
+	}
+	t.Fatal("subtree split did not create its requested branch")
+}
+
+func TestPruneWorktreesRequiresFreshPlanForExplicitExpiration(t *testing.T) {
+	_, repo := managementRepo(t)
+	ctx := context.Background()
+	if err := repo.PruneWorktrees(ctx, WorktreePruneOptions{DryRun: true, Verbose: true}); err != nil {
+		t.Fatalf("dry-run prune: %v", err)
+	}
+	if err := repo.PruneWorktrees(ctx, WorktreePruneOptions{Expire: "now"}); err == nil {
+		t.Fatal("explicit prune expiration was accepted without review")
+	} else {
+		var required *ConfirmationRequiredError
+		if !errors.As(err, &required) {
+			t.Fatalf("unreviewed prune error = %T %v", err, err)
+		}
+	}
+	plan, err := repo.WorktreePrunePreflight(ctx, "now")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.PruneWorktrees(ctx, WorktreePruneOptions{Expire: "now", Plan: &plan, Token: plan.Token}); err != nil {
+		t.Fatalf("reviewed prune: %v", err)
+	}
+}
+
 func TestRepositoryIgnoreAndIndexFlags(t *testing.T) {
 	r, repo := managementRepo(t)
 	ctx := context.Background()

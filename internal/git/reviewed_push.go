@@ -51,117 +51,140 @@ func (r *Repository) ReviewPush(ctx context.Context, in PushUIArgs) (ReviewedPus
 			return p, err
 		}
 	}
-	p.SourceRef = p.Branch
-	if in.Source != "" {
-		p.SourceRef = in.Source
-	} else if in.Tag != "" {
-		p.SourceRef = "refs/tags/" + in.Tag
-	} else if in.NotesRef != "" {
-		p.SourceRef = in.NotesRef
+	p.SourceRef = reviewedPushSourceRef(p.Branch, in)
+	if err := r.freezeReviewedPrimarySource(ctx, &p); err != nil {
+		return p, err
 	}
-	if p.SourceRef != "" {
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", p.SourceRef)
-		if resolveErr != nil {
-			return p, fmt.Errorf("resolve reviewed push source %q: %w", p.SourceRef, resolveErr)
-		}
-		p.SourceOID = trimLine(out)
-		// Freeze ordinary singular source selectors to the reviewed object while
-		// preserving the exact reviewed destination.
-		for i, spec := range p.Refspecs {
-			if spec == p.SourceRef {
-				destination := p.SourceRef
-				if !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
-				}
-				p.Refspecs[i] = p.SourceOID + ":" + destination
-			} else if strings.HasPrefix(spec, p.SourceRef+":") {
-				destination := strings.TrimPrefix(spec, p.SourceRef+":")
-				if destination != "" && !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
-				}
-				p.Refspecs[i] = p.SourceOID + ":" + destination
-			}
-		}
-		for i, arg := range p.Argv {
-			if arg == "--" && i+2 <= len(p.Argv) {
-				p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
-				break
-			}
-		}
+	if err := r.bindReviewedPushSources(ctx, &p); err != nil {
+		return p, err
 	}
-	// Bind every explicit source, not only the dialog's primary selector.
-	for _, spec := range p.Refspecs {
-		source, _, _ := strings.Cut(strings.TrimPrefix(spec, "+"), ":")
-		if source == "" || source == p.SourceOID || strings.Contains(source, "*") {
-			continue
-		}
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source)
-		if resolveErr != nil {
-			continue
-		}
-		found := false
-		for _, existing := range p.Sources {
-			found = found || existing.Ref == source
-		}
-		if !found {
-			p.Sources = append(p.Sources, ReviewedPushSource{source, trimLine(out)})
-		}
-	}
-	if p.SourceRef != "" && len(p.Sources) == 0 {
-		p.Sources = append(p.Sources, ReviewedPushSource{p.SourceRef, p.SourceOID})
-	}
-	for _, spec := range p.Refspecs {
-		if spec == ":" {
-			p.SourceNamespace = "refs/heads"
-		}
-		if strings.Contains(spec, "*") {
-			p.SourceNamespace = strings.Split(spec, "*")[0]
-		}
-	}
-	for _, arg := range p.Argv {
-		if arg == "--tags" {
-			p.SourceNamespace = "refs/tags"
-		}
-	}
+	p.SourceNamespace = reviewedPushSourceNamespace(p)
 	if p.SourceNamespace != "" {
 		p.Sources, err = r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
 		if err != nil {
 			return p, err
 		}
 	} else {
-		for i, spec := range p.Refspecs {
-			forced := strings.HasPrefix(spec, "+")
-			plain := strings.TrimPrefix(spec, "+")
-			source, destination, hasDestination := strings.Cut(plain, ":")
-			for _, reviewedSource := range p.Sources {
-				if source != reviewedSource.Ref {
-					continue
-				}
-				if !hasDestination {
-					destination = source
-				}
-				if destination != "" && !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
-				}
-				prefix := ""
-				if forced {
-					prefix = "+"
-				}
-				p.Refspecs[i] = prefix + reviewedSource.OID + ":" + destination
-			}
-		}
-		for i, arg := range p.Argv {
-			if arg == "--" && i+1 < len(p.Argv) {
-				p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
-				break
-			}
-		}
+		freezeReviewedPushRefspecs(&p)
 	}
 	if p.RemoteConfig, err = r.remoteIdentityConfig(ctx, p.Remote); err != nil {
 		return p, err
 	}
 	p.Token = NewConfirmationToken(reviewedPushIdentity(p))
 	return p, nil
+}
+
+func reviewedPushSourceRef(branch string, in PushUIArgs) string {
+	if in.Source != "" {
+		return in.Source
+	}
+	if in.Tag != "" {
+		return "refs/tags/" + in.Tag
+	}
+	if in.NotesRef != "" {
+		return in.NotesRef
+	}
+	return branch
+}
+
+func (r *Repository) freezeReviewedPrimarySource(ctx context.Context, p *ReviewedPush) error {
+	if p.SourceRef == "" {
+		return nil
+	}
+	out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", p.SourceRef)
+	if err != nil {
+		return fmt.Errorf("resolve reviewed push source %q: %w", p.SourceRef, err)
+	}
+	p.SourceOID = trimLine(out)
+	for i, spec := range p.Refspecs {
+		if spec == p.SourceRef {
+			p.Refspecs[i] = p.SourceOID + ":" + reviewedPushDestination(p.SourceRef)
+		} else if strings.HasPrefix(spec, p.SourceRef+":") {
+			p.Refspecs[i] = p.SourceOID + ":" + reviewedPushDestination(strings.TrimPrefix(spec, p.SourceRef+":"))
+		}
+	}
+	replaceReviewedPushArgv(p)
+	return nil
+}
+
+func reviewedPushDestination(value string) string {
+	if value != "" && !strings.HasPrefix(value, "refs/") {
+		return "refs/heads/" + value
+	}
+	return value
+}
+
+func (r *Repository) bindReviewedPushSources(ctx context.Context, p *ReviewedPush) error {
+	for _, spec := range p.Refspecs {
+		source, _, _ := strings.Cut(strings.TrimPrefix(spec, "+"), ":")
+		if source == "" || source == p.SourceOID || strings.Contains(source, "*") || reviewedPushHasSource(p.Sources, source) {
+			continue
+		}
+		out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source)
+		if err == nil {
+			p.Sources = append(p.Sources, ReviewedPushSource{source, trimLine(out)})
+		}
+	}
+	if p.SourceRef != "" && len(p.Sources) == 0 {
+		p.Sources = append(p.Sources, ReviewedPushSource{p.SourceRef, p.SourceOID})
+	}
+	return nil
+}
+
+func reviewedPushHasSource(sources []ReviewedPushSource, source string) bool {
+	for _, existing := range sources {
+		if existing.Ref == source {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewedPushSourceNamespace(p ReviewedPush) string {
+	namespace := ""
+	for _, spec := range p.Refspecs {
+		if spec == ":" {
+			namespace = "refs/heads"
+		}
+		if strings.Contains(spec, "*") {
+			namespace = strings.Split(spec, "*")[0]
+		}
+	}
+	for _, arg := range p.Argv {
+		if arg == "--tags" {
+			return "refs/tags"
+		}
+	}
+	return namespace
+}
+
+func freezeReviewedPushRefspecs(p *ReviewedPush) {
+	for i, spec := range p.Refspecs {
+		forced := strings.HasPrefix(spec, "+")
+		source, destination, hasDestination := strings.Cut(strings.TrimPrefix(spec, "+"), ":")
+		for _, reviewedSource := range p.Sources {
+			if source == reviewedSource.Ref {
+				if !hasDestination {
+					destination = source
+				}
+				prefix := ""
+				if forced {
+					prefix = "+"
+				}
+				p.Refspecs[i] = prefix + reviewedSource.OID + ":" + reviewedPushDestination(destination)
+			}
+		}
+	}
+	replaceReviewedPushArgv(p)
+}
+
+func replaceReviewedPushArgv(p *ReviewedPush) {
+	for i, arg := range p.Argv {
+		if arg == "--" && i+1 < len(p.Argv) {
+			p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
+			return
+		}
+	}
 }
 
 func (r *Repository) ExecuteReviewedPush(ctx context.Context, p ReviewedPush) error {

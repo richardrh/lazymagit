@@ -6,8 +6,46 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestRunRebaseTodoEditorOnlyReplacesExpectedTodoFile(t *testing.T) {
+	if handled, err := RunRebaseTodoEditor(nil); handled || err != nil {
+		t.Fatalf("unrelated invocation = handled %t, err %v", handled, err)
+	}
+	if handled, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor"}); !handled || err == nil {
+		t.Fatalf("short helper invocation = handled %t, err %v", handled, err)
+	}
+
+	admin := t.TempDir()
+	destination := filepath.Join(admin, "rebase-merge", "git-rebase-todo")
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("pick old\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	todo := "pick " + strings.Repeat("a", 40) + " replacement\n"
+	source := filepath.Join(t.TempDir(), "todo")
+	if err := os.WriteFile(source, []byte(todo), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--lazymagit-rebase-todo-editor", source, admin, destination}
+	if handled, err := RunRebaseTodoEditor(args); !handled || err != nil {
+		t.Fatalf("valid helper invocation = handled %t, err %v", handled, err)
+	}
+	if got, err := os.ReadFile(destination); err != nil || string(got) != todo {
+		t.Fatalf("replaced todo = %q, %v", got, err)
+	}
+
+	if handled, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor", source, admin, filepath.Join(admin, "unexpected")}); !handled || err == nil {
+		t.Fatalf("unexpected destination = handled %t, err %v", handled, err)
+	}
+	if handled, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor", admin, admin, destination}); !handled || err == nil {
+		t.Fatalf("unsafe source = handled %t, err %v", handled, err)
+	}
+}
 
 func TestCherryPickOrderedNoCommitAndProcessRecord(t *testing.T) {
 	r := newTestRepo(t)

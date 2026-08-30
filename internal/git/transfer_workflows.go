@@ -257,10 +257,40 @@ type PushArgs struct {
 }
 
 func (r *Repository) PushWithArgs(ctx context.Context, in PushArgs) error {
-	remote, err := r.resolvePushTarget(ctx, in.Target, in.Remote)
+	plan, err := r.planPush(ctx, in)
 	if err != nil {
 		return err
 	}
+	return r.run(ctx, plan...)
+}
+
+func (r *Repository) planPush(ctx context.Context, in PushArgs) ([]string, error) {
+	if err := validatePushSelectors(in); err != nil {
+		return nil, err
+	}
+	remote, err := r.resolvePushTarget(ctx, in.Target, in.Remote)
+	if err != nil {
+		return nil, err
+	}
+	args, err := appendPushFlags([]string{"push"}, in)
+	if err != nil {
+		return nil, err
+	}
+	spec, allTags, err := r.pushSpec(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if allTags {
+		args = append(args, "--tags")
+	}
+	args = append(args, "--", remote)
+	if spec != "" {
+		args = append(args, spec)
+	}
+	return args, nil
+}
+
+func validatePushSelectors(in PushArgs) error {
 	if in.Tags && in.AllTags {
 		return errors.New("push all-tags selectors are duplicated")
 	}
@@ -276,7 +306,10 @@ func (r *Repository) PushWithArgs(ctx context.Context, in PushArgs) error {
 	if (in.Tags || in.AllTags) && (in.Refspec != "" || in.Source != "" || in.Destination != "" || in.Matching || in.Tag != "" || in.Notes) {
 		return errors.New("push all-tags cannot be combined with another selector")
 	}
-	args := []string{"push"}
+	return nil
+}
+
+func appendPushFlags(args []string, in PushArgs) ([]string, error) {
 	switch in.Force {
 	case PushForceNone:
 	case PushForceWithLease:
@@ -284,7 +317,7 @@ func (r *Repository) PushWithArgs(ctx context.Context, in PushArgs) error {
 	case PushForceUnconditionally:
 		args = append(args, "--force")
 	default:
-		return errors.New("invalid push force mode")
+		return nil, errors.New("invalid push force mode")
 	}
 	if in.NoVerify {
 		args = append(args, "--no-verify")
@@ -303,68 +336,73 @@ func (r *Repository) PushWithArgs(ctx context.Context, in PushArgs) error {
 	}
 	for _, option := range in.PushOptions {
 		if strings.ContainsAny(option, "\x00\r\n") {
-			return errors.New("push option contains a control character")
+			return nil, errors.New("push option contains a control character")
 		}
 		args = append(args, "--push-option="+option)
 	}
-	var spec string
+	return args, nil
+}
+
+func (r *Repository) pushSpec(ctx context.Context, in PushArgs) (string, bool, error) {
 	switch {
 	case in.Refspec != "":
 		if err := r.validateRefspec(ctx, in.Refspec, false); err != nil {
-			return err
+			return "", false, err
 		}
-		spec = in.Refspec
+		return in.Refspec, false, nil
 	case in.Source != "" || in.Destination != "":
-		if in.Source == "" {
-			return errors.New("push source is empty")
-		}
-		if err := r.validatePushSource(ctx, in.Source); err != nil {
-			return err
-		}
-		if in.Destination != "" {
-			if err := r.validateBranch(ctx, in.Destination); err != nil {
-				return err
-			}
-			spec = in.Source + ":" + in.Destination
-		} else {
-			spec = in.Source
-		}
+		return r.pushSourceSpec(ctx, in)
 	case in.Matching:
-		spec = ":"
+		return ":", false, nil
 	case in.Tag != "":
 		if err := r.validateTag(ctx, in.Tag); err != nil {
-			return err
+			return "", false, err
 		}
-		spec = "refs/tags/" + in.Tag
+		return "refs/tags/" + in.Tag, false, nil
 	case in.AllTags:
-		args = append(args, "--tags")
+		return "", true, nil
 	case in.Notes:
-		spec = "refs/notes/*:refs/notes/*"
+		return "refs/notes/*:refs/notes/*", false, nil
 	default:
-		branch, err := r.currentBranch(ctx)
-		if err != nil {
-			return err
-		}
-		if branch == "" {
-			return errors.New("cannot push current branch from detached HEAD")
-		}
-		spec = branch
-		if in.Target == PushToUpstream {
-			merge, ok, err := r.configValue(ctx, "branch."+branch+".merge")
-			if err != nil {
-				return err
-			}
-			if !ok || !strings.HasPrefix(merge, "refs/heads/") {
-				return ErrNoUpstream
-			}
-			spec += ":" + strings.TrimPrefix(merge, "refs/heads/")
-		}
+		return r.pushCurrentBranchSpec(ctx, in.Target)
 	}
-	args = append(args, "--", remote)
-	if spec != "" {
-		args = append(args, spec)
+}
+
+func (r *Repository) pushSourceSpec(ctx context.Context, in PushArgs) (string, bool, error) {
+	if in.Source == "" {
+		return "", false, errors.New("push source is empty")
 	}
-	return r.run(ctx, args...)
+	if err := r.validatePushSource(ctx, in.Source); err != nil {
+		return "", false, err
+	}
+	if in.Destination == "" {
+		return in.Source, false, nil
+	}
+	if err := r.validateBranch(ctx, in.Destination); err != nil {
+		return "", false, err
+	}
+	return in.Source + ":" + in.Destination, false, nil
+}
+
+func (r *Repository) pushCurrentBranchSpec(ctx context.Context, target PushTarget) (string, bool, error) {
+	branch, err := r.currentBranch(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	if branch == "" {
+		return "", false, errors.New("cannot push current branch from detached HEAD")
+	}
+	if target != PushToUpstream {
+		return branch, false, nil
+	}
+	merge, ok, err := r.configValue(ctx, "branch."+branch+".merge")
+	if err != nil {
+		return "", false, err
+	}
+	if !ok || !strings.HasPrefix(merge, "refs/heads/") {
+		return "", false, ErrNoUpstream
+	}
+	return branch + ":" + strings.TrimPrefix(merge, "refs/heads/"), false, nil
 }
 
 func (r *Repository) resolvePushTarget(ctx context.Context, target PushTarget, explicit string) (string, error) {

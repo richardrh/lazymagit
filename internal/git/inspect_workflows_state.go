@@ -171,25 +171,49 @@ func (r *Repository) rebaseState(ctx context.Context, directory string, am bool)
 		kind = OperationApplyMailbox
 	}
 	op := Operation{Kind: kind}
+	if err := r.readRebaseStrings(ctx, directory, &op); err != nil {
+		return Operation{}, err
+	}
+	if err := r.readRebaseNumbers(ctx, directory, &op); err != nil {
+		return Operation{}, err
+	}
+	return op, nil
+}
+
+func (r *Repository) readRebaseStrings(ctx context.Context, directory string, op *Operation) error {
 	for name, target := range map[string]*string{"head-name": &op.Branch, "onto": &op.Onto} {
-		if value, ok, err := r.readGitAdmin(ctx, directory+"/"+name, 64<<10); err != nil {
-			return Operation{}, err
-		} else if ok {
+		value, ok, err := r.readGitAdmin(ctx, directory+"/"+name, 64<<10)
+		if err != nil {
+			return err
+		}
+		if ok {
 			*target = strings.TrimSpace(value)
 		}
 	}
+	return nil
+}
+
+func (r *Repository) readRebaseNumbers(ctx context.Context, directory string, op *Operation) error {
 	for name, target := range map[string]*int{"msgnum": &op.Current, "next": &op.Current, "end": &op.Total, "last": &op.Total} {
 		if value, ok, err := r.readGitAdmin(ctx, directory+"/"+name, 64); err != nil {
-			return Operation{}, err
+			return err
 		} else if ok {
-			n, parseErr := strconv.Atoi(strings.TrimSpace(value))
-			if parseErr != nil || n < 0 {
-				return Operation{}, fmt.Errorf("parse %s/%s", directory, name)
+			n, parseErr := parseRebaseNumber(value)
+			if parseErr != nil {
+				return fmt.Errorf("parse %s/%s", directory, name)
 			}
 			*target = n
 		}
 	}
-	return op, nil
+	return nil
+}
+
+func parseRebaseNumber(value string) (int, error) {
+	n, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || n < 0 {
+		return 0, errors.New("invalid rebase progress")
+	}
+	return n, nil
 }
 
 func (r *Repository) readGitAdmin(ctx context.Context, name string, limit int64) (string, bool, error) {

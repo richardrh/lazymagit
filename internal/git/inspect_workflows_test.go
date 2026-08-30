@@ -8,7 +8,110 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestCompileDiffQuery(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file.txt", "base\n")
+	base := r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	args, limit, err := repo.compileDiffQuery(ctx, DiffQuery{Kind: DiffRevisionRange, Base: base, Target: "HEAD", TripleDot: true, Context: 7, ContextSet: true, Algorithm: DiffAlgorithmHistogram, Stat: true, Files: []string{"file.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--unified=7", "--histogram", "--stat", base + "..." + base, "-- file.txt"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("compiled diff %q missing %q", joined, want)
+		}
+	}
+	if limit != inspectionOutputLimit {
+		t.Fatalf("limit = %d", limit)
+	}
+	if _, _, err := repo.compileDiffQuery(ctx, DiffQuery{Kind: DiffKind(99)}); err == nil {
+		t.Fatal("unknown diff kind compiled")
+	}
+}
+
+func TestCompileShortlogQuery(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file.txt", "base\n")
+	head := r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	args, limit, err := repo.compileShortlogQuery(ctx, ShortlogQuery{Revision: "HEAD", Numbered: true, Summary: true, Email: true, Group: "author", Format: "%s", WrapWidth: 72, WrapIndent1: 4, WrapIndent2: 8, WrapIndent1Set: true, WrapIndent2Set: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--numbered", "--summary", "--email", "--group=author", "--format=%s", "-w72,4,8", head} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("compiled shortlog %q missing %q", joined, want)
+		}
+	}
+	if limit != inspectionOutputLimit {
+		t.Fatalf("limit = %d", limit)
+	}
+	if _, _, err := repo.compileShortlogQuery(ctx, ShortlogQuery{Group: "invalid"}); err == nil {
+		t.Fatal("invalid group compiled")
+	}
+}
+
+func TestCompileLogQuery(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file.txt", "base\n")
+	head := r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	since := time.Date(2020, 1, 2, 3, 4, 5, 0, time.FixedZone("test", 3600))
+	args, limit, truncated, err := repo.compileLogQuery(ctx, LogQuery{Revision: "HEAD", Limit: inspectionItemLimit + 1, Graph: true, Decorations: true, FirstParent: true, Order: LogOrderTopo, Author: "name", Grep: "subject", Since: &since, Files: []string{"file.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--graph", "--decorate=short", "--first-parent", "--topo-order", "--author=name", "--fixed-strings", "--grep=subject", "--since=2020-01-02T02:04:05Z", head, "-- file.txt"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("compiled log %q missing %q", joined, want)
+		}
+	}
+	if limit != inspectionItemLimit || !truncated {
+		t.Fatalf("limit/truncated = %d/%v", limit, truncated)
+	}
+	if _, _, _, err := repo.compileLogQuery(ctx, LogQuery{MergesOnly: true, NoMerges: true}); err == nil {
+		t.Fatal("incompatible merge filters compiled")
+	}
+}
+
+func TestCompileRefQueryAndBuildRefResult(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file.txt", "base\n")
+	head := r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	args, limit, byteLimit, truncated, err := repo.compileRefQuery(ctx, RefQuery{Contains: "HEAD", MergedTo: "HEAD", NoMergedTo: "HEAD", Sort: RefSortNameReverse, Limit: inspectionItemLimit + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	for _, want := range []string{"--sort=-refname", "--contains=" + head, "--merged=" + head, "--no-merged=" + head, "refs/heads refs/remotes refs/tags"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("compiled refs %q missing %q", joined, want)
+		}
+	}
+	if limit != inspectionItemLimit || byteLimit != inspectionOutputLimit || !truncated {
+		t.Fatalf("limits/truncated = %d/%d/%v", limit, byteLimit, truncated)
+	}
+	refs := []Ref{{Kind: RefLocal, Name: "main", FullName: "refs/heads/main", ID: head, Current: true}, {Kind: RefRemote, Name: "origin/main", ID: head}, {Kind: RefTag, Name: "v1", ID: head}}
+	result, err := repo.buildRefResult(ctx, RefQuery{Focus: "main"}, refs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Focus == nil || result.Focus.Name != "main" || len(result.Local) != 1 || len(result.Remote) != 1 || len(result.Tags) != 1 || !result.Truncated {
+		t.Fatalf("built refs = %#v", result)
+	}
+}
 
 func TestInspectionDiffIsLiteralTypedAndBounded(t *testing.T) {
 	ctx := context.Background()
@@ -62,6 +165,36 @@ func TestInspectionLogParsesGraphFiltersAndTruncation(t *testing.T) {
 	}
 	if _, err := repo.QueryLog(ctx, LogQuery{Revision: "--all"}); err == nil {
 		t.Fatal("option-like log revision was accepted")
+	}
+}
+
+func TestInspectionRequestPullValidatesAndBuildsBoundedDetail(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("one.txt", "one\n")
+	start := r.commitAll("first")
+	r.write("two.txt", "two\n")
+	r.commitAll("second")
+	remote := newBareTestRepo(t)
+	r.git("remote", "add", "origin", remote.dir)
+	r.git("push", "origin", "main")
+	repo, _ := Discover(r.dir)
+
+	for _, query := range []RequestPullQuery{
+		{URL: ""},
+		{URL: "--upload-pack=bad"},
+		{URL: remote.dir, Start: "HEAD", OutputLimit: -1},
+	} {
+		if _, err := repo.QueryRequestPull(ctx, query); err == nil {
+			t.Fatalf("invalid request-pull query was accepted: %#v", query)
+		}
+	}
+	result, err := repo.QueryRequestPull(ctx, RequestPullQuery{Start: start, URL: remote.dir, OutputLimit: 4096})
+	if err != nil {
+		t.Fatalf("request-pull: %v", err)
+	}
+	if result.Detail == "" || result.Truncated {
+		t.Fatalf("request-pull result = %#v", result)
 	}
 }
 
@@ -258,5 +391,86 @@ func TestInspectionOperationStateUsesStableSentinels(t *testing.T) {
 	writeAdmin("MERGE_HEAD", "--not-an-oid\n")
 	if _, err := repo.QueryOperationState(ctx); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("malformed sentinel error = %v", err)
+	}
+}
+
+func TestDiffQueryPureHelpersDirectly(t *testing.T) {
+	if err := validateDiffQuery(DiffQuery{Context: -1}); err == nil {
+		t.Fatal("negative context was accepted")
+	}
+	options, err := diffQueryOptions(DiffQuery{ContextSet: true, Context: 4, Algorithm: DiffAlgorithmPatience, WordDiff: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(options, " ")
+	for _, want := range []string{"--unified=4", "--patience", "--word-diff=plain"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("options %q missing %q", joined, want)
+		}
+	}
+	if _, err := diffQueryOptions(DiffQuery{Algorithm: DiffAlgorithm(99)}); err == nil {
+		t.Fatal("unknown algorithm was accepted")
+	}
+	if got, err := inspectionByteLimit("diff", 0); err != nil || got != inspectionOutputLimit {
+		t.Fatalf("default byte limit = %d, %v", got, err)
+	}
+}
+
+func TestLogQueryPureHelpersDirectly(t *testing.T) {
+	if err := validateLogQuery(LogQuery{MergesOnly: true, NoMerges: true}); err == nil {
+		t.Fatal("conflicting merge filters were accepted")
+	}
+	if got, truncated := logItemLimit(inspectionItemLimit + 1); got != inspectionItemLimit || !truncated {
+		t.Fatalf("logItemLimit = %d, %v", got, truncated)
+	}
+	options, err := logQueryOptions(LogQuery{Graph: true, Decorations: true, Order: LogOrderTopo, Author: "Ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(options, " ")
+	for _, want := range []string{"--graph", "--decorate=short", "--topo-order", "--author=Ada"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("options %q missing %q", joined, want)
+		}
+	}
+	if !invalidLogSelectors(LogQuery{Revision: "HEAD", From: "main", To: "topic"}) {
+		t.Fatal("ambiguous log selectors were accepted")
+	}
+	if got, err := singleSelector("abc", nil); err != nil || len(got) != 1 || got[0] != "abc" {
+		t.Fatalf("singleSelector = %#v, %v", got, err)
+	}
+}
+
+func TestShortlogQueryPureHelpersDirectly(t *testing.T) {
+	options, err := shortlogQueryOptions(ShortlogQuery{Numbered: true, Group: "author", Format: "%s", WrapWidth: 72, WrapIndent1: 4, WrapIndent1Set: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(options, " ")
+	for _, want := range []string{"--numbered", "--group=author", "--format=%s", "-w72,4"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("options %q missing %q", joined, want)
+		}
+	}
+	if _, err := shortlogWrapOption(ShortlogQuery{WrapWidth: -1}); err == nil {
+		t.Fatal("negative wrap width was accepted")
+	}
+}
+
+func TestRefResultPureHelpersDirectly(t *testing.T) {
+	refs := []Ref{
+		{Kind: RefLocal, Name: "main", FullName: "refs/heads/main", ID: "aaa", Current: true},
+		{Kind: RefRemote, Name: "origin/main", FullName: "refs/remotes/origin/main", ID: "aaa"},
+		{Kind: RefTag, Name: "v1", FullName: "refs/tags/v1", ID: "bbb"},
+	}
+	result := categorizedRefResult(refs, true)
+	if len(result.Local) != 1 || len(result.Remote) != 1 || len(result.Tags) != 1 || !result.Truncated {
+		t.Fatalf("categorized result = %#v", result)
+	}
+	if focus := selectRefFocus(refs, "", "aaa"); focus == nil || focus.Name != "main" {
+		t.Fatalf("default focus = %#v", focus)
+	}
+	if focus := selectRefFocus(refs, "origin/main", "aaa"); focus == nil || focus.Name != "origin/main" {
+		t.Fatalf("named focus = %#v", focus)
 	}
 }

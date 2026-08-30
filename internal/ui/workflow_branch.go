@@ -423,32 +423,43 @@ func branchConfigRequest(values WorkflowValues) gitbackend.BranchConfigUpdate {
 
 func applyBranchConfiguration(ctx context.Context, repo *gitbackend.Repository, values WorkflowValues) error {
 	branch := values["branch"]
-	switch values["description_action"] {
+	if err := applyBranchDescription(ctx, repo, branch, values["description_action"], values["description"]); err != nil {
+		return err
+	}
+	steps := []func() error{
+		func() error { return applyUpstream(ctx, repo, branch, values["upstream"]) },
+		func() error {
+			return applyRebase(ctx, values["rebase"], func(mode gitbackend.RebaseMode) error { return repo.SetBranchRebase(ctx, branch, mode) }, func() error { return repo.UnsetBranchRebase(ctx, branch) })
+		},
+		func() error {
+			return applyRemote(values["push_remote"], func(remote string) error { return repo.SetBranchPushRemote(ctx, branch, remote) }, func() error { return repo.UnsetBranchPushRemote(ctx, branch) })
+		},
+		func() error {
+			return applyRebase(ctx, values["pull_rebase"], func(mode gitbackend.RebaseMode) error { return repo.SetPullRebase(ctx, mode) }, func() error { return repo.UnsetPullRebase(ctx) })
+		},
+		func() error {
+			return applyRemote(values["push_default"], func(remote string) error { return repo.SetRemotePushDefault(ctx, remote) }, func() error { return repo.UnsetRemotePushDefault(ctx) })
+		},
+	}
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func applyBranchDescription(ctx context.Context, repo *gitbackend.Repository, branch, action, description string) error {
+	switch action {
 	case "keep":
+		return nil
 	case "set":
-		if err := repo.SetBranchDescription(ctx, branch, values["description"]); err != nil {
-			return err
-		}
+		return repo.SetBranchDescription(ctx, branch, description)
 	case "unset":
-		if err := repo.UnsetBranchDescription(ctx, branch); err != nil {
-			return err
-		}
+		return repo.UnsetBranchDescription(ctx, branch)
 	default:
 		return errors.New("invalid description action")
 	}
-	if err := applyUpstream(ctx, repo, branch, values["upstream"]); err != nil {
-		return err
-	}
-	if err := applyRebase(ctx, values["rebase"], func(mode gitbackend.RebaseMode) error { return repo.SetBranchRebase(ctx, branch, mode) }, func() error { return repo.UnsetBranchRebase(ctx, branch) }); err != nil {
-		return err
-	}
-	if err := applyRemote(values["push_remote"], func(remote string) error { return repo.SetBranchPushRemote(ctx, branch, remote) }, func() error { return repo.UnsetBranchPushRemote(ctx, branch) }); err != nil {
-		return err
-	}
-	if err := applyRebase(ctx, values["pull_rebase"], func(mode gitbackend.RebaseMode) error { return repo.SetPullRebase(ctx, mode) }, func() error { return repo.UnsetPullRebase(ctx) }); err != nil {
-		return err
-	}
-	return applyRemote(values["push_default"], func(remote string) error { return repo.SetRemotePushDefault(ctx, remote) }, func() error { return repo.UnsetRemotePushDefault(ctx) })
 }
 
 func applyUpstream(ctx context.Context, repo *gitbackend.Repository, branch, action string) error {

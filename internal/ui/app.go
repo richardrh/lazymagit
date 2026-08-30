@@ -275,176 +275,197 @@ func (m *Model) Init() tea.Cmd { return m.loadSnapshotCmd() }
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := message.(type) {
 	case tea.WindowSizeMsg:
-		m.width, m.height = msg.Width, msg.Height
-		m.clampDetailOffset()
-		m.clampTransientOffset()
-		m.clampProcessOffset()
-		return m, nil
+		return m, m.handleWindowSizeMsg(msg)
 	case snapshotMsg:
-		if msg.request != m.snapshotRequest || !m.appActive() {
-			return m, nil
-		}
-		m.loading = false
-		if msg.err != nil {
-			m.setError(msg.err)
-			return m, nil
-		}
-		m.install(msg.snapshot)
-		m.setMessage("Repository refreshed")
-		return m, m.loadDetailCmd()
+		return m, m.handleSnapshotMsg(msg)
 	case operationMsg:
-		if msg.request != m.operationRequest || !m.appActive() {
-			return m, nil
-		}
-		m.busy = false
-		stageNoOp := errors.Is(msg.opErr, errNoTrackedUnstagedChanges)
-		if stageNoOp {
-			msg.opErr = nil
-		}
-		if len(msg.records) > 0 || msg.opErr != nil {
-			m.appendProcessBatch(msg.name, msg.records, msg.opErr)
-		}
-		if msg.loadErr != nil {
-			m.appendProcessBatch("refresh after "+msg.name, nil, msg.loadErr)
-		}
-		if msg.opErr != nil || msg.loadErr != nil {
-			m.openProcesses()
-			m.scrollProcessesToEnd()
-		}
-		if msg.loadErr == nil {
-			m.install(msg.snapshot)
-		}
-		if msg.opErr != nil {
-			m.setError(fmt.Errorf("%s: %w", msg.name, msg.opErr))
-		} else if msg.loadErr != nil {
-			m.setError(fmt.Errorf("%s succeeded; refresh failed: %w", msg.name, msg.loadErr))
-		} else if stageNoOp {
-			m.setMessage("No tracked unstaged changes to stage")
-		} else {
-			m.setMessage(msg.name + " complete")
-		}
-		return m, m.loadDetailCmd()
+		return m, m.handleOperationMsg(msg)
 	case workflowPreflightMsg:
-		if m.workflow == nil || msg.request != m.workflow.request || !m.appActive() {
-			return m, nil
-		}
-		m.workflow.busy = false
-		if m.workflow.cancel != nil {
-			m.workflow.cancel()
-			m.workflow.cancel = nil
-		}
-		if msg.err != nil {
-			m.workflow.error = sanitizeSingleLine(msg.err.Error())
-			return m, nil
-		}
-		return m, m.submitWorkflow(msg.values)
+		return m, m.handleWorkflowPreflightMsg(msg)
 	case workflowReviewMsg:
-		if m.workflow == nil || msg.request != m.workflow.request || !m.appActive() {
-			return m, nil
-		}
-		m.workflow.busy = false
-		if m.workflow.cancel != nil {
-			m.workflow.cancel()
-			m.workflow.cancel = nil
-		}
-		if msg.err != nil {
-			m.workflow.error = sanitizeSingleLine(msg.err.Error())
-			return m, nil
-		}
-		review := cloneWorkflowReview(msg.review)
-		m.workflow.review = &review
-		m.workflow.error = ""
-		return m, nil
+		return m, m.handleWorkflowReviewMsg(msg)
 	case workflowLoadMsg:
-		if msg.request != m.workflowRequest || msg.state != m.stateGeneration || !m.appActive() {
-			return m, nil
-		}
-		m.workflowLoading = false
-		if m.workflowLoadCancel != nil {
-			m.workflowLoadCancel()
-			m.workflowLoadCancel = nil
-		}
-		if msg.err != nil {
-			m.setError(fmt.Errorf("load workflow: %w", msg.err))
-			return m, nil
-		}
-		return m, m.OpenWorkflow(msg.dialog)
+		return m, m.handleWorkflowLoadMsg(msg)
 	case graphMsg:
-		if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
-			return m, nil
-		}
-		m.cancelDetail()
-		m.detailID, m.detail = msg.id, sanitizeDiff("All refs graph\n\n"+msg.text)
-		m.detailOffset, m.graphEntries, m.graphActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
-		m.graphCursor = -1
-		if msg.err != nil {
-			m.detail = "Unable to load graph:\n" + sanitizeSingleLine(msg.err.Error())
-			m.graphEntries = nil
-		} else {
-			for line := range msg.entries {
-				if m.graphCursor < 0 || line < m.graphCursor {
-					m.graphCursor = line
-				}
-			}
-			if m.graphCursor >= 0 {
-				m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-			}
-		}
-		m.resetDetailSelection()
-		return m, nil
+		return m, m.handleGraphMsg(msg)
 	case revisionMsg:
 		return m, m.handleRevisionMsg(msg)
 	case diffMsg:
-		if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || (m.mode != modeStatus && m.mode != modeProcess) || !m.appActive() {
-			return m, nil
-		}
-		m.cancelDetail()
-		m.detailID = msg.id
-		m.detailOffset = 0
-		m.resetDetailSelection()
-		if msg.err != nil {
-			m.detail = "Unable to load " + msg.detailKind() + ":\n" + sanitizeSingleLine(msg.err.Error())
-		} else if msg.text == "" {
-			m.detail = msg.emptyDetail()
-		} else {
-			m.detail = sanitizeDiff(msg.text)
-		}
-		return m, nil
+		return m, m.handleDiffMsg(msg)
 	case branchesMsg:
-		if msg.request != m.branchRequest || !m.appActive() {
-			return m, nil
-		}
-		m.busy = false
-		if msg.state != m.stateGeneration {
-			return m, nil
-		}
-		m.cancelPrefix()
-		if msg.err != nil {
-			m.setMode(modeStatus)
-			m.setError(fmt.Errorf("list branches: %w", msg.err))
-			return m, nil
-		}
-		m.branches = msg.branches
-		m.branchCursor = 0
-		for i, b := range m.branches {
-			if b.Current {
-				m.branchCursor = i
-				break
-			}
-		}
-		m.setMode(modeBranches)
-		return m, nil
+		return m, m.handleBranchesMsg(msg)
 	case vimGTimeoutMsg:
-		if msg.token != m.vimGToken || m.scheme != schemeVim || m.mode != modeStatus || m.resolver.PendingPrefix() != "g" || !m.appActive() {
-			return m, nil
-		}
-		m.resolver.Reset()
-		m.vimGToken++
-		return m, m.perform(keymap.CommandRefresh)
+		return m, m.handleVimGTimeoutMsg(msg)
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+func (m *Model) handleWindowSizeMsg(msg tea.WindowSizeMsg) tea.Cmd {
+	m.width, m.height = msg.Width, msg.Height
+	m.clampDetailOffset()
+	m.clampTransientOffset()
+	m.clampProcessOffset()
+	return nil
+}
+
+func (m *Model) handleSnapshotMsg(msg snapshotMsg) tea.Cmd {
+	if msg.request != m.snapshotRequest || !m.appActive() {
+		return nil
+	}
+	m.loading = false
+	if msg.err != nil {
+		m.setError(msg.err)
+		return nil
+	}
+	m.install(msg.snapshot)
+	m.setMessage("Repository refreshed")
+	return m.loadDetailCmd()
+}
+
+func (m *Model) handleOperationMsg(msg operationMsg) tea.Cmd {
+	if msg.request != m.operationRequest || !m.appActive() {
+		return nil
+	}
+	m.busy = false
+	stageNoOp := errors.Is(msg.opErr, errNoTrackedUnstagedChanges)
+	if stageNoOp {
+		msg.opErr = nil
+	}
+	if len(msg.records) > 0 || msg.opErr != nil {
+		m.appendProcessBatch(msg.name, msg.records, msg.opErr)
+	}
+	if msg.loadErr != nil {
+		m.appendProcessBatch("refresh after "+msg.name, nil, msg.loadErr)
+	}
+	if msg.opErr != nil || msg.loadErr != nil {
+		m.openProcesses()
+		m.scrollProcessesToEnd()
+	}
+	if msg.loadErr == nil {
+		m.install(msg.snapshot)
+	}
+	m.finishOperationMsg(msg, stageNoOp)
+	return m.loadDetailCmd()
+}
+
+func (m *Model) finishOperationMsg(msg operationMsg, stageNoOp bool) {
+	switch {
+	case msg.opErr != nil:
+		m.setError(fmt.Errorf("%s: %w", msg.name, msg.opErr))
+	case msg.loadErr != nil:
+		m.setError(fmt.Errorf("%s succeeded; refresh failed: %w", msg.name, msg.loadErr))
+	case stageNoOp:
+		m.setMessage("No tracked unstaged changes to stage")
+	default:
+		m.setMessage(msg.name + " complete")
+	}
+}
+
+func (m *Model) handleWorkflowPreflightMsg(msg workflowPreflightMsg) tea.Cmd {
+	if m.workflow == nil || msg.request != m.workflow.request || !m.appActive() {
+		return nil
+	}
+	m.finishWorkflowRequest(msg.err)
+	if msg.err != nil {
+		return nil
+	}
+	return m.submitWorkflow(msg.values)
+}
+
+func (m *Model) handleWorkflowReviewMsg(msg workflowReviewMsg) tea.Cmd {
+	if m.workflow == nil || msg.request != m.workflow.request || !m.appActive() {
+		return nil
+	}
+	m.finishWorkflowRequest(msg.err)
+	if msg.err != nil {
+		return nil
+	}
+	review := cloneWorkflowReview(msg.review)
+	m.workflow.review = &review
+	m.workflow.error = ""
+	return nil
+}
+
+func (m *Model) finishWorkflowRequest(err error) {
+	m.workflow.busy = false
+	if m.workflow.cancel != nil {
+		m.workflow.cancel()
+		m.workflow.cancel = nil
+	}
+	if err != nil {
+		m.workflow.error = sanitizeSingleLine(err.Error())
+	}
+}
+
+func (m *Model) handleWorkflowLoadMsg(msg workflowLoadMsg) tea.Cmd {
+	if msg.request != m.workflowRequest || msg.state != m.stateGeneration || !m.appActive() {
+		return nil
+	}
+	m.workflowLoading = false
+	if m.workflowLoadCancel != nil {
+		m.workflowLoadCancel()
+		m.workflowLoadCancel = nil
+	}
+	if msg.err != nil {
+		m.setError(fmt.Errorf("load workflow: %w", msg.err))
+		return nil
+	}
+	return m.OpenWorkflow(msg.dialog)
+}
+
+func (m *Model) handleDiffMsg(msg diffMsg) tea.Cmd {
+	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || (m.mode != modeStatus && m.mode != modeProcess) || !m.appActive() {
+		return nil
+	}
+	m.cancelDetail()
+	m.detailID, m.detailOffset = msg.id, 0
+	m.resetDetailSelection()
+	switch {
+	case msg.err != nil:
+		m.detail = "Unable to load " + msg.detailKind() + ":\n" + sanitizeSingleLine(msg.err.Error())
+	case msg.text == "":
+		m.detail = msg.emptyDetail()
+	default:
+		m.detail = sanitizeDiff(msg.text)
+	}
+	return nil
+}
+
+func (m *Model) handleVimGTimeoutMsg(msg vimGTimeoutMsg) tea.Cmd {
+	if msg.token != m.vimGToken || m.scheme != schemeVim || m.mode != modeStatus || m.resolver.PendingPrefix() != "g" || !m.appActive() {
+		return nil
+	}
+	m.resolver.Reset()
+	m.vimGToken++
+	return m.perform(keymap.CommandRefresh)
+}
+
+func (m *Model) handleBranchesMsg(msg branchesMsg) tea.Cmd {
+	if msg.request != m.branchRequest || !m.appActive() {
+		return nil
+	}
+	m.busy = false
+	if msg.state != m.stateGeneration {
+		return nil
+	}
+	m.cancelPrefix()
+	if msg.err != nil {
+		m.setMode(modeStatus)
+		m.setError(fmt.Errorf("list branches: %w", msg.err))
+		return nil
+	}
+	m.branches = msg.branches
+	m.branchCursor = 0
+	for i, b := range m.branches {
+		if b.Current {
+			m.branchCursor = i
+			break
+		}
+	}
+	m.setMode(modeBranches)
+	return nil
 }
 
 func (m *Model) handleRevisionMsg(msg revisionMsg) tea.Cmd {
@@ -465,141 +486,179 @@ func (m *Model) handleRevisionMsg(msg revisionMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
+func (m *Model) handleGraphMsg(msg graphMsg) tea.Cmd {
+	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
+		return nil
+	}
+	m.cancelDetail()
+	m.detailID, m.detail = msg.id, sanitizeDiff("All refs graph\n\n"+msg.text)
+	m.detailOffset, m.graphEntries, m.graphActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
+	m.graphCursor = -1
+	if msg.err != nil {
+		m.detail = "Unable to load graph:\n" + sanitizeSingleLine(msg.err.Error())
+		m.graphEntries = nil
+	} else {
+		for line := range msg.entries {
+			if m.graphCursor < 0 || line < m.graphCursor {
+				m.graphCursor = line
+			}
+		}
+		if m.graphCursor >= 0 {
+			m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
+		}
+	}
+	m.resetDetailSelection()
+	return nil
+}
+
+func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 	if key == "ctrl+c" && m.scheme == schemeVim {
 		m.shutdown()
-		return m, tea.Quit
+		return tea.Quit, true
 	}
 	if key == "esc" && m.revisionActive && m.graphReturn != nil && m.resolver.PendingPrefix() == "" {
 		m.restoreGraphInspection()
 		m.setMessage("Returned to graph")
-		return m, nil
+		return nil, true
 	}
 	if key == "esc" && m.inspectionActive && m.resolver.PendingPrefix() == "" {
 		m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
 		m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 		m.setMessage("Inspection closed")
-		return m, m.loadDetailCmd()
+		return m.loadDetailCmd(), true
 	}
 	if key == "esc" && m.workflowLoading {
 		m.cancelWorkflowLoad()
 		m.setMessage("Workflow loading cancelled")
-		return m, nil
+		return nil, true
 	}
-	if key == "f2" {
-		m.cancelPrefix()
-		if m.mode == modeHelp {
-			m.setMode(modeStatus)
-		}
-		if m.scheme == schemeVim {
-			m.scheme = schemeMagit
-			m.setMessage("Magit key scheme active")
-		} else {
-			m.scheme = schemeVim
-			m.setMessage("Vim key scheme active")
-		}
-		return m, nil
+	if key != "f2" {
+		return nil, false
 	}
+	m.cancelPrefix()
+	if m.mode == modeHelp {
+		m.setMode(modeStatus)
+	}
+	if m.scheme == schemeVim {
+		m.scheme = schemeMagit
+		m.setMessage("Magit key scheme active")
+	} else {
+		m.scheme = schemeVim
+		m.setMessage("Vim key scheme active")
+	}
+	return nil, true
+}
+
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	if cmd, handled := m.handleGlobalKey(key); handled {
+		return m, cmd
+	}
+	if cmd, handled := m.handleModeKey(msg, key); handled {
+		return m, cmd
+	}
+	if cmd, handled := m.handlePendingTransientKey(msg, key); handled {
+		return m, cmd
+	}
+	return m.handleStatusKey(msg, key)
+}
+
+func (m *Model) handleModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 	switch m.mode {
 	case modeCommit:
-		return m.handleCommitKey(msg)
+		_, cmd := m.handleCommitKey(msg)
+		return cmd, true
 	case modeBranches:
-		return m.handleBranchKey(key)
+		_, cmd := m.handleBranchKey(key)
+		return cmd, true
 	case modeAddRemote:
-		return m.handleAddRemoteKey(msg)
+		_, cmd := m.handleAddRemoteKey(msg)
+		return cmd, true
 	case modeRemotes:
-		return m.handleRemoteKey(key)
+		_, cmd := m.handleRemoteKey(key)
+		return cmd, true
 	case modeProcess:
-		switch key {
-		case "q", "esc", "$", "up", "down", "pgup", "pgdown", "y":
-			return m.handleProcessKey(key)
-		default:
-			// The process pane is a status-view overlay, not a modal that should
-			// consume ordinary commands. Close it and dispatch the key once in the
-			// underlying status view.
-			m.closeProcesses()
-			return m.handleKey(msg)
-		}
+		return m.routeProcessKey(msg, key), true
 	case modeWorkflow:
-		return m.handleWorkflowKey(msg)
+		_, cmd := m.handleWorkflowKey(msg)
+		return cmd, true
 	case modeConfirm:
-		if key == "y" || key == "Y" {
-			path := m.confirmPath
-			m.setMode(modeStatus)
-			m.confirmPath = ""
-			return m, m.startOperation("discard", func(ctx context.Context) error { return m.repo.Discard(ctx, []string{path}) })
-		}
-		if key == "n" || key == "N" || key == "q" || key == "esc" {
-			m.setMode(modeStatus)
-			m.confirmPath = ""
-			m.setMessage("Discard cancelled")
-			return m, m.loadDetailCmd()
-		}
-		return m, nil
+		return m.handleConfirmKey(key), true
 	case modeHelp:
-		if key == "q" || key == "?" || key == "esc" {
-			m.setMode(modeStatus)
-			return m, m.loadDetailCmd()
-		}
-		if m.scrollTransient(key) {
-			return m, nil
-		}
-		if _, ok := prefixCatalogs[key]; ok {
-			m.setMode(modeStatus)
-			m.transientOffset = 0
-			_ = m.resolver.Feed(m.keyContext(), key)
-			return m, nil
-		}
-		entry, found := dispatcherEntry(m.dispatcherCatalog(), key)
-		if found && entry.Available && entry.Command != keymap.CommandNone {
-			m.setMode(modeStatus)
-			m.transientOffset = 0
-			return m, m.perform(entry.Command)
-		}
-		if found && !entry.Available {
-			m.setMessage(entry.Label + " unavailable: " + entry.Reason)
-		}
-		return m, nil
+		return m.handleHelpKey(key), true
 	}
+	return nil, false
+}
 
+func (m *Model) routeProcessKey(msg tea.KeyPressMsg, key string) tea.Cmd {
+	switch key {
+	case "q", "esc", "$", "up", "down", "pgup", "pgdown", "y":
+		_, cmd := m.handleProcessKey(key)
+		return cmd
+	default:
+		m.closeProcesses()
+		_, cmd := m.handleKey(msg)
+		return cmd
+	}
+}
+
+func (m *Model) handleConfirmKey(key string) tea.Cmd {
+	if key == "y" || key == "Y" {
+		path := m.confirmPath
+		m.setMode(modeStatus)
+		m.confirmPath = ""
+		return m.startOperation("discard", func(ctx context.Context) error { return m.repo.Discard(ctx, []string{path}) })
+	}
+	if key == "n" || key == "N" || key == "q" || key == "esc" {
+		m.setMode(modeStatus)
+		m.confirmPath = ""
+		m.setMessage("Discard cancelled")
+		return m.loadDetailCmd()
+	}
+	return nil
+}
+
+func (m *Model) handleHelpKey(key string) tea.Cmd {
+	if key == "q" || key == "?" || key == "esc" {
+		m.setMode(modeStatus)
+		return m.loadDetailCmd()
+	}
+	if m.scrollTransient(key) {
+		return nil
+	}
+	if _, ok := prefixCatalogs[key]; ok {
+		m.setMode(modeStatus)
+		m.transientOffset = 0
+		_ = m.resolver.Feed(m.keyContext(), key)
+		return nil
+	}
+	entry, found := dispatcherEntry(m.dispatcherCatalog(), key)
+	if found && entry.Available && entry.Command != keymap.CommandNone {
+		m.setMode(modeStatus)
+		m.transientOffset = 0
+		return m.perform(entry.Command)
+	}
+	if found && !entry.Available {
+		m.setMessage(entry.Label + " unavailable: " + entry.Reason)
+	}
+	return nil
+}
+
+func (m *Model) handlePendingTransientKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 	if pending := m.resolver.PendingPrefix(); pending != "" && pending != "g" {
 		if m.resolver.ActiveTransient() != "" {
 			prefix := transientInvocationRoot(pending)
-			if m.transientEdit != nil {
-				entry := *m.transientEdit
-				value := m.transientOptions[entry.Command]
-				switch key {
-				case "enter":
-					value.Enabled = value.Value != ""
-					m.transientOptions[entry.Command] = value
-					m.transientEdit = nil
-					m.setMessage(entry.Label + " updated")
-				case "esc":
-					m.transientOptions[entry.Command] = m.transientEditOriginal
-					m.transientEdit = nil
-					m.setMessage("Option edit cancelled")
-				case "backspace", "ctrl+h":
-					if value.Value != "" {
-						_, n := utf8.DecodeLastRuneInString(value.Value)
-						value.Value = value.Value[:len(value.Value)-n]
-						m.transientOptions[entry.Command] = value
-					}
-				default:
-					if text := msg.Key().Text; text != "" {
-						value.Value += text
-						m.transientOptions[entry.Command] = value
-					}
-				}
-				return m, nil
+			if cmd, handled := m.handleTransientEditKey(msg, key); handled {
+				return cmd, true
 			}
 			if key == "q" || key == "esc" {
 				m.cancelPrefix()
 				m.setMessage("Transient cancelled")
-				return m, nil
+				return nil, true
 			}
 			if m.scrollTransient(key) {
-				return m, nil
+				return nil, true
 			}
 			catalog, _ := m.transientCatalog(prefix)
 			relative := m.resolver.PendingSuffix()
@@ -613,7 +672,7 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				result := m.resolver.Feed(m.keyContext(), key)
 				if result.Pending {
 					m.transientOffset = 0
-					return m, nil
+					return nil, true
 				}
 			}
 			if found && entry.Available {
@@ -621,106 +680,101 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					if _, registered := m.workflowHandlers[entry.Command]; registered {
 						if err := m.validateTransientOptions(prefix, entry.Command); err != nil {
 							m.setError(err)
-							return m, nil
+							return nil, true
 						}
 						m.cancelPrefix()
-						return m, m.performEntry(entry, prefix)
+						return m.performEntry(entry, prefix), true
 					}
 					result := m.resolver.Feed(m.keyContext(), key)
 					if result.Pending {
 						m.transientOffset = 0
-						return m, nil
+						return nil, true
 					}
 				}
 				if entry.Kind == keymap.KindInfix {
 					m.resolver.ContinueTransient()
 					m.editTransientOption(entry)
-					return m, nil
+					return nil, true
 				}
 				if err := m.validateTransientOptions(prefix, entry.Command); err != nil {
 					m.setError(err)
-					return m, nil
+					return nil, true
 				}
 				m.cancelPrefix()
-				return m, m.performEntry(entry, prefix)
+				return m.performEntry(entry, prefix), true
 			}
-			// Magit 4.7 has no f f binding. Preserve the historical safe no-op.
-			if prefix == "f" && key == "f" {
-				m.cancelPrefix()
-				return m, nil
-			}
-			if key == "?" {
-				m.cancelPrefix()
-				m.transientOffset = 0
-				m.setMode(modeHelp)
-				return m, nil
-			}
-			// A catalog suffix always wins, even when unavailable. Switching is only
-			// allowed for a key absent from the active transient.
-			if !found {
-				if _, switches := prefixCatalogs[key]; switches {
-					m.cancelPrefix()
-					m.transientOffset = 0
-					_ = m.resolver.Feed(m.keyContext(), key)
-					return m, nil
-				}
-			}
-			if !found || !entry.Available {
-				label := key
-				if found {
-					label = entry.Label
-				}
-				if found && entry.Reason != "" {
-					m.setMessage(label + " unavailable: " + entry.Reason)
-				} else {
-					m.setMessage("not implemented: " + label)
-				}
-				return m, nil
-			}
+			return m.handleUnmatchedTransientKey(prefix, key, entry, found), true
 		}
 	}
+	return nil, false
 
-	if m.handleStatusSearchKey(key, msg.Key().Text) {
+}
+
+func (m *Model) handleUnmatchedTransientKey(prefix, key string, entry menuEntry, found bool) tea.Cmd {
+	if prefix == "f" && key == "f" {
 		m.cancelPrefix()
-		return m, m.loadDetailCmd()
-	}
-	if key == "q" {
-		m.shutdown()
-		return m, tea.Quit
+		return nil
 	}
 	if key == "?" {
-		m.resolver.Reset()
+		m.cancelPrefix()
 		m.transientOffset = 0
 		m.setMode(modeHelp)
-		return m, nil
+		return nil
 	}
-	if m.handlePatchHunkSelectionKey(key) || m.handlePatchRangeKey(key) {
-		m.cancelPrefix()
-		return m, nil
-	}
-	if m.graphActive {
-		if cmd, handled := m.handleGraphKey(key); handled {
-			return m, cmd
-		}
-	}
-	if m.revisionActive {
-		if cmd, handled := m.handleRevisionKey(key); handled {
-			return m, cmd
-		}
-	}
-	if cmd, handled := m.handleDetailScroll(key); handled {
-		m.cancelPrefix()
-		return m, cmd
-	}
-	if request, ok := m.focusedHunkRequest(key); ok {
-		m.cancelPrefix()
-		return m, m.openInteractiveChange(request)
-	}
-	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
-		if cmd, handled := m.handleNavigationKey(msg); handled {
+	if !found {
+		if _, switches := prefixCatalogs[key]; switches {
 			m.cancelPrefix()
-			return m, cmd
+			m.transientOffset = 0
+			_ = m.resolver.Feed(m.keyContext(), key)
+			return nil
 		}
+	}
+	label := key
+	if found {
+		label = entry.Label
+	}
+	if found && entry.Reason != "" {
+		m.setMessage(label + " unavailable: " + entry.Reason)
+	} else {
+		m.setMessage("not implemented: " + label)
+	}
+	return nil
+}
+
+func (m *Model) handleTransientEditKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
+	if m.transientEdit == nil {
+		return nil, false
+	}
+	entry := *m.transientEdit
+	value := m.transientOptions[entry.Command]
+	switch key {
+	case "enter":
+		value.Enabled = value.Value != ""
+		m.transientOptions[entry.Command] = value
+		m.transientEdit = nil
+		m.setMessage(entry.Label + " updated")
+	case "esc":
+		m.transientOptions[entry.Command] = m.transientEditOriginal
+		m.transientEdit = nil
+		m.setMessage("Option edit cancelled")
+	case "backspace", "ctrl+h":
+		if value.Value != "" {
+			_, n := utf8.DecodeLastRuneInString(value.Value)
+			value.Value = value.Value[:len(value.Value)-n]
+			m.transientOptions[entry.Command] = value
+		}
+	default:
+		if text := msg.Key().Text; text != "" {
+			value.Value += text
+			m.transientOptions[entry.Command] = value
+		}
+	}
+	return nil, true
+}
+
+func (m *Model) handleStatusKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	if cmd, handled := m.handleStatusPreRouting(msg, key); handled {
+		return m, cmd
 	}
 	prefix := m.resolver.PendingPrefix()
 	hadPrefix := prefix != ""
@@ -773,6 +827,52 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setMessage(result.Binding.Label + " unavailable: " + result.Reason)
 	}
 	return m, nil
+}
+
+func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
+	if m.handleStatusSearchKey(key, msg.Key().Text) {
+		m.cancelPrefix()
+		return m.loadDetailCmd(), true
+	}
+	if key == "q" {
+		m.shutdown()
+		return tea.Quit, true
+	}
+	if key == "?" {
+		m.resolver.Reset()
+		m.transientOffset = 0
+		m.setMode(modeHelp)
+		return nil, true
+	}
+	if m.handlePatchHunkSelectionKey(key) || m.handlePatchRangeKey(key) {
+		m.cancelPrefix()
+		return nil, true
+	}
+	if m.graphActive {
+		if cmd, handled := m.handleGraphKey(key); handled {
+			return cmd, true
+		}
+	}
+	if m.revisionActive {
+		if cmd, handled := m.handleRevisionKey(key); handled {
+			return cmd, true
+		}
+	}
+	if cmd, handled := m.handleDetailScroll(key); handled {
+		m.cancelPrefix()
+		return cmd, true
+	}
+	if request, ok := m.focusedHunkRequest(key); ok {
+		m.cancelPrefix()
+		return m.openInteractiveChange(request), true
+	}
+	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
+		if cmd, handled := m.handleNavigationKey(msg); handled {
+			m.cancelPrefix()
+			return cmd, true
+		}
+	}
+	return nil, false
 }
 
 func (m *Model) scrollTransient(key string) bool {
@@ -962,60 +1062,84 @@ func (m *Model) cancelPrefix() {
 }
 
 func (m *Model) handleCommitKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	switch key {
+	switch msg.String() {
 	case "esc":
-		m.setMode(modeStatus)
-		m.input = ""
-		m.setMessage("Commit cancelled")
-		return m, m.loadDetailCmd()
+		return m, m.cancelCommit()
 	case "enter":
-		message := strings.TrimSpace(m.input)
-		if message == "" {
-			m.setError(errors.New("commit message cannot be empty"))
-			return m, nil
-		}
-		m.setMode(modeStatus)
-		m.input = ""
-		return m, m.startOperation("commit", func(ctx context.Context) error {
-			_, err := m.repo.Commit(ctx, message)
-			return err
-		})
+		return m, m.submitCommit()
 	case "backspace", "ctrl+h":
-		if len(m.input) > 0 {
-			_, size := utf8.DecodeLastRuneInString(m.input)
-			m.input = m.input[:len(m.input)-size]
-		}
+		m.deleteCommitRune()
 	default:
-		if text := msg.Key().Text; text != "" {
-			m.input += text
-		}
+		m.appendCommitText(msg.Key().Text)
 	}
 	return m, nil
+}
+
+func (m *Model) cancelCommit() tea.Cmd {
+	m.setMode(modeStatus)
+	m.input = ""
+	m.setMessage("Commit cancelled")
+	return m.loadDetailCmd()
+}
+
+func (m *Model) submitCommit() tea.Cmd {
+	message := strings.TrimSpace(m.input)
+	if message == "" {
+		m.setError(errors.New("commit message cannot be empty"))
+		return nil
+	}
+	m.setMode(modeStatus)
+	m.input = ""
+	return m.startOperation("commit", func(ctx context.Context) error {
+		_, err := m.repo.Commit(ctx, message)
+		return err
+	})
+}
+
+func (m *Model) deleteCommitRune() {
+	if m.input == "" {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(m.input)
+	m.input = m.input[:len(m.input)-size]
+}
+
+func (m *Model) appendCommitText(text string) {
+	if text != "" {
+		m.input += text
+	}
 }
 
 func (m *Model) handleBranchKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q", "esc":
-		m.setMode(modeStatus)
-		return m, m.loadDetailCmd()
+		return m, m.closeBranches()
 	case "j", "n", "down":
-		if m.branchCursor+1 < len(m.branches) {
-			m.branchCursor++
-		}
+		m.moveBranchCursor(1)
 	case "k", "p", "up":
-		if m.branchCursor > 0 {
-			m.branchCursor--
-		}
+		m.moveBranchCursor(-1)
 	case "enter":
-		if len(m.branches) == 0 {
-			return m, nil
-		}
-		branch := m.branches[m.branchCursor]
-		m.setMode(modeStatus)
-		return m, m.startOperation("switch branch", func(ctx context.Context) error { return m.repo.SwitchBranch(ctx, branch.Name) })
+		return m, m.switchSelectedBranch()
 	}
 	return m, nil
+}
+
+func (m *Model) closeBranches() tea.Cmd {
+	m.setMode(modeStatus)
+	return m.loadDetailCmd()
+}
+
+func (m *Model) moveBranchCursor(delta int) {
+	m.branchCursor = min(max(0, m.branchCursor+delta), max(0, len(m.branches)-1))
+}
+
+func (m *Model) switchSelectedBranch() tea.Cmd {
+	if len(m.branches) == 0 {
+		return nil
+	}
+	branch := m.branches[m.branchCursor]
+	m.setMode(modeStatus)
+	return m.startOperation("switch branch", func(ctx context.Context) error { return m.repo.SwitchBranch(ctx, branch.Name) })
 }
 
 func (m *Model) handleDetailScroll(key string) (tea.Cmd, bool) {
@@ -1128,33 +1252,55 @@ func (m *Model) perform(command keymap.CommandID) tea.Cmd {
 	if cmd, handled := m.performNavigationCommand(command); handled {
 		return cmd
 	}
+	for _, handler := range []func(keymap.CommandID) (tea.Cmd, bool){
+		m.performMovementCommand,
+		m.performDisplayCommand,
+		m.performChangeCommand,
+		m.performRepositoryCommand,
+		m.performTransferCommand,
+	} {
+		if cmd, handled := handler(command); handled {
+			return cmd
+		}
+	}
+	m.setError(fmt.Errorf("internal error: no UI handler for %s", command))
+	return nil
+}
+
+func (m *Model) performMovementCommand(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandMoveDown:
-		return m.move(1)
+		return m.move(1), true
 	case keymap.CommandMoveUp:
-		return m.move(-1)
+		return m.move(-1), true
 	case keymap.CommandFirst:
-		return m.moveTo(0)
+		return m.moveTo(0), true
 	case keymap.CommandLast:
-		return m.moveTo(len(m.tree.VisibleSectionIDs()) - 1)
+		return m.moveTo(len(m.tree.VisibleSectionIDs()) - 1), true
+	}
+	return nil, false
+}
+
+func (m *Model) performDisplayCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandRefresh:
 		if !m.canOperate() {
-			return nil
+			return nil, true
 		}
 		m.busy = true
 		m.setMessage("Refreshing…")
-		return m.refreshOperationCmd("refresh", nil)
+		return m.refreshOperationCmd("refresh", nil), true
 	case keymap.CommandToggleSection:
 		id := m.tree.Cursor()
 		m.tree.ToggleFold(id)
 		if section := m.tree.Section(id); section != nil && len(section.Children()) > 0 {
 			m.foldPreferences[id] = m.tree.IsFolded(id)
 		}
-		return m.loadDetailCmd()
+		return m.loadDetailCmd(), true
 	case keymap.CommandDepth1, keymap.CommandDepth2, keymap.CommandDepth3:
 		depth := int(command[len(command)-1] - '0')
 		m.tree.SetGlobalDepth(depth)
-		return m.loadDetailCmd()
+		return m.loadDetailCmd(), true
 	case keymap.CommandOpenDispatcher:
 		m.transientOffset = 0
 		m.setMode(modeHelp)
@@ -1162,24 +1308,34 @@ func (m *Model) perform(command keymap.CommandID) tea.Cmd {
 		m.scrollDetail(m.detailViewportHeight())
 	case keymap.CommandScrollUp:
 		m.scrollDetail(-m.detailViewportHeight())
+	case keymap.CommandShowProcesses:
+		m.openProcesses()
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+func (m *Model) performChangeCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandStage:
 		if r, ok := m.selectedFile(rowUnstaged, rowUntracked); ok && m.canOperate() {
-			return m.startOperation("stage", func(ctx context.Context) error { return m.repo.Stage(ctx, []string{r.path}) })
+			return m.startOperation("stage", func(ctx context.Context) error { return m.repo.Stage(ctx, []string{r.path}) }), true
 		}
 	case keymap.CommandUnstage:
 		if r, ok := m.selectedFile(rowStaged); ok && m.canOperate() {
-			return m.startOperation("unstage", func(ctx context.Context) error { return m.repo.Unstage(ctx, []string{r.path}) })
+			return m.startOperation("unstage", func(ctx context.Context) error { return m.repo.Unstage(ctx, []string{r.path}) }), true
 		}
 	case keymap.CommandStageAll:
 		if m.canOperate() {
 			if m.stageAll == nil {
-				return m.startOperation("stage all tracked changes", nil)
+				return m.startOperation("stage all tracked changes", nil), true
 			}
-			return m.startOperation("stage all tracked changes", m.stageAll)
+			return m.startOperation("stage all tracked changes", m.stageAll), true
 		}
 	case keymap.CommandUnstageAll:
 		if m.canOperate() {
-			return m.startOperation("unstage all", m.unstageAll)
+			return m.startOperation("unstage all", m.unstageAll), true
 		}
 	case keymap.CommandDiscard:
 		if m.scheme == schemeMagit {
@@ -1192,76 +1348,94 @@ func (m *Model) perform(command keymap.CommandID) tea.Cmd {
 			m.setMode(modeCommit)
 			m.input = ""
 		}
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+func (m *Model) performRepositoryCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandSwitchBranch:
 		if m.canOperate() {
 			m.busy = true
 			m.setMessage("Loading branches…")
-			return m.loadBranchesCmd()
-		}
-	case keymap.CommandFetchUpstream:
-		if m.canOperate() {
-			return m.startOperation("fetch upstream", m.fetchUpstream)
-		}
-	case keymap.CommandFetchPush:
-		if m.canOperate() {
-			if m.snapshot.pushRemote != "" {
-				return m.startOperation("fetch push remote", m.fetchPush)
-			}
-			if len(m.snapshot.remotes) == 0 {
-				m.setError(errors.New("configure push remote: no remotes configured"))
-				return nil
-			}
-			m.remoteCursor = 0
-			m.remotePurpose = remoteConfigurePush
-			m.setMode(modeRemotes)
-		}
-	case keymap.CommandFetchElsewhere:
-		if m.canOperate() {
-			if len(m.snapshot.remotes) == 0 {
-				m.setError(errors.New("fetch elsewhere: no remotes configured"))
-				return nil
-			}
-			m.remoteCursor = 0
-			m.remotePurpose = remoteFetchElsewhere
-			m.setMode(modeRemotes)
-		}
-	case keymap.CommandFetchAll:
-		if m.canOperate() {
-			return m.startOperation("fetch all", m.fetchAll)
+			return m.loadBranchesCmd(), true
 		}
 	case keymap.CommandAddRemote:
 		if m.canOperate() {
 			m.remoteInput, m.remoteField, m.remoteFetch = [2]string{}, 0, false
 			m.setMode(modeAddRemote)
 		}
-	case keymap.CommandPush:
-		if m.canOperate() {
-			if m.snapshot.summary.Upstream != "" {
-				return m.startOperation("push", m.push)
-			}
-			if m.snapshot.pushRemote != "" {
-				remote := m.snapshot.pushRemote
-				return m.startOperation("push and set upstream", func(ctx context.Context) error {
-					return m.pushSetUpstream(ctx, remote)
-				})
-			}
-			if len(m.snapshot.remotes) == 0 {
-				m.setError(errors.New("push: no remotes configured"))
-				return nil
-			}
-			m.remoteCursor = 0
-			m.remotePurpose = remoteConfigureAndPush
-			m.setMode(modeRemotes)
-		}
-	case keymap.CommandShowProcesses:
-		m.openProcesses()
 	case keymap.CommandQuit:
 		m.shutdown()
-		return tea.Quit
+		return tea.Quit, true
 	default:
-		m.setError(fmt.Errorf("internal error: no UI handler for %s", command))
+		return nil, false
 	}
+	return nil, true
+}
+
+func (m *Model) performTransferCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
+	case keymap.CommandFetchUpstream:
+		if m.canOperate() {
+			return m.startOperation("fetch upstream", m.fetchUpstream), true
+		}
+	case keymap.CommandFetchPush:
+		return m.performFetchPush(), true
+	case keymap.CommandFetchElsewhere:
+		return m.openRemoteChooser(remoteFetchElsewhere, "fetch elsewhere"), true
+	case keymap.CommandFetchAll:
+		if m.canOperate() {
+			return m.startOperation("fetch all", m.fetchAll), true
+		}
+	case keymap.CommandPush:
+		return m.performPush(), true
+	default:
+		return nil, false
+	}
+	return nil, true
+}
+
+func (m *Model) performFetchPush() tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	if m.snapshot.pushRemote != "" {
+		return m.startOperation("fetch push remote", m.fetchPush)
+	}
+	return m.openRemoteChooser(remoteConfigurePush, "configure push remote")
+}
+
+func (m *Model) openRemoteChooser(purpose remotePurpose, operation string) tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	if len(m.snapshot.remotes) == 0 {
+		m.setError(fmt.Errorf("%s: no remotes configured", operation))
+		return nil
+	}
+	m.remoteCursor = 0
+	m.remotePurpose = purpose
+	m.setMode(modeRemotes)
 	return nil
+}
+
+func (m *Model) performPush() tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	if m.snapshot.summary.Upstream != "" {
+		return m.startOperation("push", m.push)
+	}
+	if m.snapshot.pushRemote != "" {
+		remote := m.snapshot.pushRemote
+		return m.startOperation("push and set upstream", func(ctx context.Context) error {
+			return m.pushSetUpstream(ctx, remote)
+		})
+	}
+	return m.openRemoteChooser(remoteConfigureAndPush, "push")
 }
 
 func (m *Model) beginDiscard(kinds ...rowKind) {

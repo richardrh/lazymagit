@@ -911,23 +911,31 @@ func (r *Repository) Summary(ctx context.Context) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	return parseSummary(out), nil
+}
+
+func parseSummary(out []byte) Summary {
 	var s Summary
 	for _, record := range bytes.Split(out, []byte{0}) {
-		line := string(record)
-		switch {
-		case strings.HasPrefix(line, "# branch.oid "):
-			s.Head = strings.TrimPrefix(line, "# branch.oid ")
-			s.Unborn = s.Head == "(initial)"
-		case strings.HasPrefix(line, "# branch.head "):
-			s.Branch = strings.TrimPrefix(line, "# branch.head ")
-			s.Detached = s.Branch == "(detached)"
-		case strings.HasPrefix(line, "# branch.upstream "):
-			s.Upstream = strings.TrimPrefix(line, "# branch.upstream ")
-		case strings.HasPrefix(line, "# branch.ab "):
-			fmt.Sscanf(strings.TrimPrefix(line, "# branch.ab "), "+%d -%d", &s.Ahead, &s.Behind)
-		}
+		applySummaryRecord(&s, string(record))
 	}
-	return s, nil
+	return s
+}
+
+func applySummaryRecord(s *Summary, line string) {
+	const oid, head, upstream, counts = "# branch.oid ", "# branch.head ", "# branch.upstream ", "# branch.ab "
+	switch {
+	case strings.HasPrefix(line, oid):
+		s.Head = strings.TrimPrefix(line, oid)
+		s.Unborn = s.Head == "(initial)"
+	case strings.HasPrefix(line, head):
+		s.Branch = strings.TrimPrefix(line, head)
+		s.Detached = s.Branch == "(detached)"
+	case strings.HasPrefix(line, upstream):
+		s.Upstream = strings.TrimPrefix(line, upstream)
+	case strings.HasPrefix(line, counts):
+		_, _ = fmt.Sscanf(strings.TrimPrefix(line, counts), "+%d -%d", &s.Ahead, &s.Behind)
+	}
 }
 
 func (r *Repository) Diff(ctx context.Context, path string) (string, error) {

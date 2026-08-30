@@ -48,22 +48,8 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 		return BranchConfigUpdate{}, err
 	}
 	request.Before = before
-	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault, "branch.autoSetupMerge": request.AutoSetupMerge, "branch.autoSetupRebase": request.AutoSetupRebase} {
-		if update.Action != ConfigKeep && update.Action != ConfigSet && update.Action != ConfigUnset {
-			return BranchConfigUpdate{}, fmt.Errorf("invalid %s action", name)
-		}
-	}
-	if request.Rebase.Action == ConfigSet && !validRebaseMode(RebaseMode(request.Rebase.Value)) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch rebase mode %q", request.Rebase.Value)
-	}
-	if request.PullRebase.Action == ConfigSet && !validRebaseMode(RebaseMode(request.PullRebase.Value)) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid pull rebase mode %q", request.PullRebase.Value)
-	}
-	if request.AutoSetupMerge.Action == ConfigSet && !validAutoSetupMerge(request.AutoSetupMerge.Value) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupMerge mode %q", request.AutoSetupMerge.Value)
-	}
-	if request.AutoSetupRebase.Action == ConfigSet && !validAutoSetupRebase(request.AutoSetupRebase.Value) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupRebase mode %q", request.AutoSetupRebase.Value)
+	if err := validateBranchConfigUpdate(request); err != nil {
+		return BranchConfigUpdate{}, err
 	}
 	if request.PushRemote.Action == ConfigSet {
 		if err := r.validateRemote(ctx, request.PushRemote.Value); err != nil {
@@ -85,6 +71,30 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 	request.Plan = branchConfigPlan(request)
 	request.Token = NewConfirmationToken(branchConfigIdentity(request))
 	return request, nil
+}
+
+func validateBranchConfigUpdate(request BranchConfigUpdate) error {
+	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault, "branch.autoSetupMerge": request.AutoSetupMerge, "branch.autoSetupRebase": request.AutoSetupRebase} {
+		if update.Action != ConfigKeep && update.Action != ConfigSet && update.Action != ConfigUnset {
+			return fmt.Errorf("invalid %s action", name)
+		}
+	}
+	validations := []struct {
+		update ConfigUpdate
+		valid  func(string) bool
+		label  string
+	}{
+		{request.Rebase, func(value string) bool { return validRebaseMode(RebaseMode(value)) }, "branch rebase"},
+		{request.PullRebase, func(value string) bool { return validRebaseMode(RebaseMode(value)) }, "pull rebase"},
+		{request.AutoSetupMerge, validAutoSetupMerge, "branch.autoSetupMerge"},
+		{request.AutoSetupRebase, validAutoSetupRebase, "branch.autoSetupRebase"},
+	}
+	for _, validation := range validations {
+		if validation.update.Action == ConfigSet && !validation.valid(validation.update.Value) {
+			return fmt.Errorf("invalid %s mode %q", validation.label, validation.update.Value)
+		}
+	}
+	return nil
 }
 
 func (r *Repository) ExecuteBranchConfigUpdate(ctx context.Context, reviewed BranchConfigUpdate) error {

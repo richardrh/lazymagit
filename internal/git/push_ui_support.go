@@ -51,13 +51,37 @@ func (r *Repository) PushWithUIArgs(ctx context.Context, in PushUIArgs) error {
 	return r.run(ctx, args...)
 }
 
+type pushUISelection struct {
+	Refspecs []string
+	AllTags  bool
+}
+
 func (r *Repository) pushUICommand(ctx context.Context, in PushUIArgs) ([]string, error) {
 	remote, err := r.resolvePushTarget(ctx, in.Target, in.Remote)
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePushUIRequest(in); err != nil {
+		return nil, err
+	}
+	args, err := appendPushUIFlags([]string{"push"}, in)
+	if err != nil {
+		return nil, err
+	}
+	selection, err := r.compilePushUISelection(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if selection.AllTags {
+		args = append(args, "--tags")
+	}
+	args = append(args, "--", remote)
+	return append(args, selection.Refspecs...), nil
+}
+
+func validatePushUIRequest(in PushUIArgs) error {
 	if in.Tags && in.AllTags {
-		return nil, errors.New("push all-tags selectors are duplicated")
+		return errors.New("push all-tags selectors are duplicated")
 	}
 	baseSelector := in.Refspec != "" || in.Source != "" || in.Destination != ""
 	selectors := 0
@@ -67,13 +91,15 @@ func (r *Repository) pushUICommand(ctx context.Context, in PushUIArgs) ([]string
 		}
 	}
 	if selectors > 1 {
-		return nil, errors.New("push selectors are mutually exclusive")
+		return errors.New("push selectors are mutually exclusive")
 	}
 	if (in.Tags || in.AllTags) && selectors != 0 && !in.AllTags {
-		return nil, errors.New("push all-tags cannot be combined with another selector")
+		return errors.New("push all-tags cannot be combined with another selector")
 	}
+	return nil
+}
 
-	args := []string{"push"}
+func appendPushUIFlags(args []string, in PushUIArgs) ([]string, error) {
 	switch in.Force {
 	case PushForceNone:
 	case PushForceWithLease:
@@ -107,77 +133,55 @@ func (r *Repository) pushUICommand(ctx context.Context, in PushUIArgs) ([]string
 		}
 		args = append(args, "--push-option="+option)
 	}
+	return args, nil
+}
 
-	var specs []string
+func (r *Repository) compilePushUISelection(ctx context.Context, in PushUIArgs) (pushUISelection, error) {
 	switch {
 	case len(in.Refspecs) != 0:
-		for _, spec := range in.Refspecs {
-			if err := r.validateRefspec(ctx, spec, false); err != nil {
-				return nil, err
-			}
-			specs = append(specs, spec)
-		}
+		specs, err := r.compilePushUIRefspecs(ctx, in.Refspecs)
+		return pushUISelection{Refspecs: specs}, err
 	case in.Refspec != "":
-		if err := r.validateRefspec(ctx, in.Refspec, false); err != nil {
-			return nil, err
-		}
-		specs = append(specs, in.Refspec)
+		specs, err := r.compilePushUIRefspecs(ctx, []string{in.Refspec})
+		return pushUISelection{Refspecs: specs}, err
 	case in.Source != "" || in.Destination != "":
-		if in.Source == "" {
-			return nil, errors.New("push source is empty")
-		}
-		if err := r.validatePushSource(ctx, in.Source); err != nil {
-			return nil, err
-		}
-		spec := in.Source
-		if in.Destination != "" {
-			if err := r.validateBranch(ctx, in.Destination); err != nil {
-				return nil, err
-			}
-			spec += ":" + in.Destination
-		}
-		specs = append(specs, spec)
+		spec, _, err := r.pushSourceSpec(ctx, in.PushArgs)
+		return pushUISelection{Refspecs: []string{spec}}, err
 	case in.Matching:
-		specs = append(specs, ":")
+		return pushUISelection{Refspecs: []string{":"}}, nil
 	case in.Tag != "":
 		if err := r.validateTag(ctx, in.Tag); err != nil {
-			return nil, err
+			return pushUISelection{}, err
 		}
-		specs = append(specs, "refs/tags/"+in.Tag)
+		return pushUISelection{Refspecs: []string{"refs/tags/" + in.Tag}}, nil
 	case in.AllTags:
-		args = append(args, "--tags")
+		return pushUISelection{AllTags: true}, nil
 	case in.NotesRef != "":
-		if !strings.HasPrefix(in.NotesRef, "refs/notes/") {
-			return nil, fmt.Errorf("invalid notes ref %q", in.NotesRef)
-		}
-		if _, err := r.output(ctx, "show-ref", "--verify", "--quiet", in.NotesRef); err != nil {
-			return nil, fmt.Errorf("notes ref %q does not exist", in.NotesRef)
-		}
-		specs = append(specs, in.NotesRef+":"+in.NotesRef)
+		spec, err := r.compilePushUINotesRef(ctx, in.NotesRef)
+		return pushUISelection{Refspecs: []string{spec}}, err
 	case in.Notes:
-		specs = append(specs, "refs/notes/*:refs/notes/*")
+		return pushUISelection{Refspecs: []string{"refs/notes/*:refs/notes/*"}}, nil
 	default:
-		branch, err := r.currentBranch(ctx)
-		if err != nil {
+		spec, _, err := r.pushCurrentBranchSpec(ctx, in.Target)
+		return pushUISelection{Refspecs: []string{spec}}, err
+	}
+}
+
+func (r *Repository) compilePushUIRefspecs(ctx context.Context, specs []string) ([]string, error) {
+	for _, spec := range specs {
+		if err := r.validateRefspec(ctx, spec, false); err != nil {
 			return nil, err
 		}
-		if branch == "" {
-			return nil, errors.New("cannot push current branch from detached HEAD")
-		}
-		spec := branch
-		if in.Target == PushToUpstream {
-			merge, ok, err := r.configValue(ctx, "branch."+branch+".merge")
-			if err != nil {
-				return nil, err
-			}
-			if !ok || !strings.HasPrefix(merge, "refs/heads/") {
-				return nil, ErrNoUpstream
-			}
-			spec += ":" + strings.TrimPrefix(merge, "refs/heads/")
-		}
-		specs = append(specs, spec)
 	}
-	args = append(args, "--", remote)
-	args = append(args, specs...)
-	return args, nil
+	return append([]string(nil), specs...), nil
+}
+
+func (r *Repository) compilePushUINotesRef(ctx context.Context, ref string) (string, error) {
+	if !strings.HasPrefix(ref, "refs/notes/") {
+		return "", fmt.Errorf("invalid notes ref %q", ref)
+	}
+	if _, err := r.output(ctx, "show-ref", "--verify", "--quiet", ref); err != nil {
+		return "", fmt.Errorf("notes ref %q does not exist", ref)
+	}
+	return ref + ":" + ref, nil
 }
