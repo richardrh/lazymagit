@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richard/lazymagit/internal/quality"
+	"github.com/richardrh/lazymagit/internal/quality"
 )
 
 func TestParseOptions(t *testing.T) {

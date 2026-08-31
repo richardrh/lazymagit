@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 func TestStashDomainRegistrationAndRecursivePushOccurrence(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestRunWithDirectFailurePropagation(t *testing.T) {

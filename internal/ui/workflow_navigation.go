@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/richard/lazymagit/internal/keymap"
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	"github.com/richardrh/lazymagit/internal/keymap"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 const defaultDiffContext = 3

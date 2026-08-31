@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 func TestHistoryPickOptionsMapSupportedInfixesAndRejectUnsafeEdit(t *testing.T) {

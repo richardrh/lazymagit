@@ -5,7 +5,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func (m *Model) handleStatusSearchKey(key, text string) bool {

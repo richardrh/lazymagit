@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 func commitInfixID(t *testing.T, upstream string) keymap.CommandID {

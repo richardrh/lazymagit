@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestConflictE2EInspectResolveAndContinueByMagitKeys(t *testing.T) {

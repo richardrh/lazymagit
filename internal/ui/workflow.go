@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 // WorkflowCommand is the lossless hand-off from a transient to a domain.

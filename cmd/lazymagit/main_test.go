@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 type fakeRepository struct {

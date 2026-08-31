@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/richard/lazymagit/internal/quality"
+	"github.com/richardrh/lazymagit/internal/quality"
 )
 
 func main() {

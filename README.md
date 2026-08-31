@@ -38,6 +38,40 @@ prefixes with an optional Vim navigation layer.
 - Bounded Magit-style Git process transcript with terminal-safe clipboard copy
 - Terminal-control sanitization for untrusted repository content
 
+## Install
+
+### Go
+
+With Go 1.25 or newer installed:
+
+```sh
+go install github.com/richardrh/lazymagit/cmd/lazymagit@latest
+```
+
+The binary is installed into `$(go env GOPATH)/bin` unless `GOBIN` is set.
+
+### Linux release packages
+
+Each tagged GitHub release publishes `amd64` and `arm64` binaries plus native
+Debian, RPM, and Arch Linux packages. Download the package for your architecture
+from the [releases page](https://github.com/richardrh/lazymagit/releases), then
+install it with the platform package manager:
+
+```sh
+# Ubuntu or Debian
+sudo apt install ./lazymagit_*_linux_amd64.deb
+
+# Fedora or another RPM-based distribution
+sudo dnf install ./lazymagit_*_linux_amd64.rpm
+
+# Arch Linux
+sudo pacman -U ./lazymagit_*_linux_amd64.pkg.tar.zst
+```
+
+Generic Linux, macOS, and Windows archives and `checksums.txt` are published in
+the same release. The first release will be available after the `v0.1.0` tag is
+created on the merged release commit.
+
 ## Build
 
 Requirements: Go 1.25 or newer and Git available on `PATH`.

@@ -1,0 +1,88 @@
+version: 2
+
+project_name: lazymagit
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: lazymagit
+    main: ./cmd/lazymagit
+    binary: lazymagit
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
+archives:
+  - ids:
+      - lazymagit
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+nfpms:
+  - id: linux-packages
+    package_name: lazymagit
+    ids:
+      - lazymagit
+    vendor: lazymagit contributors
+    homepage: https://github.com/richardrh/lazymagit
+    maintainer: Richard <richard@users.noreply.github.com>
+    description: Terminal-native Git interface inspired by Magit's status workflow
+    license: MIT
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm
+      - archlinux
+    dependencies:
+      - git
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/lazymagit/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/lazymagit/README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+release:
+  github:
+    owner: richardrh
+    name: lazymagit
+  prerelease: auto
