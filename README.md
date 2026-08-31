@@ -13,6 +13,8 @@ prefixes with an optional Vim navigation layer.
 - Safe handling of spaces, Unicode, leading dashes, and Git pathspec magic
 - Stable, foldable sections for untracked, unstaged, staged, upstream, and log
 - Persistent selectable log/graph rows with contextual cherry-pick, revert, reset, and revision inspection
+- Selectable blame lines with exact commit drilldown and restored cursor position
+- Three-stage conflict inspection with direct reviewed ours/theirs resolution
 - Marked multi-file and reviewed file/hunk/multi-hunk/disjoint-region stage, unstage, and discard
 - Stale-safe interactive patch reviews that revalidate the exact source diff before mutation and reject unresolved conflicts
 - Commit creation, revision inspection, searchable branch switching, remote add, fetch, and push

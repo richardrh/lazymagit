@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	gitbackend "github.com/richard/lazymagit/internal/git"
@@ -125,6 +127,33 @@ func TestInspectionRegistersPortableBlameAndGraphInBothSchemes(t *testing.T) {
 				t.Fatalf("portable %s binding has no workflow handler", key)
 			}
 		}
+	}
+}
+
+func TestBlameSelectionHelpers(t *testing.T) {
+	entries := map[int]gitbackend.BlameLine{
+		4: {Line: 2, CommitID: "2222222222222222222222222222222222222222"},
+		3: {Line: 1, CommitID: "1111111111111111111111111111111111111111"},
+	}
+	if got := firstBlameLine(entries); got != 3 {
+		t.Fatalf("first blame line = %d", got)
+	}
+	m := &Model{blameActive: true, blameCursor: 3, blameEntries: entries, appCtx: context.Background()}
+	if _, handled := m.handleBlameKey("down"); !handled || m.blameCursor != 4 {
+		t.Fatalf("blame down handled=%t cursor=%d", handled, m.blameCursor)
+	}
+	if got := activeInspectionRevision(m); got != entries[4].CommitID {
+		t.Fatalf("active blame revision = %q", got)
+	}
+}
+
+func TestUncommittedBlameLineDoesNotOpenRevision(t *testing.T) {
+	m := &Model{blameActive: true, blameCursor: 2, blameEntries: map[int]gitbackend.BlameLine{2: {Line: 1, CommitID: strings.Repeat("0", 40)}}}
+	if cmd := m.openSelectedBlameCommit(); cmd != nil {
+		t.Fatal("uncommitted blame line returned a revision command")
+	}
+	if !strings.Contains(m.message, "not been committed") || !m.blameActive {
+		t.Fatalf("uncommitted selection message=%q active=%t", m.message, m.blameActive)
 	}
 }
 

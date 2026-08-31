@@ -28,8 +28,14 @@ func conflictResolutionWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			choices = append(choices, WorkflowChoice{Value: path.Path, Label: sanitizeSingleLine(path.Path) + " (" + conflictStagesLabel(path.Stages) + ")"})
 		}
 		selected := choices[0].Value
-		if row, ok := m.rows[m.tree.Cursor()]; ok && isUnmergedSnapshotPath(m, row.path) {
+		if m.conflictInspectPath != "" {
+			selected = m.conflictInspectPath
+		} else if row, ok := m.rows[m.tree.Cursor()]; ok && isUnmergedSnapshotPath(m, row.path) {
 			selected = row.path
+		}
+		resolution := m.conflictResolution
+		if resolution == "" {
+			resolution = "ours"
 		}
 		return WorkflowDialog{
 			Title: "Resolve conflict", Operation: "resolve conflict",
@@ -40,7 +46,7 @@ func conflictResolutionWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			},
 			Fields: []WorkflowField{
 				{Name: "path", Label: "Unresolved path", Kind: WorkflowSelect, Value: selected, Choices: choices, Required: true},
-				{Name: "resolution", Label: "Resolution", Kind: WorkflowSelect, Value: "ours", Choices: []WorkflowChoice{{Value: "ours", Label: "Ours (Git stage 2)"}, {Value: "theirs", Label: "Theirs (Git stage 3)"}}, Required: true},
+				{Name: "resolution", Label: "Resolution", Kind: WorkflowSelect, Value: resolution, Choices: []WorkflowChoice{{Value: "ours", Label: "Ours (Git stage 2)"}, {Value: "theirs", Label: "Theirs (Git stage 3)"}}, Required: true},
 			},
 			ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
 				resolution, err := conflictResolutionValue(values["resolution"])
@@ -109,7 +115,7 @@ func isUnmergedSnapshotPath(m *Model, path string) bool {
 // status row is unresolved. It renders every extant index stage in the detail
 // pane without touching the worktree or index.
 func inspectConflictVersions(m *Model, path string) tea.Cmd {
-	return loadInspection(m, "Conflict versions: "+sanitizeSingleLine(path), func(ctx context.Context) (string, error) {
+	cmd := loadInspection(m, "Conflict versions: "+sanitizeSingleLine(path), func(ctx context.Context) (string, error) {
 		inspection, err := m.repo.InspectConflict(ctx, path)
 		if err != nil {
 			return "", err
@@ -132,6 +138,29 @@ func inspectConflictVersions(m *Model, path string) tea.Cmd {
 		}
 		return text.String(), nil
 	})
+	m.conflictInspectPath, m.conflictResolution = path, "ours"
+	return cmd
+}
+
+func (m *Model) handleConflictInspectionKey(key string) (tea.Cmd, bool) {
+	if m.conflictInspectPath == "" || !m.inspectionActive {
+		return nil, false
+	}
+	switch key {
+	case "1":
+		m.setMessage("Base selected for inspection only; stock Git cannot safely check it out")
+	case "2":
+		m.conflictResolution = "ours"
+		m.setMessage("Ours selected; press r to review resolution")
+	case "3":
+		m.conflictResolution = "theirs"
+		m.setMessage("Theirs selected; press r to review resolution")
+	case "r":
+		return conflictResolutionWorkflow(m, WorkflowCommand{}), true
+	default:
+		return nil, false
+	}
+	return nil, true
 }
 
 func conflictStageLabel(stage gitbackend.ConflictStage) string {

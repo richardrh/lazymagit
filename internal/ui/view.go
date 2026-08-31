@@ -144,6 +144,8 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 	switch {
 	case m.graphActive && index == m.graphCursor:
 		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	case m.blameActive && index == m.blameCursor:
+		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 	case rangeLow >= 0 && index >= rangeLow && index <= rangeHigh:
 		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
 	case index == m.detailHunk && strings.HasPrefix(line, "@@"):
@@ -366,6 +368,12 @@ func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
 	if m.graphActive {
 		return gold.Render("Graph") + muted.Render("  ↑/↓ select  Enter inspect  c cherry-pick  V revert  X reset  Esc close")
+	}
+	if m.blameActive {
+		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
+	}
+	if m.conflictInspectPath != "" {
+		return gold.Render("Conflict") + muted.Render("  1 base inspect-only  2 ours  3 theirs  r review resolution  Esc close")
 	}
 	if m.revisionActive {
 		controls := "  p first parent  Esc close"

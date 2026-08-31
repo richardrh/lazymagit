@@ -114,10 +114,27 @@ type revisionMsg struct {
 	err      error
 }
 
+type blameMsg struct {
+	id      sectionmodel.SectionID
+	request uint64
+	title   string
+	text    string
+	entries map[int]gitbackend.BlameLine
+	err     error
+}
+
 type graphInspection struct {
 	detail  string
 	id      sectionmodel.SectionID
 	entries map[int]gitbackend.LogEntry
+	cursor  int
+	offset  int
+}
+
+type blameInspection struct {
+	detail  string
+	id      sectionmodel.SectionID
+	entries map[int]gitbackend.BlameLine
 	cursor  int
 	offset  int
 }
@@ -175,6 +192,12 @@ type Model struct {
 	revisionID            string
 	revisionParents       []string
 	graphReturn           *graphInspection
+	blameActive           bool
+	blameCursor           int
+	blameEntries          map[int]gitbackend.BlameLine
+	blameReturn           *blameInspection
+	conflictInspectPath   string
+	conflictResolution    string
 	transientOffset       int
 	vimGToken             uint64
 	snapshotRequest       uint64
@@ -299,6 +322,8 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleGraphMsg(msg)
 	case revisionMsg:
 		return m, m.handleRevisionMsg(msg)
+	case blameMsg:
+		return m, m.handleBlameMsg(msg)
 	case diffMsg:
 		return m, m.handleDiffMsg(msg)
 	case branchesMsg:
@@ -529,6 +554,27 @@ func (m *Model) handleGraphMsg(msg graphMsg) tea.Cmd {
 	return nil
 }
 
+func (m *Model) handleBlameMsg(msg blameMsg) tea.Cmd {
+	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
+		return nil
+	}
+	m.cancelDetail()
+	m.detailID, m.detail = msg.id, sanitizeDiff(msg.title+"\n\n"+msg.text)
+	m.detailOffset, m.blameEntries, m.blameActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
+	m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
+	m.blameCursor = firstBlameLine(msg.entries)
+	if msg.err != nil {
+		m.detail = "Unable to load blame:\n" + sanitizeSingleLine(msg.err.Error())
+		m.blameEntries = nil
+	}
+	if m.blameCursor >= 0 {
+		m.detailOffset = min(m.blameCursor, m.detailMaximumOffset())
+	}
+	m.resetDetailSelection()
+	return nil
+}
+
 func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 	if key == "ctrl+c" && m.scheme == schemeVim {
 		m.shutdown()
@@ -539,8 +585,15 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 		m.setMessage("Returned to graph")
 		return nil, true
 	}
+	if key == "esc" && m.revisionActive && m.blameReturn != nil && m.resolver.PendingPrefix() == "" {
+		m.restoreBlameInspection()
+		m.setMessage("Returned to blame")
+		return nil, true
+	}
 	if key == "esc" && m.inspectionActive && m.resolver.PendingPrefix() == "" {
 		m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
+		m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
+		m.conflictInspectPath, m.conflictResolution = "", ""
 		m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 		m.setMessage("Inspection closed")
 		return m.loadDetailCmd(), true
@@ -875,15 +928,8 @@ func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd
 		m.cancelPrefix()
 		return nil, true
 	}
-	if m.graphActive {
-		if cmd, handled := m.handleGraphKey(key); handled {
-			return cmd, true
-		}
-	}
-	if m.revisionActive {
-		if cmd, handled := m.handleRevisionKey(key); handled {
-			return cmd, true
-		}
+	if cmd, handled := m.handleInspectionNavigationKey(key); handled {
+		return cmd, true
 	}
 	if cmd, handled := m.handleDetailScroll(key); handled {
 		m.cancelPrefix()

@@ -161,6 +161,8 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 	}
 	m.cancelDetail()
 	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
+	m.conflictInspectPath, m.conflictResolution = "", ""
 	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.detailOffset = 0
 	m.detailRequest++
@@ -199,6 +201,9 @@ func activeInspectionRevision(m *Model) string {
 	}
 	if m.revisionActive {
 		return m.revisionID
+	}
+	if m.blameActive {
+		return m.blameEntries[m.blameCursor].CommitID
 	}
 	return ""
 }
@@ -300,13 +305,32 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 		return nil
 	}
 	path := paths[0]
-	return loadInspection(m, "Blame "+path, func(ctx context.Context) (string, error) {
+	return loadBlameInspection(m, path)
+}
+
+func loadBlameInspection(m *Model, path string) tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	m.cancelDetail()
+	m.inspectionActive, m.blameActive, m.blameEntries, m.blameCursor = true, false, nil, -1
+	m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn, m.blameReturn = false, "", nil, nil, nil
+	m.detailOffset = 0
+	m.detailRequest++
+	request, id, title := m.detailRequest, m.tree.Cursor(), "Blame "+sanitizeSingleLine(path)
+	m.detailID, m.detail = id, "Loading "+title+"…"
+	m.setMessage("Loading " + title + "…")
+	ctx, cancel := context.WithCancel(m.appCtx)
+	m.detailCtx, m.detailCancel = ctx, cancel
+	return func() tea.Msg {
 		result, err := m.repo.QueryBlame(ctx, gitbackend.BlameQuery{Path: path, OutputLimit: inspectOutputLimit})
 		if err != nil {
-			return "", err
+			return blameMsg{id: id, request: request, title: title, err: err}
 		}
-		return formatBlameResult(result), nil
-	})
+		text, entries := blameResultText(result)
+		return blameMsg{id: id, request: request, title: title, text: text, entries: entries}
+	}
 }
 
 // inspectGraph is a bounded all-refs graph browser. Git computes lanes from
@@ -389,6 +413,26 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 	return nil, true
 }
 
+func (m *Model) handleInspectionNavigationKey(key string) (tea.Cmd, bool) {
+	handlers := []struct {
+		active bool
+		handle func(string) (tea.Cmd, bool)
+	}{
+		{m.graphActive, m.handleGraphKey},
+		{m.blameActive, m.handleBlameKey},
+		{m.conflictInspectPath != "", m.handleConflictInspectionKey},
+		{m.revisionActive, m.handleRevisionKey},
+	}
+	for _, candidate := range handlers {
+		if candidate.active {
+			if cmd, handled := candidate.handle(key); handled {
+				return cmd, true
+			}
+		}
+	}
+	return nil, false
+}
+
 func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
 	if key != "p" {
 		return nil, false
@@ -399,6 +443,76 @@ func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
 	}
 	m.setMessage("Opening first parent commit")
 	return inspectRevision(m, m.revisionParents[0]), true
+}
+
+func firstBlameLine(entries map[int]gitbackend.BlameLine) int {
+	first := -1
+	for line := range entries {
+		if first < 0 || line < first {
+			first = line
+		}
+	}
+	return first
+}
+
+func (m *Model) handleBlameKey(key string) (tea.Cmd, bool) {
+	lines := make([]int, 0, len(m.blameEntries))
+	for line := range m.blameEntries {
+		lines = append(lines, line)
+	}
+	sort.Ints(lines)
+	if len(lines) == 0 {
+		return nil, false
+	}
+	index := sort.SearchInts(lines, m.blameCursor)
+	if index == len(lines) || lines[index] != m.blameCursor {
+		index = 0
+	}
+	switch key {
+	case "up", "k", "p":
+		index = max(0, index-1)
+	case "down", "j", "n":
+		index = min(len(lines)-1, index+1)
+	case "enter":
+		return m.openSelectedBlameCommit(), true
+	default:
+		return nil, false
+	}
+	m.blameCursor = lines[index]
+	m.detailOffset = min(m.blameCursor, m.detailMaximumOffset())
+	entry := m.blameEntries[m.blameCursor]
+	m.setMessage(fmt.Sprintf("Blame line %d selected; Enter inspects %s", entry.Line, shortID(entry.CommitID)))
+	return nil, true
+}
+
+func (m *Model) openSelectedBlameCommit() tea.Cmd {
+	entry := m.blameEntries[m.blameCursor]
+	if strings.Trim(entry.CommitID, "0") == "" {
+		m.setMessage("Selected line has not been committed yet")
+		return nil
+	}
+	m.blameReturn = m.captureBlameInspection()
+	m.blameActive, m.blameEntries, m.blameCursor = false, nil, -1
+	return inspectRevision(m, entry.CommitID)
+}
+
+func (m *Model) captureBlameInspection() *blameInspection {
+	entries := make(map[int]gitbackend.BlameLine, len(m.blameEntries))
+	for line, entry := range m.blameEntries {
+		entries[line] = entry
+	}
+	return &blameInspection{detail: m.detail, id: m.detailID, entries: entries, cursor: m.blameCursor, offset: m.detailOffset}
+}
+
+func (m *Model) restoreBlameInspection() {
+	if m.blameReturn == nil {
+		return
+	}
+	state := m.blameReturn
+	m.detail, m.detailID, m.detailOffset = state.detail, state.id, state.offset
+	m.blameEntries, m.blameCursor, m.blameActive = state.entries, state.cursor, true
+	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
+	m.clampDetailOffset()
 }
 
 func (m *Model) captureGraphInspection() *graphInspection {
@@ -421,7 +535,16 @@ func (m *Model) restoreGraphInspection() {
 }
 
 func formatBlameResult(result gitbackend.BlameResult) string {
+	text, _ := blameResultText(result)
+	return text
+}
+
+func blameResultText(result gitbackend.BlameResult) (string, map[int]gitbackend.BlameLine) {
 	lines := make([]string, 0, len(result.Lines))
+	entries := make(map[int]gitbackend.BlameLine, len(result.Lines))
+	if result.Truncated {
+		lines = append(lines, strings.TrimSuffix(truncationNote(true), "\n"))
+	}
 	for _, line := range result.Lines {
 		id := line.CommitID
 		if len(id) > 12 {
@@ -439,9 +562,10 @@ func formatBlameResult(result gitbackend.BlameResult) string {
 		if summary != "" {
 			summary = " " + summary
 		}
+		entries[len(lines)+2] = line
 		lines = append(lines, fmt.Sprintf("%6d  %s  %s  %s%s | %s", line.Line, id, author, date, summary, line.Content))
 	}
-	return truncationNote(result.Truncated) + strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), entries
 }
 
 func inspectShowLatestStash(m *Model, _ WorkflowCommand) tea.Cmd {

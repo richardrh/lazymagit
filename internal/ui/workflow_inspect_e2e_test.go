@@ -70,6 +70,24 @@ func TestInspectBlameThroughModelUpdate(t *testing.T) {
 	// The initial cursor is the Unstaged heading; select its tracked file.
 	sendInspectSequence(t, m, "n", "ctrl+b")
 	assertInspectDetail(t, m, "Blame story.txt", "inspection second", "| one", "| two", "| working")
+	if !m.blameActive || m.blameCursor < 0 {
+		t.Fatalf("blame was not selectable: active=%t cursor=%d", m.blameActive, m.blameCursor)
+	}
+	first := m.blameCursor
+	sendInspectSequence(t, m, "n")
+	if m.blameCursor == first {
+		t.Fatalf("blame next did not advance from line %d", first)
+	}
+	selected := m.blameCursor
+	sendInspectSequence(t, m, "enter")
+	if m.blameActive || !m.revisionActive {
+		t.Fatalf("opening blamed commit did not enter revision inspection: blame=%t revision=%t", m.blameActive, m.revisionActive)
+	}
+	assertInspectDetail(t, m, "Commit", "inspection")
+	sendInspectSequence(t, m, "esc")
+	if !m.blameActive || m.blameCursor != selected {
+		t.Fatalf("Esc did not restore blame selection: active=%t cursor=%d want=%d", m.blameActive, m.blameCursor, selected)
+	}
 }
 
 func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
