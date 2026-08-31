@@ -290,12 +290,16 @@ func TestMainExit(t *testing.T) {
 	wantErr := errors.New("bad\nerror")
 	tests := []struct {
 		name        string
+		args        []string
 		handled     bool
 		rebaseErr   error
 		runErr      error
 		wantCode    int
 		wantRunCall bool
+		wantOutput  string
 	}{
+		{name: "help long", args: []string{"--help"}, wantOutput: usage + "\n"},
+		{name: "help short", args: []string{"-h"}, wantOutput: usage + "\n"},
 		{name: "editor success", handled: true},
 		{name: "editor error", handled: true, rebaseErr: wantErr, wantCode: 1},
 		{name: "application success", wantRunCall: true},
@@ -303,9 +307,13 @@ func TestMainExit(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var stderr strings.Builder
+			var stdout, stderr strings.Builder
 			runCalled := false
-			code := mainExit([]string{"arg"}, &stderr,
+			args := tt.args
+			if args == nil {
+				args = []string{"arg"}
+			}
+			code := mainExit(args, &stdout, &stderr,
 				func(args []string) (bool, error) { return tt.handled, tt.rebaseErr },
 				func(args []string) error { runCalled = true; return tt.runErr })
 			if code != tt.wantCode || runCalled != tt.wantRunCall {
@@ -313,6 +321,9 @@ func TestMainExit(t *testing.T) {
 			}
 			if tt.wantCode == 1 && (!strings.Contains(stderr.String(), "lazymagit:") || strings.Contains(stderr.String(), "bad\nerror")) {
 				t.Fatalf("unsafe diagnostic: %q", stderr.String())
+			}
+			if stdout.String() != tt.wantOutput {
+				t.Fatalf("stdout = %q, want %q", stdout.String(), tt.wantOutput)
 			}
 		})
 	}

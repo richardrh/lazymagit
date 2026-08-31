@@ -20,10 +20,14 @@ import (
 const usage = "usage: lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]"
 
 func main() {
-	os.Exit(mainExit(os.Args[1:], os.Stderr, gitbackend.RunRebaseTodoEditor, run))
+	os.Exit(mainExit(os.Args[1:], os.Stdout, os.Stderr, gitbackend.RunRebaseTodoEditor, run))
 }
 
-func mainExit(args []string, stderr io.Writer, rebaseEditor func([]string) (bool, error), appRun func([]string) error) int {
+func mainExit(args []string, stdout, stderr io.Writer, rebaseEditor func([]string) (bool, error), appRun func([]string) error) int {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(stdout, usage)
+		return 0
+	}
 	if handled, err := rebaseEditor(args); handled {
 		if err != nil {
 			fmt.Fprintln(stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
