@@ -166,6 +166,9 @@ func historyUnavailable(reason string) WorkflowHandler {
 }
 
 func selectedHistoryRevision(m *Model) string {
+	if revision := activeInspectionRevision(m); revision != "" {
+		return revision
+	}
 	if current, ok := m.rows[m.tree.Cursor()]; ok && current.kind == rowCommit && current.commit.ID != "" {
 		return current.commit.ID
 	}

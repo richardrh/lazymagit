@@ -98,6 +98,8 @@ func (m *Model) renderCompactStatus(width, height int) string {
 		prefix := "  "
 		if row.kind == rowHeading {
 			prefix = map[bool]string{true: "▸ ", false: "▾ "}[m.tree.IsFolded(id)]
+		} else if m.rowMarked(row) {
+			prefix = "● "
 		}
 		style := lipgloss.NewStyle()
 		switch {
@@ -223,7 +225,11 @@ func (m *Model) renderStatusPanel(width, height int) string {
 				prefix = "  "
 			}
 		} else {
-			prefix = "    "
+			if m.rowMarked(r) {
+				prefix = "  ● "
+			} else {
+				prefix = "    "
+			}
 		}
 		text := truncate(prefix+section.Title(), innerW)
 		style := lipgloss.NewStyle().Width(innerW)
@@ -359,7 +365,7 @@ func (m *Model) pendingFooter(scheme string) string {
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
 	if m.graphActive {
-		return gold.Render("Graph") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
+		return gold.Render("Graph") + muted.Render("  ↑/↓ select  Enter inspect  c cherry-pick  V revert  X reset  Esc close")
 	}
 	if m.revisionActive {
 		controls := "  p first parent  Esc close"
@@ -376,7 +382,7 @@ func (m *Model) statusFooter() string {
 }
 
 func (m *Model) appendOptionalFooter(left string, style lipgloss.Style) string {
-	optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "Ctrl-B Blame", "$ Processes", "Ctrl-G Graph", "? Commands"}
+	optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "Ctrl-B Blame", "$ Processes", "Ctrl-G Graph", "Alt-M Mark", "? Commands"}
 	if m.scheme == schemeMagit {
 		optional = append(optional, "[Magit] F2 Vim", "n/p move")
 	} else {
@@ -445,7 +451,7 @@ func (m *Model) basicOverlayContent(innerW, innerH int) (string, string) {
 	case modeCommit:
 		return " Commit message ", "Create commit\n\n> " + sanitizeSingleLine(m.input) + "█\n\nEnter commit  •  Esc cancel"
 	case modeConfirm:
-		return " Confirm discard ", "Permanently discard changes to:\n\n" + sanitizeSingleLine(m.confirmPath) + "\n\n[y] yes    [n] no"
+		return " Confirm discard ", discardConfirmationText(m.confirmPath, m.confirmPaths)
 	case modeBranches:
 		return " Switch branch ", m.branchOverlayContent(innerW, innerH)
 	case modeAddRemote:
@@ -453,6 +459,17 @@ func (m *Model) basicOverlayContent(innerW, innerH int) (string, string) {
 	default:
 		return "", ""
 	}
+}
+
+func discardConfirmationText(fallback string, paths []string) string {
+	if len(paths) == 0 && fallback != "" {
+		paths = []string{fallback}
+	}
+	lines := make([]string, 0, len(paths))
+	for _, path := range paths {
+		lines = append(lines, "• "+sanitizeSingleLine(path))
+	}
+	return "Permanently discard changes to:\n\n" + strings.Join(lines, "\n") + "\n\n[y] yes    [n] no"
 }
 
 func (m *Model) branchOverlayContent(innerW, innerH int) string {

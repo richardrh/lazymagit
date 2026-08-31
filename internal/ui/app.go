@@ -98,6 +98,7 @@ type branchesMsg struct {
 type graphMsg struct {
 	id      sectionmodel.SectionID
 	request uint64
+	title   string
 	text    string
 	entries map[int]gitbackend.LogEntry
 	err     error
@@ -119,6 +120,11 @@ type graphInspection struct {
 	entries map[int]gitbackend.LogEntry
 	cursor  int
 	offset  int
+}
+
+type fileMark struct {
+	kind rowKind
+	path string
 }
 
 // Model is the Bubble Tea application model.
@@ -147,6 +153,7 @@ type Model struct {
 	branches              []gitbackend.Branch
 	branchCursor          int
 	confirmPath           string
+	confirmPaths          []string
 	detailRequest         uint64
 	branchRequest         uint64
 	stateGeneration       uint64
@@ -159,6 +166,7 @@ type Model struct {
 	detailRangeEnd        int
 	detailSelectedHunks   map[int]bool
 	detailSelections      []gitbackend.InteractiveChangeSelection
+	markedFiles           map[fileMark]bool
 	inspectionActive      bool
 	graphActive           bool
 	graphCursor           int
@@ -229,6 +237,7 @@ func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 			"status/untracked": true, "status/stashes": true, "status/unpulled": true, "status/recent": true,
 		},
 		transientOptions: make(map[keymap.CommandID]OptionValue),
+		markedFiles:      make(map[fileMark]bool),
 	}
 	if repo != nil {
 		m.showCommit = repo.ShowCommit
@@ -491,12 +500,20 @@ func (m *Model) handleGraphMsg(msg graphMsg) tea.Cmd {
 		return nil
 	}
 	m.cancelDetail()
-	m.detailID, m.detail = msg.id, sanitizeDiff("All refs graph\n\n"+msg.text)
+	title := msg.title
+	if title == "" {
+		title = "History"
+	}
+	m.detailID, m.detail = msg.id, sanitizeDiff(title+"\n\n"+msg.text)
 	m.detailOffset, m.graphEntries, m.graphActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
 	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.graphCursor = -1
 	if msg.err != nil {
-		m.detail = "Unable to load graph:\n" + sanitizeSingleLine(msg.err.Error())
+		failure := "Unable to load history:\n"
+		if msg.title == "" || msg.title == "All refs graph" {
+			failure = "Unable to load graph:\n"
+		}
+		m.detail = failure + sanitizeSingleLine(msg.err.Error())
 		m.graphEntries = nil
 	} else {
 		for line := range msg.entries {
@@ -605,14 +622,19 @@ func (m *Model) routeProcessKey(msg tea.KeyPressMsg, key string) tea.Cmd {
 
 func (m *Model) handleConfirmKey(key string) tea.Cmd {
 	if key == "y" || key == "Y" {
-		path := m.confirmPath
+		paths := append([]string(nil), m.confirmPaths...)
+		if len(paths) == 0 && m.confirmPath != "" {
+			paths = []string{m.confirmPath}
+		}
 		m.setMode(modeStatus)
 		m.confirmPath = ""
-		return m.startOperation("discard", func(ctx context.Context) error { return m.repo.Discard(ctx, []string{path}) })
+		m.confirmPaths = nil
+		return m.startOperation(fileOperationName("discard", paths), func(ctx context.Context) error { return m.repo.Discard(ctx, paths) })
 	}
 	if key == "n" || key == "N" || key == "q" || key == "esc" {
 		m.setMode(modeStatus)
 		m.confirmPath = ""
+		m.confirmPaths = nil
 		m.setMessage("Discard cancelled")
 		return m.loadDetailCmd()
 	}
@@ -846,6 +868,10 @@ func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd
 		return nil, true
 	}
 	if m.handlePatchHunkSelectionKey(key) || m.handlePatchRangeKey(key) {
+		m.cancelPrefix()
+		return nil, true
+	}
+	if key == "alt+m" && m.toggleFileMark() {
 		m.cancelPrefix()
 		return nil, true
 	}
@@ -1320,12 +1346,12 @@ func (m *Model) performDisplayCommand(command keymap.CommandID) (tea.Cmd, bool) 
 func (m *Model) performChangeCommand(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandStage:
-		if r, ok := m.selectedFile(rowUnstaged, rowUntracked); ok && m.canOperate() {
-			return m.startOperation("stage", func(ctx context.Context) error { return m.repo.Stage(ctx, []string{r.path}) }), true
+		if paths := m.fileOperationPaths(rowUnstaged, rowUntracked); len(paths) > 0 && m.canOperate() {
+			return m.startOperation(fileOperationName("stage", paths), func(ctx context.Context) error { return m.repo.Stage(ctx, paths) }), true
 		}
 	case keymap.CommandUnstage:
-		if r, ok := m.selectedFile(rowStaged); ok && m.canOperate() {
-			return m.startOperation("unstage", func(ctx context.Context) error { return m.repo.Unstage(ctx, []string{r.path}) }), true
+		if paths := m.fileOperationPaths(rowStaged); len(paths) > 0 && m.canOperate() {
+			return m.startOperation(fileOperationName("unstage", paths), func(ctx context.Context) error { return m.repo.Unstage(ctx, paths) }), true
 		}
 	case keymap.CommandStageAll:
 		if m.canOperate() {
@@ -1440,9 +1466,10 @@ func (m *Model) performPush() tea.Cmd {
 }
 
 func (m *Model) beginDiscard(kinds ...rowKind) {
-	if r, ok := m.selectedFile(kinds...); ok && m.canOperate() {
+	if paths := m.fileOperationPaths(kinds...); len(paths) > 0 && m.canOperate() {
 		m.setMode(modeConfirm)
-		m.confirmPath = r.path
+		m.confirmPaths = paths
+		m.confirmPath = paths[0]
 	}
 }
 
@@ -1523,6 +1550,7 @@ func (m *Model) install(s snapshot) {
 	m.snapshot = s
 	roots, rows := project(s)
 	m.rows = rows
+	m.pruneFileMarks()
 	m.tree.ReplaceSections(roots)
 	for id, folded := range m.foldPreferences {
 		if m.tree.Section(id) != nil && m.tree.IsFolded(id) != folded {

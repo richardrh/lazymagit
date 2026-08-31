@@ -184,10 +184,23 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 }
 
 func selectedInspectRevision(m *Model) string {
+	if revision := activeInspectionRevision(m); revision != "" {
+		return revision
+	}
 	if row, ok := m.rows[m.tree.Cursor()]; ok && row.kind == rowCommit && row.commit.ID != "" {
 		return row.commit.ID
 	}
 	return "HEAD"
+}
+
+func activeInspectionRevision(m *Model) string {
+	if m.graphActive {
+		return m.graphEntries[m.graphCursor].ID
+	}
+	if m.revisionActive {
+		return m.revisionID
+	}
+	return ""
 }
 
 func selectedInspectPath(m *Model) []string {
@@ -301,10 +314,10 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 // decorations in the pageable terminal detail pane.
 func inspectGraph(m *Model, _ WorkflowCommand) tea.Cmd {
 	query := gitbackend.LogQuery{All: true, Graph: true, Decorations: true, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
-	return loadGraphInspection(m, query)
+	return loadGraphInspection(m, "All refs graph", query)
 }
 
-func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
+func loadGraphInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
 	if !m.canOperate() {
 		return nil
 	}
@@ -314,17 +327,18 @@ func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
-	m.detailID, m.detail = id, "Loading all refs graph…"
-	m.setMessage("Loading all refs graph…")
+	title = sanitizeSingleLine(title)
+	m.detailID, m.detail = id, "Loading "+title+"…"
+	m.setMessage("Loading " + title + "…")
 	ctx, cancel := context.WithCancel(m.appCtx)
 	m.detailCtx, m.detailCancel = ctx, cancel
 	return func() tea.Msg {
 		result, err := m.repo.QueryLog(ctx, query)
 		if err != nil {
-			return graphMsg{id: id, request: request, err: err}
+			return graphMsg{id: id, request: request, title: title, err: err}
 		}
 		text, entries := graphResultText(result)
-		return graphMsg{id: id, request: request, text: text, entries: entries}
+		return graphMsg{id: id, request: request, title: title, text: text, entries: entries}
 	}
 }
 
@@ -371,7 +385,7 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 	}
 	m.graphCursor = lines[index]
 	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects")
+	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects, c cherry-picks, V reverts, X resets")
 	return nil, true
 }
 
@@ -555,13 +569,7 @@ func logEntryText(item gitbackend.LogEntry) string {
 }
 
 func runLogInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
-	return loadInspection(m, title, func(ctx context.Context) (string, error) {
-		result, err := m.repo.QueryLog(ctx, query)
-		if err != nil {
-			return "", err
-		}
-		return logResultText(result), nil
-	})
+	return loadGraphInspection(m, title, query)
 }
 
 func inspectLogCurrent(m *Model, command WorkflowCommand) tea.Cmd {
