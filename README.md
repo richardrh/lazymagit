@@ -7,6 +7,16 @@ prefixes with an optional Vim navigation layer.
 ![Go](https://img.shields.io/badge/Go-1.25+-00ADD8)
 ![TUI](https://img.shields.io/badge/TUI-Bubble_Tea_v2-7D56F4)
 
+## Screenshots
+
+### Status and diff
+
+![Lazymagit status view showing staged, unstaged, and untracked files beside a selected diff](docs/images/lazymagit-status.png)
+
+### Command dispatcher
+
+![Lazymagit command dispatcher showing Magit-style transient command groups](docs/images/lazymagit-commands.png)
+
 ## Features
 
 - Porcelain-v2 status parsing with separate staged and unstaged state
