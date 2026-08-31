@@ -114,53 +114,90 @@ func (r *Repository) RemoteConfiguration(ctx context.Context, remote string) (Re
 		return RemoteConfiguration{}, err
 	}
 	var c RemoteConfiguration
-	if v, ok, err := r.configValue(ctx, "remote."+remote+".url"); err != nil {
+	if err := r.loadRemoteURLs(ctx, remote, &c); err != nil {
 		return c, err
-	} else if ok {
+	}
+	if err := r.loadRemoteRefspecs(ctx, remote, &c); err != nil {
+		return c, err
+	}
+	if err := r.loadRemoteOptions(ctx, remote, &c); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+func (r *Repository) loadRemoteURLs(ctx context.Context, remote string, c *RemoteConfiguration) error {
+	v, ok, err := r.configValue(ctx, "remote."+remote+".url")
+	if err != nil {
+		return err
+	}
+	if ok {
 		c.FetchURL = &v
 	}
-	if values, err := r.configValues(ctx, "remote."+remote+".pushurl"); err != nil {
-		return c, err
-	} else if len(values) != 0 {
+	values, err := r.configValues(ctx, "remote."+remote+".pushurl")
+	if err != nil {
+		return err
+	}
+	if len(values) != 0 {
 		v := values[0]
 		c.PushURL = &v
 		c.PushURLConfigured = true
-	} else if c.FetchURL != nil {
+		return nil
+	}
+	if c.FetchURL != nil {
 		v := *c.FetchURL
 		c.PushURL = &v
 	}
+	return nil
+}
+
+func (r *Repository) loadRemoteRefspecs(ctx context.Context, remote string, c *RemoteConfiguration) error {
 	var err error
-	if c.FetchRefspecs, err = r.configValues(ctx, "remote."+remote+".fetch"); err != nil {
-		return c, err
+	c.FetchRefspecs, err = r.configValues(ctx, "remote."+remote+".fetch")
+	if err != nil {
+		return err
 	}
-	if c.PushRefspecs, err = r.configValues(ctx, "remote."+remote+".push"); err != nil {
-		return c, err
+	c.PushRefspecs, err = r.configValues(ctx, "remote."+remote+".push")
+	return err
+}
+
+func (r *Repository) loadRemoteOptions(ctx context.Context, remote string, c *RemoteConfiguration) error {
+	value, ok, err := r.configValue(ctx, "remote."+remote+".tagopt")
+	if err != nil {
+		return err
 	}
-	if v, ok, err := r.configValue(ctx, "remote."+remote+".tagopt"); err != nil {
-		return c, err
-	} else if ok {
-		opt := RemoteTagsDefault
-		switch v {
-		case "--tags":
-			opt = RemoteTagsAll
-		case "--no-tags":
-			opt = RemoteTagsNone
-		default:
-			return c, fmt.Errorf("unsupported remote tag option %q", v)
+	if ok {
+		c.TagOpt, err = parseRemoteTagOpt(value)
+		if err != nil {
+			return err
 		}
-		c.TagOpt = &opt
 	}
-	if v, ok, err := r.configValue(ctx, "remote."+remote+".followRemoteHEAD"); err != nil {
-		return c, err
-	} else if ok {
-		modes := map[string]RemoteFollowRemoteHEAD{"never": RemoteFollowRemoteHEADNever, "create": RemoteFollowRemoteHEADCreate, "warn": RemoteFollowRemoteHEADWarn, "always": RemoteFollowRemoteHEADAlways}
-		mode, valid := modes[v]
-		if !valid {
-			return c, fmt.Errorf("unsupported remote followRemoteHEAD option %q", v)
-		}
-		c.FollowRemoteHEAD = &mode
+	value, ok, err = r.configValue(ctx, "remote."+remote+".followRemoteHEAD")
+	if err != nil {
+		return err
 	}
-	return c, nil
+	if ok {
+		c.FollowRemoteHEAD, err = parseRemoteFollowRemoteHEAD(value)
+	}
+	return err
+}
+
+func parseRemoteTagOpt(value string) (*RemoteTagOpt, error) {
+	options := map[string]RemoteTagOpt{"--tags": RemoteTagsAll, "--no-tags": RemoteTagsNone}
+	option, ok := options[value]
+	if !ok {
+		return nil, fmt.Errorf("unsupported remote tag option %q", value)
+	}
+	return &option, nil
+}
+
+func parseRemoteFollowRemoteHEAD(value string) (*RemoteFollowRemoteHEAD, error) {
+	modes := map[string]RemoteFollowRemoteHEAD{"never": RemoteFollowRemoteHEADNever, "create": RemoteFollowRemoteHEADCreate, "warn": RemoteFollowRemoteHEADWarn, "always": RemoteFollowRemoteHEADAlways}
+	mode, ok := modes[value]
+	if !ok {
+		return nil, fmt.Errorf("unsupported remote followRemoteHEAD option %q", value)
+	}
+	return &mode, nil
 }
 
 func (r *Repository) configValues(ctx context.Context, key string) ([]string, error) {
@@ -210,11 +247,25 @@ func (r *Repository) validateRemoteConfigurationRequest(ctx context.Context, in 
 	if err := r.validateTransferRemote(ctx, in.Remote); err != nil {
 		return err
 	}
+	if err := validateRemoteURLs(in); err != nil {
+		return err
+	}
+	if err := r.validateRemoteRefspecs(ctx, in); err != nil {
+		return err
+	}
+	return validateRemoteOptions(in)
+}
+
+func validateRemoteURLs(in RemoteConfigArgs) error {
 	for label, value := range map[string]*string{"fetch": in.FetchURL, "push": in.PushURL} {
 		if value != nil && (*value == "" || strings.ContainsAny(*value, "\x00\r\n")) {
 			return fmt.Errorf("%s URL is empty or contains a control character", label)
 		}
 	}
+	return nil
+}
+
+func (r *Repository) validateRemoteRefspecs(ctx context.Context, in RemoteConfigArgs) error {
 	for _, pair := range []struct {
 		values []string
 		fetch  bool
@@ -225,6 +276,10 @@ func (r *Repository) validateRemoteConfigurationRequest(ctx context.Context, in 
 			}
 		}
 	}
+	return nil
+}
+
+func validateRemoteOptions(in RemoteConfigArgs) error {
 	if in.TagOpt != nil && *in.TagOpt != RemoteTagsDefault && *in.TagOpt != RemoteTagsAll && *in.TagOpt != RemoteTagsNone {
 		return errors.New("invalid remote tag option")
 	}
@@ -296,51 +351,58 @@ func remoteConfigurationIdentity(before RemoteConfiguration, in RemoteConfigArgs
 
 func remoteConfigurationChanges(before RemoteConfiguration, in RemoteConfigArgs) []string {
 	var out []string
-	show := func(key, old, next string) {
-		if old != next {
-			out = append(out, key+": "+old+" -> "+next)
+	for _, change := range remoteConfigurationChangeValues(before, in) {
+		if change.old != change.next {
+			out = append(out, change.key+": "+change.old+" -> "+change.next)
 		}
-	}
-	ptr := func(v *string) string {
-		if v == nil {
-			return "<unset>"
-		}
-		return *v
-	}
-	if in.FetchURL != nil {
-		show("remote."+in.Remote+".url", ptr(before.FetchURL), *in.FetchURL)
-	}
-	if in.PushURL != nil {
-		old := ptr(before.PushURL)
-		if !before.PushURLConfigured {
-			old += " (inherited)"
-		}
-		show("remote."+in.Remote+".pushurl", old, *in.PushURL)
-	}
-	if in.FetchRefspecs != nil {
-		show("remote."+in.Remote+".fetch", strings.Join(before.FetchRefspecs, ", "), strings.Join(in.FetchRefspecs, ", "))
-	}
-	if in.PushRefspecs != nil {
-		show("remote."+in.Remote+".push", strings.Join(before.PushRefspecs, ", "), strings.Join(in.PushRefspecs, ", "))
-	}
-	if in.TagOpt != nil {
-		old := "<unset>"
-		if before.TagOpt != nil {
-			old = fmt.Sprint(*before.TagOpt)
-		}
-		show("remote."+in.Remote+".tagopt", old, fmt.Sprint(*in.TagOpt))
-	}
-	if in.FollowRemoteHEAD != nil {
-		old := "<unset>"
-		if before.FollowRemoteHEAD != nil {
-			old = fmt.Sprint(*before.FollowRemoteHEAD)
-		}
-		show("remote."+in.Remote+".followRemoteHEAD", old, fmt.Sprint(*in.FollowRemoteHEAD))
 	}
 	if len(out) == 0 {
 		out = append(out, "No configuration changes")
 	}
 	return out
+}
+
+type remoteConfigurationChange struct{ key, old, next string }
+
+func remoteConfigurationChangeValues(before RemoteConfiguration, in RemoteConfigArgs) []remoteConfigurationChange {
+	prefix := "remote." + in.Remote + "."
+	var changes []remoteConfigurationChange
+	if in.FetchURL != nil {
+		changes = append(changes, remoteConfigurationChange{prefix + "url", stringPointerValue(before.FetchURL), *in.FetchURL})
+	}
+	if in.PushURL != nil {
+		old := stringPointerValue(before.PushURL)
+		if !before.PushURLConfigured {
+			old += " (inherited)"
+		}
+		changes = append(changes, remoteConfigurationChange{prefix + "pushurl", old, *in.PushURL})
+	}
+	if in.FetchRefspecs != nil {
+		changes = append(changes, remoteConfigurationChange{prefix + "fetch", strings.Join(before.FetchRefspecs, ", "), strings.Join(in.FetchRefspecs, ", ")})
+	}
+	if in.PushRefspecs != nil {
+		changes = append(changes, remoteConfigurationChange{prefix + "push", strings.Join(before.PushRefspecs, ", "), strings.Join(in.PushRefspecs, ", ")})
+	}
+	if in.TagOpt != nil {
+		changes = append(changes, remoteConfigurationChange{prefix + "tagopt", printablePointer(before.TagOpt), fmt.Sprint(*in.TagOpt)})
+	}
+	if in.FollowRemoteHEAD != nil {
+		changes = append(changes, remoteConfigurationChange{prefix + "followRemoteHEAD", printablePointer(before.FollowRemoteHEAD), fmt.Sprint(*in.FollowRemoteHEAD)})
+	}
+	return changes
+}
+
+func stringPointerValue(value *string) string {
+	if value == nil {
+		return "<unset>"
+	}
+	return *value
+}
+func printablePointer[T any](value *T) string {
+	if value == nil {
+		return "<unset>"
+	}
+	return fmt.Sprint(*value)
 }
 
 type RemoteDefaultBranchPlan struct {

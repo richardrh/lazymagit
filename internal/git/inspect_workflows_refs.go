@@ -297,63 +297,89 @@ type CherryResult struct {
 }
 
 func (r *Repository) QueryCherry(ctx context.Context, q CherryQuery) (CherryResult, error) {
-	if q.Limit < 0 {
-		return CherryResult{}, errors.New("cherry limit cannot be negative")
-	}
-	limit := q.Limit
-	if limit == 0 {
-		limit = 1000
-	}
-	truncated := false
-	if limit > inspectionItemLimit {
-		limit, truncated = inspectionItemLimit, true
+	limit, truncated, err := cherryLimit(q.Limit)
+	if err != nil {
+		return CherryResult{}, err
 	}
 	upstream, err := r.resolveCommitOID(ctx, q.Upstream)
 	if err != nil {
 		return CherryResult{}, fmt.Errorf("resolve cherry upstream: %w", err)
 	}
-	head := q.Head
-	if head == "" {
-		head = "HEAD"
-	}
+	head := defaultCherryHead(q.Head)
 	headOID, err := r.resolveCommitOID(ctx, head)
 	if err != nil {
 		return CherryResult{}, fmt.Errorf("resolve cherry head: %w", err)
 	}
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
-	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return CherryResult{}, fmt.Errorf("cherry output limit must be between 0 and %d", inspectionOutputLimit)
+	byteLimit, err := cherryOutputLimit(q.OutputLimit)
+	if err != nil {
+		return CherryResult{}, err
 	}
 	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, "cherry", "-v", upstream, headOID)
 	if err != nil {
 		return CherryResult{}, err
 	}
-	result := CherryResult{Truncated: truncated || byteTruncated}
+	items, err := parseCherryOutput(out, byteTruncated)
+	if err != nil {
+		return CherryResult{}, err
+	}
+	result := CherryResult{Items: items, Truncated: truncated || byteTruncated}
+	if len(result.Items) > limit {
+		result.Items, result.Truncated = result.Items[:limit], true
+	}
+	return result, nil
+}
+
+func cherryLimit(value int) (int, bool, error) {
+	if value < 0 {
+		return 0, false, errors.New("cherry limit cannot be negative")
+	}
+	if value == 0 {
+		value = 1000
+	}
+	if value > inspectionItemLimit {
+		return inspectionItemLimit, true, nil
+	}
+	return value, false, nil
+}
+
+func defaultCherryHead(head string) string {
+	if head == "" {
+		return "HEAD"
+	}
+	return head
+}
+
+func cherryOutputLimit(value int) (int, error) {
+	if value == 0 {
+		return inspectionOutputLimit, nil
+	}
+	if value < 0 || value > inspectionOutputLimit {
+		return 0, fmt.Errorf("cherry output limit must be between 0 and %d", inspectionOutputLimit)
+	}
+	return value, nil
+}
+
+func parseCherryOutput(out []byte, truncated bool) ([]CherryPatch, error) {
 	lines := bytes.Split(out, []byte{'\n'})
-	if byteTruncated && len(lines) != 0 {
+	if truncated && len(lines) != 0 {
 		lines = lines[:len(lines)-1]
 	}
+	var items []CherryPatch
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
 		parts := bytes.SplitN(line, []byte{' '}, 3)
 		if len(parts) < 2 || len(parts[0]) != 1 || (parts[0][0] != '+' && parts[0][0] != '-') || !isHexOID(string(parts[1])) {
-			return CherryResult{}, fmt.Errorf("malformed git cherry record %q", line)
+			return nil, fmt.Errorf("malformed git cherry record %q", line)
 		}
 		subject := ""
 		if len(parts) == 3 {
 			subject = string(parts[2])
 		}
-		result.Items = append(result.Items, CherryPatch{Equivalent: parts[0][0] == '-', ID: string(parts[1]), Subject: subject})
+		items = append(items, CherryPatch{Equivalent: parts[0][0] == '-', ID: string(parts[1]), Subject: subject})
 	}
-	if len(result.Items) > limit {
-		result.Items, result.Truncated = result.Items[:limit], true
-	}
-	return result, nil
+	return items, nil
 }
 
 type Revision struct {

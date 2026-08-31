@@ -625,51 +625,76 @@ func shortlogQueryFromCommand(command WorkflowCommand) (gitbackend.ShortlogQuery
 		if !ok {
 			continue
 		}
-		switch binding.UpstreamCommand {
-		case "transient:magit-shortlog:--numbered":
-			query.Numbered = value.Enabled
-		case "transient:magit-shortlog:--summary":
-			query.Summary = value.Enabled
-		case "transient:magit-shortlog:--email":
-			query.Email = value.Enabled
-		case "transient:magit-shortlog:--group=":
-			query.Group = value.Value
-		case "transient:magit-shortlog:--format=":
-			query.Format = value.Value
-		case "transient:magit-shortlog:-w":
-			if value.Value == "" {
-				continue
-			}
-			parts := strings.Split(value.Value, ",")
-			if len(parts) > 3 {
-				return query, errors.New("shortlog wrap accepts width and at most two indents")
-			}
-			if len(parts) > 0 && parts[0] != "" {
-				n, err := strconv.Atoi(parts[0])
-				if err != nil || n <= 0 {
-					return query, errors.New("shortlog width must be a positive integer")
-				}
-				query.WrapWidth = n
-			}
-			if len(parts) > 1 && parts[1] != "" {
-				n, err := strconv.Atoi(parts[1])
-				if err != nil || n < 0 {
-					return query, errors.New("shortlog first indent must be a non-negative integer")
-				}
-				query.WrapIndent1, query.WrapIndent1Set = n, true
-			}
-			if len(parts) > 2 && parts[2] != "" {
-				n, err := strconv.Atoi(parts[2])
-				if err != nil || n < 0 {
-					return query, errors.New("shortlog second indent must be a non-negative integer")
-				}
-				query.WrapIndent2, query.WrapIndent2Set = n, true
-			}
-		default:
-			return query, fmt.Errorf("unsupported shortlog option %s", binding.UpstreamCommand)
+		if err := applyShortlogOption(&query, binding.UpstreamCommand, value); err != nil {
+			return query, err
 		}
 	}
 	return query, nil
+}
+
+func applyShortlogOption(query *gitbackend.ShortlogQuery, upstream string, value OptionValue) error {
+	switch upstream {
+	case "transient:magit-shortlog:--numbered":
+		query.Numbered = value.Enabled
+	case "transient:magit-shortlog:--summary":
+		query.Summary = value.Enabled
+	case "transient:magit-shortlog:--email":
+		query.Email = value.Enabled
+	case "transient:magit-shortlog:--group=":
+		query.Group = value.Value
+	case "transient:magit-shortlog:--format=":
+		query.Format = value.Value
+	case "transient:magit-shortlog:-w":
+		return applyShortlogWrap(query, value.Value)
+	default:
+		return fmt.Errorf("unsupported shortlog option %s", upstream)
+	}
+	return nil
+}
+
+func applyShortlogWrap(query *gitbackend.ShortlogQuery, value string) error {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 3 {
+		return errors.New("shortlog wrap accepts width and at most two indents")
+	}
+	parsers := []func(string) error{
+		func(part string) error { return setShortlogWidth(query, part) },
+		func(part string) error {
+			return setShortlogIndent(&query.WrapIndent1, &query.WrapIndent1Set, "first", part)
+		},
+		func(part string) error {
+			return setShortlogIndent(&query.WrapIndent2, &query.WrapIndent2Set, "second", part)
+		},
+	}
+	for index, part := range parts {
+		if part != "" {
+			if err := parsers[index](part); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setShortlogWidth(query *gitbackend.ShortlogQuery, value string) error {
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return errors.New("shortlog width must be a positive integer")
+	}
+	query.WrapWidth = n
+	return nil
+}
+
+func setShortlogIndent(indent *int, set *bool, name, value string) error {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return fmt.Errorf("shortlog %s indent must be a non-negative integer", name)
+	}
+	*indent, *set = n, true
+	return nil
 }
 
 func runShortlogInspection(m *Model, title string, query gitbackend.ShortlogQuery) tea.Cmd {

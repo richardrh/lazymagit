@@ -208,49 +208,81 @@ func parseCoverprofile(path, root, module string) ([]coverBlock, error) {
 		if line == 1 && strings.HasPrefix(text, "mode:") {
 			continue
 		}
-		fields := strings.Fields(text)
-		if len(fields) != 3 {
-			return nil, fmt.Errorf("coverprofile line %d: malformed entry", line)
-		}
-		colon := strings.LastIndex(fields[0], ":")
-		if colon < 0 {
-			return nil, fmt.Errorf("coverprofile line %d: missing position", line)
-		}
-		positions := strings.Split(fields[0][colon+1:], ",")
-		if len(positions) != 2 {
-			return nil, fmt.Errorf("coverprofile line %d: malformed position", line)
-		}
-		start, err := parsePosition(positions[0])
+		block, err := parseCoverLine(text, root, module)
 		if err != nil {
 			return nil, fmt.Errorf("coverprofile line %d: %w", line, err)
 		}
-		end, err := parsePosition(positions[1])
-		if err != nil {
-			return nil, fmt.Errorf("coverprofile line %d: %w", line, err)
-		}
-		statements, err := strconv.Atoi(fields[1])
-		if err != nil || statements < 0 {
-			return nil, fmt.Errorf("coverprofile line %d: invalid statement count", line)
-		}
-		count, err := strconv.Atoi(fields[2])
-		if err != nil || count < 0 {
-			return nil, fmt.Errorf("coverprofile line %d: invalid execution count", line)
-		}
-		name := filepath.FromSlash(fields[0][:colon])
-		if strings.HasPrefix(filepath.ToSlash(name), module+"/") {
-			name = filepath.FromSlash(strings.TrimPrefix(filepath.ToSlash(name), module+"/"))
-		} else if filepath.IsAbs(name) {
-			name, err = filepath.Rel(root, name)
-			if err != nil {
-				return nil, err
-			}
-		}
-		blocks = append(blocks, coverBlock{filepath.ToSlash(filepath.Clean(name)), start[0], start[1], end[0], end[1], statements, count})
+		blocks = append(blocks, block)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 	return blocks, nil
+}
+
+func parseCoverLine(text, root, module string) (coverBlock, error) {
+	fields := strings.Fields(text)
+	if len(fields) != 3 {
+		return coverBlock{}, errors.New("malformed entry")
+	}
+	colon := strings.LastIndex(fields[0], ":")
+	if colon < 0 {
+		return coverBlock{}, errors.New("missing position")
+	}
+	start, end, err := parsePositions(fields[0][colon+1:])
+	if err != nil {
+		return coverBlock{}, err
+	}
+	statements, err := parseNonnegative(fields[1], "statement")
+	if err != nil {
+		return coverBlock{}, err
+	}
+	count, err := parseNonnegative(fields[2], "execution")
+	if err != nil {
+		return coverBlock{}, err
+	}
+	name, err := normalizeCoverName(fields[0][:colon], root, module)
+	if err != nil {
+		return coverBlock{}, err
+	}
+	return coverBlock{name, start[0], start[1], end[0], end[1], statements, count}, nil
+}
+
+func parsePositions(value string) ([2]int, [2]int, error) {
+	positions := strings.Split(value, ",")
+	if len(positions) != 2 {
+		return [2]int{}, [2]int{}, errors.New("malformed position")
+	}
+	start, err := parsePosition(positions[0])
+	if err != nil {
+		return [2]int{}, [2]int{}, err
+	}
+	end, err := parsePosition(positions[1])
+	return start, end, err
+}
+
+func parseNonnegative(value, kind string) (int, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("invalid %s count", kind)
+	}
+	return n, nil
+}
+
+func normalizeCoverName(name, root, module string) (string, error) {
+	name = filepath.FromSlash(name)
+	slashName := filepath.ToSlash(name)
+	if strings.HasPrefix(slashName, module+"/") {
+		name = filepath.FromSlash(strings.TrimPrefix(slashName, module+"/"))
+	}
+	if filepath.IsAbs(name) {
+		var err error
+		name, err = filepath.Rel(root, name)
+		if err != nil {
+			return "", err
+		}
+	}
+	return filepath.ToSlash(filepath.Clean(name)), nil
 }
 
 func parsePosition(value string) ([2]int, error) {

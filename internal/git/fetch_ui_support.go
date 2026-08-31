@@ -117,33 +117,47 @@ func appendFetchUIOptions(args []string, in FetchArgs) ([]string, error) {
 	if in.Prune {
 		args = append(args, "--prune")
 	}
-	switch in.Tags {
+	args, err := appendFetchTags(args, in.Tags)
+	if err != nil {
+		return nil, err
+	}
+	for _, option := range []struct {
+		set  bool
+		flag string
+	}{{in.Unshallow, "--unshallow"}, {in.Force, "--force"}} {
+		if option.set {
+			args = append(args, option.flag)
+		}
+	}
+	return appendFetchSubmodules(args, in.RecurseSubmodules)
+}
+
+func appendFetchTags(args []string, tags FetchTags) ([]string, error) {
+	switch tags {
 	case FetchTagsDefault:
+		return args, nil
 	case FetchAllTags:
-		args = append(args, "--tags")
+		return append(args, "--tags"), nil
 	case FetchNoTags:
-		args = append(args, "--no-tags")
+		return append(args, "--no-tags"), nil
 	default:
 		return nil, errors.New("invalid fetch tags mode")
 	}
-	if in.Unshallow {
-		args = append(args, "--unshallow")
-	}
-	if in.Force {
-		args = append(args, "--force")
-	}
-	switch in.RecurseSubmodules {
+}
+
+func appendFetchSubmodules(args []string, recurse SubmoduleRecursion) ([]string, error) {
+	switch recurse {
 	case SubmodulesDefault:
+		return args, nil
 	case SubmodulesOnDemand:
-		args = append(args, "--recurse-submodules=on-demand")
+		return append(args, "--recurse-submodules=on-demand"), nil
 	case SubmodulesYes:
-		args = append(args, "--recurse-submodules=yes")
+		return append(args, "--recurse-submodules=yes"), nil
 	case SubmodulesNo:
-		args = append(args, "--recurse-submodules=no")
+		return append(args, "--recurse-submodules=no"), nil
 	default:
 		return nil, errors.New("invalid submodule recursion mode")
 	}
-	return args, nil
 }
 
 // FetchAllWithArgs applies options to Git's configured --all operation.

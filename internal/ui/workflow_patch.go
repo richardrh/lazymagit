@@ -310,18 +310,41 @@ func amOptions(options map[keymap.CommandID]OptionValue) (gitbackend.AMOptions, 
 		if !belongs {
 			continue
 		}
-		switch upstream {
-		case "transient:magit-am:--3way":
-			out.ThreeWay = true
-		case "transient:magit-am:--scissors":
-			out.Scissors = true
-		case "magit:--signoff":
-			out.Signoff = true
-		default:
-			return out, fmt.Errorf("%s is unavailable: the patch backend does not safely support this option", upstream)
+		if err := applyAMOption(&out, upstream); err != nil {
+			return out, err
 		}
 	}
 	return out, nil
+}
+
+func applyAMOption(out *gitbackend.AMOptions, upstream string) error {
+	flags := map[string]*bool{
+		"transient:magit-am:--3way":     &out.ThreeWay,
+		"transient:magit-am:--scissors": &out.Scissors,
+		"magit:--signoff":               &out.Signoff,
+	}
+	flag, ok := flags[upstream]
+	if !ok {
+		return fmt.Errorf("%s is unavailable: the patch backend does not safely support this option", upstream)
+	}
+	*flag = true
+	return nil
+}
+
+type formatPatchOptionSetter func(*gitbackend.FormatPatchOptions, OptionValue) error
+
+var formatPatchOptionSetters = map[string]formatPatchOptionSetter{
+	"magit-format-patch:--in-reply-to":            setFormatPatchInReplyTo,
+	"magit-format-patch:--thread":                 setFormatPatchThread,
+	"magit-format-patch:--from":                   setFormatPatchFrom,
+	"magit-format-patch:--to":                     setFormatPatchTo,
+	"magit-format-patch:--cc":                     setFormatPatchCc,
+	"magit-format-patch:--base":                   setFormatPatchBase,
+	"magit-format-patch:--reroll-count":           setFormatPatchRerollCount,
+	"magit-format-patch:--subject-prefix":         setFormatPatchSubjectPrefix,
+	"transient:magit-patch-create:--rfc":          setFormatPatchRFC,
+	"transient:magit-patch-create:--cover-letter": setFormatPatchCoverLetter,
+	"magit-format-patch:--output-directory":       setFormatPatchOutputDirectory,
 }
 
 func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.FormatPatchOptions, error) {
@@ -334,65 +357,101 @@ func formatPatchOptions(values map[keymap.CommandID]OptionValue) (gitbackend.For
 		if !belongs {
 			continue
 		}
-		switch upstream {
-		case "magit-format-patch:--in-reply-to":
-			if err := patchMessageID(value.Value); err != nil {
-				return out, err
-			}
-			out.InReplyTo = value.Value
-		case "magit-format-patch:--thread":
-			style, err := patchThreadStyle(value.Value)
-			if err != nil {
-				return out, err
-			}
-			out.Thread, out.ThreadStyle = true, style
-		case "magit-format-patch:--from":
-			if err := patchMailAddress("From identity", value.Value, false); err != nil {
-				return out, err
-			}
-			out.From = value.Value
-		case "magit-format-patch:--to":
-			addresses, err := patchAddresses("To recipients", value.Value)
-			if err != nil {
-				return out, err
-			}
-			out.To = addresses
-		case "magit-format-patch:--cc":
-			addresses, err := patchAddresses("Cc recipients", value.Value)
-			if err != nil {
-				return out, err
-			}
-			out.Cc = addresses
-		case "magit-format-patch:--base":
-			if err := validBoundedText("base commit", value.Value); err != nil {
-				return out, err
-			}
-			out.Base = value.Value
-		case "magit-format-patch:--reroll-count":
-			count, err := patchNonNegative("reroll count", value.Value)
-			if err != nil {
-				return out, err
-			}
-			out.RerollCount = count
-		case "magit-format-patch:--subject-prefix":
-			if err := patchHeader("subject prefix", value.Value, false); err != nil {
-				return out, err
-			}
-			out.SubjectPrefix = value.Value
-		case "transient:magit-patch-create:--rfc":
-			out.RFC = value.Enabled
-		case "transient:magit-patch-create:--cover-letter":
-			out.CoverLetter = value.Enabled
-		case "magit-format-patch:--output-directory":
-			if err := validPatchPath(value.Value); err != nil {
-				return out, err
-			}
-			out.OutputDirectory = value.Value
-		default:
+		setter, ok := formatPatchOptionSetters[upstream]
+		if !ok {
 			return out, fmt.Errorf("%s is unavailable: the format-patch backend does not safely support this option", upstream)
+		}
+		if err := setter(&out, value); err != nil {
+			return out, err
 		}
 	}
 	return out, nil
+}
+
+func setFormatPatchInReplyTo(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	if err := patchMessageID(value.Value); err != nil {
+		return err
+	}
+	out.InReplyTo = value.Value
+	return nil
+}
+
+func setFormatPatchThread(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	style, err := patchThreadStyle(value.Value)
+	if err != nil {
+		return err
+	}
+	out.Thread, out.ThreadStyle = true, style
+	return nil
+}
+
+func setFormatPatchFrom(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	if err := patchMailAddress("From identity", value.Value, false); err != nil {
+		return err
+	}
+	out.From = value.Value
+	return nil
+}
+
+func setFormatPatchTo(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	addresses, err := patchAddresses("To recipients", value.Value)
+	if err != nil {
+		return err
+	}
+	out.To = addresses
+	return nil
+}
+
+func setFormatPatchCc(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	addresses, err := patchAddresses("Cc recipients", value.Value)
+	if err != nil {
+		return err
+	}
+	out.Cc = addresses
+	return nil
+}
+
+func setFormatPatchBase(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	if err := validBoundedText("base commit", value.Value); err != nil {
+		return err
+	}
+	out.Base = value.Value
+	return nil
+}
+
+func setFormatPatchRerollCount(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	count, err := patchNonNegative("reroll count", value.Value)
+	if err != nil {
+		return err
+	}
+	out.RerollCount = count
+	return nil
+}
+
+func setFormatPatchSubjectPrefix(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	if err := patchHeader("subject prefix", value.Value, false); err != nil {
+		return err
+	}
+	out.SubjectPrefix = value.Value
+	return nil
+}
+
+func setFormatPatchRFC(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	out.RFC = value.Enabled
+	return nil
+}
+
+func setFormatPatchCoverLetter(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	out.CoverLetter = value.Enabled
+	return nil
+}
+
+func setFormatPatchOutputDirectory(out *gitbackend.FormatPatchOptions, value OptionValue) error {
+	if err := validPatchPath(value.Value); err != nil {
+		return err
+	}
+	out.OutputDirectory = value.Value
+	return nil
 }
 
 func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values WorkflowValues) (gitbackend.FormatPatchOptions, error) {

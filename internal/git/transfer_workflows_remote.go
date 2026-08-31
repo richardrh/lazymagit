@@ -27,75 +27,121 @@ func (r *Repository) RemoteChangePreflight(ctx context.Context, remote string) (
 		return RemoteChangePreflight{}, err
 	}
 	p := RemoteChangePreflight{Remote: remote, RequiresConfirmation: true}
-	if value, ok, err := r.configValue(ctx, "remote.pushDefault"); err != nil {
+	if err := r.loadRemotePushUses(ctx, &p); err != nil {
 		return p, err
-	} else {
-		p.UsesRemotePushDefault = ok && value == remote
 	}
+	if err := r.loadRemoteBranchUses(ctx, &p); err != nil {
+		return p, err
+	}
+	if err := r.loadRemoteConfigurationSnapshot(ctx, &p); err != nil {
+		return p, err
+	}
+	if err := r.loadRemoteTrackingRefs(ctx, &p); err != nil {
+		return p, err
+	}
+	sortRemotePreflight(&p)
+	return p, nil
+}
+
+func (r *Repository) loadRemotePushUses(ctx context.Context, p *RemoteChangePreflight) error {
+	value, ok, err := r.configValue(ctx, "remote.pushDefault")
+	if err != nil {
+		return err
+	}
+	p.UsesRemotePushDefault = ok && value == p.Remote
 	keys, err := r.branchPushRemoteKeys(ctx)
 	if err != nil {
-		return p, err
+		return err
 	}
 	for _, key := range keys {
 		if value, ok, err := r.configValue(ctx, key); err != nil {
-			return p, err
-		} else if ok && value == remote {
+			return err
+		} else if ok && value == p.Remote {
 			name := strings.TrimSuffix(strings.TrimPrefix(key, "branch."), ".pushRemote")
 			p.BranchPushRemotes = append(p.BranchPushRemotes, name)
 		}
 	}
+	return nil
+}
+
+func (r *Repository) loadRemoteBranchUses(ctx context.Context, p *RemoteChangePreflight) error {
 	branchKeys, err := r.configValuesMatching(ctx, `^branch\..*\.(remote|merge)$`)
 	if err != nil {
-		return p, err
+		return err
 	}
 	for _, entry := range branchKeys {
 		key, value, _ := strings.Cut(entry, "\x00")
-		if strings.HasSuffix(key, ".remote") && value == remote {
+		if strings.HasSuffix(key, ".remote") && value == p.Remote {
 			p.BranchRemotes = append(p.BranchRemotes, strings.TrimSuffix(strings.TrimPrefix(key, "branch."), ".remote"))
 		}
 	}
-	for _, entry := range branchKeys {
+	p.BranchMerges = linkedBranchMerges(branchKeys, p.BranchRemotes)
+	return nil
+}
+
+func linkedBranchMerges(entries, linked []string) []string {
+	set := make(map[string]bool, len(linked))
+	for _, branch := range linked {
+		set[branch] = true
+	}
+	var merges []string
+	for _, entry := range entries {
 		key, value, _ := strings.Cut(entry, "\x00")
-		if !strings.HasSuffix(key, ".merge") {
-			continue
-		}
 		branch := strings.TrimSuffix(strings.TrimPrefix(key, "branch."), ".merge")
-		for _, linked := range p.BranchRemotes {
-			if linked == branch {
-				p.BranchMerges = append(p.BranchMerges, branch+"="+value)
-			}
+		if strings.HasSuffix(key, ".merge") && set[branch] {
+			merges = append(merges, branch+"="+value)
 		}
 	}
-	p.RemoteConfig, err = r.configValuesMatching(ctx, `^remote\.`+regexp.QuoteMeta(remote)+`\.`)
+	return merges
+}
+
+func (r *Repository) loadRemoteConfigurationSnapshot(ctx context.Context, p *RemoteChangePreflight) error {
+	values, err := r.configValuesMatching(ctx, `^remote\.`+regexp.QuoteMeta(p.Remote)+`\.`)
+	p.RemoteConfig = values
+	return err
+}
+
+func (r *Repository) loadRemoteTrackingRefs(ctx context.Context, p *RemoteChangePreflight) error {
+	out, err := r.output(ctx, "for-each-ref", "--format=%(refname)", "refs/remotes/"+p.Remote)
 	if err != nil {
-		return p, err
-	}
-	out, err := r.output(ctx, "for-each-ref", "--format=%(refname)", "refs/remotes/"+remote)
-	if err != nil {
-		return p, err
+		return err
 	}
 	for _, ref := range strings.Split(trimLine(out), "\n") {
-		if ref != "" {
-			p.TrackingRefs = append(p.TrackingRefs, ref)
-			oid, resolveErr := r.output(ctx, "rev-parse", "--verify", ref)
-			if resolveErr != nil {
-				return p, resolveErr
-			}
-			p.TrackingRefOIDs = append(p.TrackingRefOIDs, ref+"="+trimLine(oid))
-			if target, symbolErr := r.output(ctx, "symbolic-ref", "-q", ref); symbolErr == nil {
-				p.TrackingRefSymbols = append(p.TrackingRefSymbols, ref+"="+trimLine(target))
-			} else if commandExitCode(symbolErr) != 1 {
-				return p, symbolErr
-			}
+		if ref == "" {
+			continue
+		}
+		if err := r.loadRemoteTrackingRef(ctx, p, ref); err != nil {
+			return err
 		}
 	}
+	return nil
+}
+
+func (r *Repository) loadRemoteTrackingRef(ctx context.Context, p *RemoteChangePreflight, ref string) error {
+	p.TrackingRefs = append(p.TrackingRefs, ref)
+	oid, err := r.output(ctx, "rev-parse", "--verify", ref)
+	if err != nil {
+		return err
+	}
+	p.TrackingRefOIDs = append(p.TrackingRefOIDs, ref+"="+trimLine(oid))
+	target, err := r.output(ctx, "symbolic-ref", "-q", ref)
+	if err == nil {
+		p.TrackingRefSymbols = append(p.TrackingRefSymbols, ref+"="+trimLine(target))
+		return nil
+	}
+	if commandExitCode(err) != 1 {
+		return err
+	}
+	return nil
+}
+
+func sortRemotePreflight(p *RemoteChangePreflight) {
 	sort.Strings(p.BranchPushRemotes)
 	sort.Strings(p.BranchRemotes)
 	sort.Strings(p.BranchMerges)
 	sort.Strings(p.RemoteConfig)
 	sort.Strings(p.TrackingRefOIDs)
 	sort.Strings(p.TrackingRefSymbols)
-	return p, nil
 }
 
 func (r *Repository) configValuesMatching(ctx context.Context, pattern string) ([]string, error) {
@@ -174,30 +220,32 @@ func (r *Repository) RemoveRemoteWithArgs(ctx context.Context, in RemoveRemoteAr
 	if err := r.run(ctx, "remote", "remove", "--", in.Remote); err != nil {
 		return p, rollback(err)
 	}
-	if p.UsesRemotePushDefault {
-		_, stillSet, err := r.configValue(ctx, "remote.pushDefault")
-		if err != nil {
-			return p, rollback(err)
-		}
-		if stillSet {
-			if err := r.run(ctx, "config", "--unset-all", "remote.pushDefault"); err != nil {
-				return p, rollback(err)
-			}
-		}
-	}
-	for _, branch := range p.BranchPushRemotes {
-		key := "branch." + branch + ".pushRemote"
-		_, stillSet, err := r.configValue(ctx, key)
-		if err != nil {
-			return p, rollback(err)
-		}
-		if stillSet {
-			if err := r.run(ctx, "config", "--unset-all", key); err != nil {
-				return p, rollback(err)
-			}
-		}
+	if err := r.removeResidualPushRemoteConfig(ctx, p); err != nil {
+		return p, rollback(err)
 	}
 	return p, nil
+}
+
+func (r *Repository) removeResidualPushRemoteConfig(ctx context.Context, p RemoteChangePreflight) error {
+	var keys []string
+	if p.UsesRemotePushDefault {
+		keys = append(keys, "remote.pushDefault")
+	}
+	for _, branch := range p.BranchPushRemotes {
+		keys = append(keys, "branch."+branch+".pushRemote")
+	}
+	for _, key := range keys {
+		_, set, err := r.configValue(ctx, key)
+		if err != nil {
+			return err
+		}
+		if set {
+			if err := r.run(ctx, "config", "--unset-all", key); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *Repository) rollbackRemoteChange(ctx context.Context, cause error, configPath string, configBefore []byte, configExisted bool, before RemoteChangePreflight, newName string) error {

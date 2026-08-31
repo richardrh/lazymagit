@@ -72,6 +72,17 @@ func (r *Repository) RevertStart(ctx context.Context, commits []string, opts Pic
 }
 
 func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisions []string, opts PickOptions) error {
+	if err := validateHistoryApply(verb, revisions, opts); err != nil {
+		return err
+	}
+	oids, err := r.resolveHistoryApplyRevisions(ctx, verb, revisions)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, historyApplyArgs(verb, oids, opts)...)
+}
+
+func validateHistoryApply(verb string, revisions []string, opts PickOptions) error {
 	if verb != "cherry-pick" && (opts.FastForward || opts.RecordOrigin) {
 		return fmt.Errorf("%s does not support cherry-pick fast-forward or origin recording", verb)
 	}
@@ -81,17 +92,22 @@ func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisio
 	if opts.Mainline < 0 {
 		return errors.New(verb + ": mainline must be positive")
 	}
-	if err := validateHistoryStrategy(opts.Strategy); err != nil {
-		return err
-	}
+	return validateHistoryStrategy(opts.Strategy)
+}
+
+func (r *Repository) resolveHistoryApplyRevisions(ctx context.Context, verb string, revisions []string) ([]string, error) {
 	oids := make([]string, len(revisions))
 	for i, revision := range revisions {
 		oid, err := r.resolveHistoryCommit(ctx, revision)
 		if err != nil {
-			return fmt.Errorf("%s commit %d: %w", verb, i+1, err)
+			return nil, fmt.Errorf("%s commit %d: %w", verb, i+1, err)
 		}
 		oids[i] = oid
 	}
+	return oids, nil
+}
+
+func historyApplyArgs(verb string, oids []string, opts PickOptions) []string {
 	args := []string{verb}
 	if opts.NoCommit {
 		args = append(args, "--no-commit")
@@ -120,7 +136,7 @@ func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisio
 	}
 	args = append(args, "--")
 	args = append(args, oids...)
-	return r.run(ctx, args...)
+	return args
 }
 
 func validateHistoryStrategy(strategy string) error {
@@ -299,13 +315,7 @@ func (r *Repository) DefaultRebaseTodo(ctx context.Context, upstream string) (st
 // editor callback; this uses only lazymagit's sealed, one-shot helper rather
 // than an external editor or a user-controlled shell command.
 func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) error {
-	if strings.TrimSpace(opts.Upstream) == "" {
-		return errors.New("rebase upstream is empty")
-	}
-	if opts.RebaseMerges {
-		return errors.New("interactive todo editor does not support merge topology commands")
-	}
-	if err := validateHistoryStrategy(opts.Strategy); err != nil {
+	if err := validateInteractiveRebaseOptions(opts); err != nil {
 		return err
 	}
 	upstream, err := r.resolveHistoryCommit(ctx, opts.Upstream)
@@ -325,6 +335,28 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 		return err
 	}
 	defer cleanup()
+	args := interactiveRebaseArgs(opts)
+	args, err = r.appendInteractiveRebaseOnto(ctx, args, opts.Onto)
+	if err != nil {
+		return err
+	}
+	args = append(args, "--", upstream)
+	ctx = context.WithValue(ctx, gitSequenceEditorKey{}, editor)
+	ctx = context.WithValue(ctx, gitExtraEnvKey{}, extraEnv)
+	return r.run(ctx, args...)
+}
+
+func validateInteractiveRebaseOptions(opts RebaseOptions) error {
+	if strings.TrimSpace(opts.Upstream) == "" {
+		return errors.New("rebase upstream is empty")
+	}
+	if opts.RebaseMerges {
+		return errors.New("interactive todo editor does not support merge topology commands")
+	}
+	return validateHistoryStrategy(opts.Strategy)
+}
+
+func interactiveRebaseArgs(opts RebaseOptions) []string {
 	args := []string{"rebase", "--interactive"}
 	if opts.KeepEmpty {
 		args = append(args, "--keep-empty")
@@ -335,6 +367,10 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 	if opts.Autostash {
 		args = append(args, "--autostash")
 	}
+	return appendInteractiveRebaseExtraArgs(args, opts)
+}
+
+func appendInteractiveRebaseExtraArgs(args []string, opts RebaseOptions) []string {
 	if opts.ForceRebase {
 		args = append(args, "--force-rebase")
 	}
@@ -344,17 +380,18 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 	if opts.Signoff {
 		args = append(args, "--signoff")
 	}
-	if opts.Onto != "" {
-		onto, e := r.resolveHistoryCommit(ctx, opts.Onto)
-		if e != nil {
-			return fmt.Errorf("rebase onto: %w", e)
-		}
-		args = append(args, "--onto", onto)
+	return args
+}
+
+func (r *Repository) appendInteractiveRebaseOnto(ctx context.Context, args []string, onto string) ([]string, error) {
+	if onto == "" {
+		return args, nil
 	}
-	args = append(args, "--", upstream)
-	ctx = context.WithValue(ctx, gitSequenceEditorKey{}, editor)
-	ctx = context.WithValue(ctx, gitExtraEnvKey{}, extraEnv)
-	return r.run(ctx, args...)
+	oid, err := r.resolveHistoryCommit(ctx, onto)
+	if err != nil {
+		return nil, fmt.Errorf("rebase onto: %w", err)
+	}
+	return append(args, "--onto", oid), nil
 }
 
 func (r *Repository) rebaseTodoCommits(ctx context.Context, upstream string) ([]string, error) {

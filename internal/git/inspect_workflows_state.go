@@ -43,75 +43,102 @@ func (s OperationState) InProgress() bool { return len(s.Items) != 0 }
 // are intentionally ignored.
 func (r *Repository) QueryOperationState(ctx context.Context) (OperationState, error) {
 	var state OperationState
-	read := func(name string) (string, bool, error) { return r.readGitAdmin(ctx, name, 64<<10) }
-	appendHead := func(name string, kind OperationKind) error {
-		text, ok, err := read(name)
-		if err != nil || !ok {
-			return err
-		}
-		heads, err := parseAdminOIDs(text)
-		if err != nil {
-			return fmt.Errorf("parse %s: %w", name, err)
-		}
-		state.Items = append(state.Items, Operation{Kind: kind, Heads: heads})
-		return nil
-	}
-	if err := appendHead("MERGE_HEAD", OperationMerge); err != nil {
-		return OperationState{}, err
-	}
-	if err := appendHead("CHERRY_PICK_HEAD", OperationCherryPick); err != nil {
-		return OperationState{}, err
-	}
-	if err := appendHead("REVERT_HEAD", OperationRevert); err != nil {
-		return OperationState{}, err
-	}
-
-	// A multi-commit cherry-pick/revert can be between commits and therefore
-	// have no *_HEAD. sequencer/todo remains the stable sentinel.
-	if todo, ok, err := read("sequencer/todo"); err != nil {
-		return OperationState{}, err
-	} else if ok && !hasOperation(state.Items, OperationCherryPick) && !hasOperation(state.Items, OperationRevert) {
-		kind, heads := parseSequencerTodo(todo)
-		if kind != 0 {
-			state.Items = append(state.Items, Operation{Kind: kind, Heads: heads})
+	for _, head := range []struct {
+		name string
+		kind OperationKind
+	}{{"MERGE_HEAD", OperationMerge}, {"CHERRY_PICK_HEAD", OperationCherryPick}, {"REVERT_HEAD", OperationRevert}} {
+		if err := r.appendOperationHead(ctx, &state, head.name, head.kind); err != nil {
+			return OperationState{}, err
 		}
 	}
-
-	if _, ok, err := read("rebase-merge/interactive"); err != nil {
+	if err := r.appendSequencerOperation(ctx, &state); err != nil {
 		return OperationState{}, err
-	} else {
-		if _, exists, e := read("rebase-merge/head-name"); e != nil {
-			return OperationState{}, e
-		} else if exists || ok {
-			op, e := r.rebaseState(ctx, "rebase-merge", false)
-			if e != nil {
-				return OperationState{}, e
-			}
-			state.Items = append(state.Items, op)
-		}
 	}
-	if _, applying, err := read("rebase-apply/applying"); err != nil {
+	if err := r.appendRebaseOperations(ctx, &state); err != nil {
 		return OperationState{}, err
-	} else if _, rebasing, e := read("rebase-apply/rebasing"); e != nil {
-		return OperationState{}, e
-	} else if applying || rebasing {
-		op, e := r.rebaseState(ctx, "rebase-apply", applying)
-		if e != nil {
-			return OperationState{}, e
-		}
-		state.Items = append(state.Items, op)
 	}
-	if start, ok, err := read("BISECT_START"); err != nil {
+	if err := r.appendDetailOperation(ctx, &state, "BISECT_START", OperationBisect); err != nil {
 		return OperationState{}, err
-	} else if ok {
-		state.Items = append(state.Items, Operation{Kind: OperationBisect, Detail: strings.TrimSpace(start)})
 	}
-	if notesRef, ok, err := read("NOTES_MERGE_REF"); err != nil {
+	if err := r.appendDetailOperation(ctx, &state, "NOTES_MERGE_REF", OperationNotesMerge); err != nil {
 		return OperationState{}, err
-	} else if ok {
-		state.Items = append(state.Items, Operation{Kind: OperationNotesMerge, Detail: strings.TrimSpace(notesRef)})
 	}
 	return state, nil
+}
+
+func (r *Repository) appendOperationHead(ctx context.Context, state *OperationState, name string, kind OperationKind) error {
+	text, ok, err := r.readGitAdmin(ctx, name, 64<<10)
+	if err != nil || !ok {
+		return err
+	}
+	heads, err := parseAdminOIDs(text)
+	if err != nil {
+		return fmt.Errorf("parse %s: %w", name, err)
+	}
+	state.Items = append(state.Items, Operation{Kind: kind, Heads: heads})
+	return nil
+}
+
+func (r *Repository) appendSequencerOperation(ctx context.Context, state *OperationState) error {
+	todo, ok, err := r.readGitAdmin(ctx, "sequencer/todo", 64<<10)
+	if err != nil || !ok || hasOperation(state.Items, OperationCherryPick) || hasOperation(state.Items, OperationRevert) {
+		return err
+	}
+	kind, heads := parseSequencerTodo(todo)
+	if kind != 0 {
+		state.Items = append(state.Items, Operation{Kind: kind, Heads: heads})
+	}
+	return nil
+}
+
+func (r *Repository) appendRebaseOperations(ctx context.Context, state *OperationState) error {
+	merge, err := r.rebaseMarker(ctx, "rebase-merge/interactive", "rebase-merge/head-name")
+	if err != nil {
+		return err
+	}
+	if merge {
+		if err := r.appendRebaseOperation(ctx, state, "rebase-merge", false); err != nil {
+			return err
+		}
+	}
+	apply, err := r.rebaseMarker(ctx, "rebase-apply/applying", "rebase-apply/rebasing")
+	if err != nil {
+		return err
+	}
+	if apply {
+		return r.appendRebaseOperation(ctx, state, "rebase-apply", operationMarkerExists(r, ctx, "rebase-apply/applying"))
+	}
+	return nil
+}
+
+func (r *Repository) rebaseMarker(ctx context.Context, first, second string) (bool, error) {
+	_, a, err := r.readGitAdmin(ctx, first, 64<<10)
+	if err != nil {
+		return false, err
+	}
+	_, b, err := r.readGitAdmin(ctx, second, 64<<10)
+	return a || b, err
+}
+
+func operationMarkerExists(r *Repository, ctx context.Context, name string) bool {
+	_, ok, _ := r.readGitAdmin(ctx, name, 64<<10)
+	return ok
+}
+
+func (r *Repository) appendRebaseOperation(ctx context.Context, state *OperationState, dir string, applying bool) error {
+	op, err := r.rebaseState(ctx, dir, applying)
+	if err == nil {
+		state.Items = append(state.Items, op)
+	}
+	return err
+}
+
+func (r *Repository) appendDetailOperation(ctx context.Context, state *OperationState, name string, kind OperationKind) error {
+	detail, ok, err := r.readGitAdmin(ctx, name, 64<<10)
+	if err == nil && ok {
+		state.Items = append(state.Items, Operation{Kind: kind, Detail: strings.TrimSpace(detail)})
+	}
+	return err
 }
 
 func hasOperation(items []Operation, kind OperationKind) bool {

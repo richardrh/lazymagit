@@ -158,15 +158,19 @@ func (r *Repository) executeReviewedBisectUIAction(ctx context.Context, q Histor
 	case HistoryUIBisectBad:
 		return true, r.BisectBad(ctx, q.Revision)
 	case HistoryUIBisectSkip:
-		if q.Revision == "" {
-			return true, r.BisectSkip(ctx)
-		}
-		return true, r.BisectSkip(ctx, q.Revision)
+		return true, r.executeBisectSkip(ctx, q.Revision)
 	case HistoryUIBisectReset:
 		return true, r.BisectReset(ctx)
 	default:
 		return false, nil
 	}
+}
+
+func (r *Repository) executeBisectSkip(ctx context.Context, revision string) error {
+	if revision == "" {
+		return r.BisectSkip(ctx)
+	}
+	return r.BisectSkip(ctx, revision)
 }
 
 func (r *Repository) canonicalHistoryUIRequest(ctx context.Context, q HistoryUIRequest) (HistoryUIRequest, []string, error) {
@@ -510,77 +514,22 @@ func historyUIRequestIdentity(q HistoryUIRequest) string {
 }
 
 func (r *Repository) historyUIState(ctx context.Context) (HistoryUIState, error) {
-	head := "(unborn)"
-	if out, err := r.output(ctx, "rev-parse", "--verify", "HEAD"); err == nil {
-		head = trimLine(out)
-	}
-	index, truncated, err := r.outputLimited(ctx, 32<<20, "ls-files", "--stage", "-z")
+	head := r.historyUIHead(ctx)
+	index, err := r.historyUIOutput(ctx, "reviewed index", "ls-files", "--stage", "-z")
 	if err != nil {
 		return HistoryUIState{}, err
 	}
-	if truncated {
-		return HistoryUIState{}, &TooLargeError{Resource: "reviewed index"}
-	}
-	status, truncated, err := r.outputLimited(ctx, 32<<20, "status", "--porcelain=v2", "-z", "--untracked-files=all")
+	status, err := r.historyUIOutput(ctx, "reviewed worktree status", "status", "--porcelain=v2", "-z", "--untracked-files=all")
 	if err != nil {
 		return HistoryUIState{}, err
 	}
-	if truncated {
-		return HistoryUIState{}, &TooLargeError{Resource: "reviewed worktree status"}
-	}
-	listed, pathsTruncated, err := r.outputLimited(ctx, 32<<20, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
+	listed, err := r.historyUIOutput(ctx, "reviewed worktree paths", "ls-files", "-z", "--cached", "--others", "--exclude-standard")
 	if err != nil {
 		return HistoryUIState{}, err
 	}
-	if pathsTruncated {
-		return HistoryUIState{}, &TooLargeError{Resource: "reviewed worktree paths"}
-	}
-	workHash := sha256.New()
-	workHash.Write(status)
-	var paths []string
-	for _, path := range strings.Split(string(listed), "\x00") {
-		if path != "" {
-			paths = append(paths, path)
-		}
-	}
-	sort.Strings(paths)
-	var total int64
-	for _, path := range paths {
-		if strings.ContainsRune(path, '\x00') {
-			return HistoryUIState{}, errors.New("worktree path contains NUL")
-		}
-		full := filepath.Join(r.workTree, filepath.FromSlash(path))
-		info, statErr := os.Lstat(full)
-		workHash.Write([]byte("\x00" + path + "\x00"))
-		if errors.Is(statErr, os.ErrNotExist) {
-			workHash.Write([]byte("deleted"))
-			continue
-		}
-		if statErr != nil {
-			return HistoryUIState{}, statErr
-		}
-		workHash.Write([]byte(info.Mode().String()))
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, e := os.Readlink(full)
-			if e != nil {
-				return HistoryUIState{}, e
-			}
-			workHash.Write([]byte("symlink\x00" + target))
-			continue
-		}
-		if !info.Mode().IsRegular() {
-			workHash.Write([]byte(info.Mode().String()))
-			continue
-		}
-		total += info.Size()
-		if info.Size() > 16<<20 || total > 64<<20 {
-			return HistoryUIState{}, &TooLargeError{Resource: "reviewed changed worktree content"}
-		}
-		content, e := os.ReadFile(full)
-		if e != nil {
-			return HistoryUIState{}, e
-		}
-		workHash.Write(content)
+	worktree, err := r.historyUIWorktreeHash(status, listed)
+	if err != nil {
+		return HistoryUIState{}, err
 	}
 	operations, err := r.QueryOperationState(ctx)
 	if err != nil {
@@ -590,7 +539,94 @@ func (r *Repository) historyUIState(ctx context.Context) (HistoryUIState, error)
 	if err != nil {
 		return HistoryUIState{}, err
 	}
-	return HistoryUIState{HEAD: head, Index: hashHistoryBytes(index), Worktree: hex.EncodeToString(workHash.Sum(nil)), Operation: operation}, nil
+	return HistoryUIState{HEAD: head, Index: hashHistoryBytes(index), Worktree: worktree, Operation: operation}, nil
+}
+
+func (r *Repository) historyUIHead(ctx context.Context) string {
+	out, err := r.output(ctx, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return "(unborn)"
+	}
+	return trimLine(out)
+}
+
+func (r *Repository) historyUIOutput(ctx context.Context, resource string, args ...string) ([]byte, error) {
+	out, truncated, err := r.outputLimited(ctx, 32<<20, args...)
+	if err != nil {
+		return nil, err
+	}
+	if truncated {
+		return nil, &TooLargeError{Resource: resource}
+	}
+	return out, nil
+}
+
+func (r *Repository) historyUIWorktreeHash(status, listed []byte) (string, error) {
+	h := sha256.New()
+	h.Write(status)
+	paths := nonEmptyNULFields(listed)
+	sort.Strings(paths)
+	var total int64
+	for _, path := range paths {
+		var err error
+		total, err = r.hashHistoryUIPath(h, path, total)
+		if err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func nonEmptyNULFields(listed []byte) []string {
+	var paths []string
+	for _, path := range strings.Split(string(listed), "\x00") {
+		if path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func (r *Repository) hashHistoryUIPath(h interface{ Write([]byte) (int, error) }, path string, total int64) (int64, error) {
+	full := filepath.Join(r.workTree, filepath.FromSlash(path))
+	info, err := os.Lstat(full)
+	h.Write([]byte("\x00" + path + "\x00"))
+	if errors.Is(err, os.ErrNotExist) {
+		h.Write([]byte("deleted"))
+		return total, nil
+	}
+	if err != nil {
+		return total, err
+	}
+	h.Write([]byte(info.Mode().String()))
+	if info.Mode()&os.ModeSymlink != 0 {
+		return total, hashHistoryUISymlink(h, full)
+	}
+	if !info.Mode().IsRegular() {
+		h.Write([]byte(info.Mode().String()))
+		return total, nil
+	}
+	return hashHistoryUIRegular(h, full, info.Size(), total)
+}
+
+func hashHistoryUISymlink(h interface{ Write([]byte) (int, error) }, path string) error {
+	target, err := os.Readlink(path)
+	if err == nil {
+		h.Write([]byte("symlink\x00" + target))
+	}
+	return err
+}
+
+func hashHistoryUIRegular(h interface{ Write([]byte) (int, error) }, path string, size, total int64) (int64, error) {
+	total += size
+	if size > 16<<20 || total > 64<<20 {
+		return total, &TooLargeError{Resource: "reviewed changed worktree content"}
+	}
+	content, err := os.ReadFile(path)
+	if err == nil {
+		h.Write(content)
+	}
+	return total, err
 }
 
 func (r *Repository) historyUIOperationFingerprint(state OperationState) (string, error) {

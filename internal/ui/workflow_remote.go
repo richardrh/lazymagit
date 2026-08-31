@@ -239,56 +239,74 @@ func remoteConfigureWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 
 func remoteConfigArgs(v WorkflowValues) (gitbackend.RemoteConfigArgs, error) {
 	args := gitbackend.RemoteConfigArgs{Remote: v["remote"]}
-	if v["u-mode"] == "replace" {
-		value := v["u"]
-		args.FetchURL = &value
+	args.FetchURL = replacementValue(v, "u-mode", "u")
+	args.PushURL = replacementValue(v, "s-mode", "s")
+	var err error
+	if args.FetchRefspecs, err = remoteRefspecs(v, "U-mode", "U"); err != nil {
+		return args, err
 	}
-	if v["s-mode"] == "replace" {
-		value := v["s"]
-		args.PushURL = &value
+	if args.PushRefspecs, err = remoteRefspecs(v, "S-mode", "S"); err != nil {
+		return args, err
 	}
-	for _, f := range []struct {
-		mode, value string
-		dst         *[]string
-	}{{"U-mode", "U", &args.FetchRefspecs}, {"S-mode", "S", &args.PushRefspecs}} {
-		switch v[f.mode] {
-		case "unchanged":
-		case "clear":
-			*f.dst = []string{}
-		case "replace":
-			if err := json.Unmarshal([]byte(v[f.value]), f.dst); err != nil {
-				return args, fmt.Errorf("%s must be a JSON string array: %w", f.value, err)
-			}
-			if *f.dst == nil {
-				return args, fmt.Errorf("%s must be an array, not null", f.value)
-			}
-		default:
-			return args, fmt.Errorf("invalid %s", f.mode)
-		}
+	if args.TagOpt, err = remoteTagOption(v["O"]); err != nil {
+		return args, err
 	}
-	switch v["O"] {
-	case "unchanged":
-	case "default":
-		value := gitbackend.RemoteTagsDefault
-		args.TagOpt = &value
-	case "all":
-		value := gitbackend.RemoteTagsAll
-		args.TagOpt = &value
-	case "none":
-		value := gitbackend.RemoteTagsNone
-		args.TagOpt = &value
-	default:
-		return args, errors.New("invalid O tag behavior")
-	}
-	followModes := map[string]gitbackend.RemoteFollowRemoteHEAD{"default": gitbackend.RemoteFollowRemoteHEADDefault, "never": gitbackend.RemoteFollowRemoteHEADNever, "create": gitbackend.RemoteFollowRemoteHEADCreate, "warn": gitbackend.RemoteFollowRemoteHEADWarn, "always": gitbackend.RemoteFollowRemoteHEADAlways}
-	if v["h"] != "" && v["h"] != "unchanged" {
-		mode, ok := followModes[v["h"]]
-		if !ok {
-			return args, errors.New("invalid h follow remote HEAD behavior")
-		}
-		args.FollowRemoteHEAD = &mode
+	if args.FollowRemoteHEAD, err = remoteFollowMode(v["h"]); err != nil {
+		return args, err
 	}
 	return args, nil
+}
+
+func replacementValue(v WorkflowValues, mode, value string) *string {
+	if v[mode] != "replace" {
+		return nil
+	}
+	replacement := v[value]
+	return &replacement
+}
+
+func remoteRefspecs(v WorkflowValues, mode, value string) ([]string, error) {
+	switch v[mode] {
+	case "unchanged":
+		return nil, nil
+	case "clear":
+		return []string{}, nil
+	case "replace":
+		var refs []string
+		if err := json.Unmarshal([]byte(v[value]), &refs); err != nil {
+			return nil, fmt.Errorf("%s must be a JSON string array: %w", value, err)
+		}
+		if refs == nil {
+			return nil, fmt.Errorf("%s must be an array, not null", value)
+		}
+		return refs, nil
+	default:
+		return nil, fmt.Errorf("invalid %s", mode)
+	}
+}
+
+func remoteTagOption(value string) (*gitbackend.RemoteTagOpt, error) {
+	options := map[string]gitbackend.RemoteTagOpt{"default": gitbackend.RemoteTagsDefault, "all": gitbackend.RemoteTagsAll, "none": gitbackend.RemoteTagsNone}
+	if value == "unchanged" {
+		return nil, nil
+	}
+	option, ok := options[value]
+	if !ok {
+		return nil, errors.New("invalid O tag behavior")
+	}
+	return &option, nil
+}
+
+func remoteFollowMode(value string) (*gitbackend.RemoteFollowRemoteHEAD, error) {
+	modes := map[string]gitbackend.RemoteFollowRemoteHEAD{"default": gitbackend.RemoteFollowRemoteHEADDefault, "never": gitbackend.RemoteFollowRemoteHEADNever, "create": gitbackend.RemoteFollowRemoteHEADCreate, "warn": gitbackend.RemoteFollowRemoteHEADWarn, "always": gitbackend.RemoteFollowRemoteHEADAlways}
+	if value == "" || value == "unchanged" {
+		return nil, nil
+	}
+	mode, ok := modes[value]
+	if !ok {
+		return nil, errors.New("invalid h follow remote HEAD behavior")
+	}
+	return &mode, nil
 }
 
 func remoteDefaultBranchWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

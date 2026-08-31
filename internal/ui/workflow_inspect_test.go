@@ -52,6 +52,40 @@ func TestInspectShortlogOptionsMapToTypedQuery(t *testing.T) {
 	}
 }
 
+func TestShortlogExtractedOptionHelpers(t *testing.T) {
+	query := gitbackend.ShortlogQuery{}
+	values := []struct {
+		upstream string
+		value    OptionValue
+	}{
+		{"transient:magit-shortlog:--numbered", OptionValue{Enabled: true}},
+		{"transient:magit-shortlog:--summary", OptionValue{Enabled: true}},
+		{"transient:magit-shortlog:--email", OptionValue{Enabled: true}},
+		{"transient:magit-shortlog:--group=", OptionValue{Value: "author"}},
+		{"transient:magit-shortlog:--format=", OptionValue{Value: "%s"}},
+		{"transient:magit-shortlog:-w", OptionValue{Value: "72,,4"}},
+	}
+	for _, tt := range values {
+		if err := applyShortlogOption(&query, tt.upstream, tt.value); err != nil {
+			t.Fatalf("%s: %v", tt.upstream, err)
+		}
+	}
+	if !query.Numbered || !query.Summary || !query.Email || query.Group != "author" || query.Format != "%s" || query.WrapWidth != 72 || query.WrapIndent1Set || !query.WrapIndent2Set || query.WrapIndent2 != 4 {
+		t.Fatalf("shortlog helper query = %+v", query)
+	}
+	if err := applyShortlogOption(&query, "unsupported", OptionValue{}); err == nil {
+		t.Fatal("unsupported shortlog option accepted")
+	}
+	for _, value := range []string{"1,2,3,4", "bad", "80,-1", "80,1,-1"} {
+		if err := applyShortlogWrap(&query, value); err == nil {
+			t.Fatalf("invalid wrap %q accepted", value)
+		}
+	}
+	if err := applyShortlogWrap(&query, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInspectRefOptionsMapToClosedTypedQuery(t *testing.T) {
 	command := WorkflowCommand{Options: map[keymap.CommandID]OptionValue{
 		inspectOptionID(t, "magit-for-each-ref:--contains"): {Value: "HEAD"},

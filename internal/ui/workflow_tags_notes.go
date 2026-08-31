@@ -133,11 +133,15 @@ func tagChoices(ctx context.Context, m *Model) ([]WorkflowChoice, error) {
 	if len(tags) == 0 {
 		return nil, errors.New("no tags")
 	}
+	return tagsToChoices(tags), nil
+}
+
+func tagsToChoices(tags []gitbackend.TagInfo) []WorkflowChoice {
 	choices := make([]WorkflowChoice, 0, len(tags))
 	for _, tag := range tags {
 		choices = append(choices, WorkflowChoice{Value: tag.Name, Label: tag.Name + "  " + tag.ObjectID})
 	}
-	return choices, nil
+	return choices
 }
 
 func tagDeleteWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

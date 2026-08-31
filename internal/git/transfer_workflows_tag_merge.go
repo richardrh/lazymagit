@@ -105,11 +105,31 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 	if err != nil {
 		return p, err
 	}
+	in, err = normalizeCreateTagArgs(p, in)
+	if err != nil {
+		return p, err
+	}
+	target := in.Target
+	resolved, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", target+"^{object}")
+	if err != nil {
+		return p, fmt.Errorf("tag target: %w", err)
+	}
+	args := createTagCommandArgs(in, trimLine(resolved))
+	// Supplying messages over stdin keeps them out of ProcessRecord.Args.
+	if in.Annotated {
+		err = r.runInput(ctx, []byte(in.Message), args...)
+	} else {
+		err = r.run(ctx, args...)
+	}
+	return p, err
+}
+
+func normalizeCreateTagArgs(p TagCreatePreflight, in CreateTagArgs) (CreateTagArgs, error) {
 	if p.Exists && (!in.Force || !in.ConfirmReplace) {
-		return p, errors.New("replacing a tag requires force and confirmation")
+		return in, errors.New("replacing a tag requires force and confirmation")
 	}
 	if strings.ContainsAny(in.LocalUser, "\x00\r\n") {
-		return p, errors.New("tag signing identity contains a control character")
+		return in, errors.New("tag signing identity contains a control character")
 	}
 	if in.LocalUser != "" {
 		in.Sign = true
@@ -118,19 +138,18 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 		in.Annotated = true
 	}
 	if in.Annotated && in.Message == "" {
-		return p, errors.New("annotated tag message is empty")
+		return in, errors.New("annotated tag message is empty")
 	}
 	if !in.Annotated && in.Message != "" {
-		return p, errors.New("lightweight tag cannot have a message")
+		return in, errors.New("lightweight tag cannot have a message")
 	}
-	target := in.Target
-	if target == "" {
-		target = "HEAD"
+	if in.Target == "" {
+		in.Target = "HEAD"
 	}
-	resolved, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", target+"^{object}")
-	if err != nil {
-		return p, fmt.Errorf("tag target: %w", err)
-	}
+	return in, nil
+}
+
+func createTagCommandArgs(in CreateTagArgs, resolved string) []string {
 	args := []string{"tag"}
 	if in.Force {
 		args = append(args, "--force")
@@ -143,14 +162,7 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 	} else if in.Annotated {
 		args = append(args, "--annotate", "--file=-")
 	}
-	args = append(args, "--", in.Name, trimLine(resolved))
-	// Supplying messages over stdin keeps them out of ProcessRecord.Args.
-	if in.Annotated {
-		err = r.runInput(ctx, []byte(in.Message), args...)
-	} else {
-		err = r.run(ctx, args...)
-	}
-	return p, err
+	return append(args, "--", in.Name, resolved)
 }
 
 type DeleteTagsArgs struct {
@@ -379,27 +391,49 @@ func (r *Repository) MergePreflight(ctx context.Context, target string) (MergePr
 }
 
 func (r *Repository) MergeWithArgs(ctx context.Context, in MergeArgs) (MergePreflight, error) {
-	if err := validateHistoryStrategy(in.Strategy); err != nil {
+	if err := validateMergeArgs(in); err != nil {
 		return MergePreflight{}, err
-	}
-	for _, option := range in.StrategyOptions {
-		if err := validateMergeStrategyOption(option); err != nil {
-			return MergePreflight{}, err
-		}
 	}
 	p, err := r.MergePreflight(ctx, in.Target)
 	if err != nil {
 		return p, err
 	}
+	if err := validateMergePreflight(p, in.ConfirmDirty); err != nil {
+		return p, err
+	}
+	args, err := mergeArgs(in, p.TargetOID)
+	if err != nil {
+		return p, err
+	}
+	return p, r.run(ctx, args...)
+}
+
+func validateMergeArgs(in MergeArgs) error {
+	if err := validateHistoryStrategy(in.Strategy); err != nil {
+		return err
+	}
+	for _, option := range in.StrategyOptions {
+		if err := validateMergeStrategyOption(option); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateMergePreflight(p MergePreflight, confirmDirty bool) error {
 	if p.State.InProgress {
-		return p, errors.New("a merge is already in progress")
+		return errors.New("a merge is already in progress")
 	}
 	if len(p.State.Conflicts) != 0 {
-		return p, errors.New("cannot merge with unresolved conflicts")
+		return errors.New("cannot merge with unresolved conflicts")
 	}
-	if p.RequiresDirtyConfirmation && !in.ConfirmDirty {
-		return p, errors.New("merge with a dirty worktree requires confirmation")
+	if p.RequiresDirtyConfirmation && !confirmDirty {
+		return errors.New("merge with a dirty worktree requires confirmation")
 	}
+	return nil
+}
+
+func mergeArgs(in MergeArgs, targetOID string) ([]string, error) {
 	args := []string{"merge"}
 	switch in.Mode {
 	case MergePlain:
@@ -409,7 +443,7 @@ func (r *Repository) MergeWithArgs(ctx context.Context, in MergeArgs) (MergePref
 	case MergeFFOnly:
 		args = append(args, "--ff-only")
 	default:
-		return p, errors.New("invalid merge mode")
+		return nil, errors.New("invalid merge mode")
 	}
 	if in.NoCommit {
 		args = append(args, "--no-commit")
@@ -426,8 +460,7 @@ func (r *Repository) MergeWithArgs(ctx context.Context, in MergeArgs) (MergePref
 	if in.Signoff {
 		args = append(args, "--signoff")
 	}
-	args = append(args, "--", p.TargetOID)
-	return p, r.run(ctx, args...)
+	return append(args, "--", targetOID), nil
 }
 
 func validateMergeStrategyOption(option string) error {

@@ -81,6 +81,56 @@ func TestFormatPatchOptionsMapEverySupportedInfix(t *testing.T) {
 	}
 }
 
+func TestAMOptionsAndExtractedHelper(t *testing.T) {
+	option := func(upstream string) keymap.CommandID {
+		for _, binding := range keymap.Registry() {
+			if binding.Kind == keymap.KindInfix && binding.UpstreamCommand == upstream {
+				return binding.Command
+			}
+		}
+		t.Fatalf("missing AM option %q", upstream)
+		return ""
+	}
+	got, err := amOptions(map[keymap.CommandID]OptionValue{
+		option("transient:magit-am:--3way"):     {Enabled: true},
+		option("transient:magit-am:--scissors"): {Enabled: true},
+		option("magit:--signoff"):               {Enabled: true},
+		"unrelated":                             {Enabled: true},
+	})
+	if err != nil || !got.ThreeWay || !got.Scissors || !got.Signoff {
+		t.Fatalf("am options = %+v, %v", got, err)
+	}
+	var direct gitbackend.AMOptions
+	if err := applyAMOption(&direct, "unsupported"); err == nil {
+		t.Fatal("unsupported AM option accepted")
+	}
+}
+
+func TestFormatPatchSettersRejectInvalidValues(t *testing.T) {
+	tests := []struct {
+		name  string
+		set   formatPatchOptionSetter
+		value string
+	}{
+		{"message id", setFormatPatchInReplyTo, "bad"},
+		{"thread", setFormatPatchThread, "sideways"},
+		{"from", setFormatPatchFrom, "bad"},
+		{"to", setFormatPatchTo, "bad"},
+		{"cc", setFormatPatchCc, "bad"},
+		{"base", setFormatPatchBase, "bad\x00base"},
+		{"reroll", setFormatPatchRerollCount, "-1"},
+		{"subject", setFormatPatchSubjectPrefix, "bad\nsubject"},
+		{"directory", setFormatPatchOutputDirectory, "bad\x00path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.set(&gitbackend.FormatPatchOptions{}, OptionValue{Value: tt.value}); err == nil {
+				t.Fatal("invalid value accepted")
+			}
+		})
+	}
+}
+
 func TestFormatPatchWorkflowValuesExposeTypedRecipientsAndNumbering(t *testing.T) {
 	options, err := formatPatchOptionsFromValues(gitbackend.FormatPatchOptions{}, WorkflowValues{
 		"directory": "out", "numbered": "true", "cover": "true", "cover-message": "series overview\n\nChanges since v2", "signoff": "true", "thread": "true", "subject": "RFC", "reroll": "3", "start": "7", "from": "Author <author@example.test>", "in-reply-to": "<series@example.test>", "base": "HEAD~2", "to": "dev@example.test, second@example.test", "cc": "review@example.test",

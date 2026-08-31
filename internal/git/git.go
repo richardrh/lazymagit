@@ -340,33 +340,48 @@ func replaceGitEnv(env []string, entry string) []string {
 
 func redactMutationArgs(args []string) ([]string, []string) {
 	redacted := append([]string(nil), args...)
-	var sensitive []string
 	if len(args) > 0 && args[0] == "commit" {
-		for i := 1; i < len(args); i++ {
-			switch {
-			case args[i] == "-m" || args[i] == "--message":
-				if i+1 < len(args) {
-					sensitive = appendSensitive(sensitive, args[i+1])
-					redacted[i+1] = redactionMarker
-					i++
-				}
-			case strings.HasPrefix(args[i], "--message="):
-				value := strings.TrimPrefix(args[i], "--message=")
-				sensitive = appendSensitive(sensitive, value)
-				redacted[i] = "--message=" + redactionMarker
-			case strings.HasPrefix(args[i], "-m") && len(args[i]) > 2:
-				value := args[i][2:]
-				sensitive = appendSensitive(sensitive, value)
-				redacted[i] = "-m" + redactionMarker
-			}
-		}
+		return redactCommitArgs(args, redacted)
 	}
 	if len(args) > 1 && args[0] == "remote" && (args[1] == "add" || args[1] == "set-url") {
-		for i, arg := range args {
-			if credentialBearingURL(arg) {
-				sensitive = appendSensitive(sensitive, arg)
-				redacted[i] = redactionMarker
-			}
+		return redactRemoteURLs(args, redacted)
+	}
+	return redacted, nil
+}
+
+func redactCommitArgs(args, redacted []string) ([]string, []string) {
+	var sensitive []string
+	for i := 1; i < len(args); i++ {
+		value, replacement, consumed := commitMessageArgument(args, i)
+		if replacement == "" {
+			continue
+		}
+		sensitive = appendSensitive(sensitive, value)
+		redacted[i+consumed] = replacement
+		i += consumed
+	}
+	return redacted, sensitive
+}
+
+func commitMessageArgument(args []string, i int) (value, replacement string, consumed int) {
+	if (args[i] == "-m" || args[i] == "--message") && i+1 < len(args) {
+		return args[i+1], redactionMarker, 1
+	}
+	if strings.HasPrefix(args[i], "--message=") {
+		return strings.TrimPrefix(args[i], "--message="), "--message=" + redactionMarker, 0
+	}
+	if strings.HasPrefix(args[i], "-m") && len(args[i]) > 2 {
+		return args[i][2:], "-m" + redactionMarker, 0
+	}
+	return "", "", 0
+}
+
+func redactRemoteURLs(args, redacted []string) ([]string, []string) {
+	var sensitive []string
+	for i, arg := range args {
+		if credentialBearingURL(arg) {
+			sensitive = appendSensitive(sensitive, arg)
+			redacted[i] = redactionMarker
 		}
 	}
 	return redacted, sensitive
@@ -661,6 +676,10 @@ func isExitError(err error) bool {
 	return errors.As(err, &exit)
 }
 
+type discardPlan struct {
+	tracked, untracked, stagedTracked, stagedAdded []string
+}
+
 func (r *Repository) Discard(ctx context.Context, paths []string) error {
 	if len(paths) == 0 {
 		return nil
@@ -669,92 +688,121 @@ func (r *Repository) Discard(ctx context.Context, paths []string) error {
 	if err != nil {
 		return err
 	}
+	plan, err := r.planDiscard(status, paths)
+	if err != nil {
+		return err
+	}
+	return r.executeDiscard(ctx, plan)
+}
+
+func (r *Repository) planDiscard(status Status, paths []string) (discardPlan, error) {
 	wanted := make(map[string]bool, len(paths))
 	for _, path := range paths {
 		wanted[path] = true
 	}
-	var tracked, untracked, stagedTracked, stagedAdded []string
+	var plan discardPlan
 	for _, file := range status.Files {
 		requestedRenameSource := file.Staged == ChangeRenamed && wanted[file.OriginalPath]
 		if !wanted[file.Path] && !requestedRenameSource {
 			continue
 		}
-		if file.Unstaged == ChangeDeleted {
-			// Status still reports a tracked deletion when another filesystem
-			// object, such as an ignored directory, replaces the tracked file.
-			// Refuse before restore can remove or overwrite that replacement.
-			deleted := filepath.Join(r.workTree, filepath.FromSlash(file.Path))
-			if _, statErr := os.Lstat(deleted); statErr == nil {
-				return fmt.Errorf("%w: deleted path %s was replaced", ErrMixedState, file.Path)
-			} else if !errors.Is(statErr, os.ErrNotExist) {
-				return fmt.Errorf("inspect deleted path %s: %w", file.Path, statErr)
-			}
+		if err := r.validateDiscardFile(file); err != nil {
+			return discardPlan{}, err
 		}
-		if file.Staged == ChangeRenamed {
-			// A staged rename normally leaves its source absent. Restoring HEAD
-			// would overwrite a source path recreated after staging, including an
-			// ignored path that status does not report.
-			source := filepath.Join(r.workTree, filepath.FromSlash(file.OriginalPath))
-			if _, statErr := os.Lstat(source); statErr == nil {
-				return fmt.Errorf("%w: rename source %s was recreated", ErrMixedState, file.OriginalPath)
-			} else if !errors.Is(statErr, os.ErrNotExist) {
-				return fmt.Errorf("inspect rename source %s: %w", file.OriginalPath, statErr)
-			}
-		}
-		if file.Staged == ChangeDeleted {
-			// A staged deletion makes the path untracked from the index's point
-			// of view. In particular, an ignored recreation is absent from status.
-			// Refuse before restore can overwrite any such worktree object.
-			deleted := filepath.Join(r.workTree, filepath.FromSlash(file.Path))
-			if _, statErr := os.Lstat(deleted); statErr == nil {
-				return fmt.Errorf("%w: deleted path %s was recreated", ErrMixedState, file.Path)
-			} else if !errors.Is(statErr, os.ErrNotExist) {
-				return fmt.Errorf("inspect deleted path %s: %w", file.Path, statErr)
-			}
-		}
-		switch file.Staged {
-		case ChangeNone, ChangeModified, ChangeAdded, ChangeDeleted, ChangeRenamed, ChangeTypeChanged:
-			// Handled below after every requested path has been inspected.
-		default:
-			return fmt.Errorf("%w: %s", ErrUnsupportedStagedState, file.Path)
-		}
-		if file.Staged != ChangeNone && file.Unstaged != ChangeNone {
-			return fmt.Errorf("%w: %s", ErrMixedState, file.Path)
-		}
-		if file.Unstaged == ChangeUntracked {
-			untracked = append(untracked, file.Path)
-		} else if file.Unstaged != ChangeNone {
-			tracked = append(tracked, file.Path)
-		} else if file.Staged == ChangeAdded {
-			stagedAdded = append(stagedAdded, file.Path)
-		} else if file.Staged == ChangeRenamed {
-			stagedTracked = append(stagedTracked, file.OriginalPath, file.Path)
-		} else if file.Staged == ChangeModified || file.Staged == ChangeDeleted || file.Staged == ChangeTypeChanged {
-			stagedTracked = append(stagedTracked, file.Path)
-		}
+		plan.add(file)
 	}
-	// All paths have been inspected before any command can mutate the tree.
-	if len(stagedTracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"restore", "--source=HEAD", "--staged", "--worktree"}, stagedTracked)...); err != nil {
+	return plan, nil
+}
+
+func (r *Repository) validateDiscardFile(file FileStatus) error {
+	if file.Unstaged == ChangeDeleted {
+		if err := r.requireDiscardPathAbsent(file.Path, "deleted path %s was replaced"); err != nil {
 			return err
 		}
 	}
-	if len(tracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"restore", "--worktree"}, tracked)...); err != nil {
+	if file.Staged == ChangeRenamed {
+		if err := r.requireDiscardPathAbsent(file.OriginalPath, "rename source %s was recreated"); err != nil {
 			return err
 		}
 	}
-	if len(stagedAdded) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"rm", "--cached", "-f", "--ignore-unmatch"}, stagedAdded)...); err != nil {
-			return err
-		}
-		// A staged addition may have been force-added despite an ignore rule.
-		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d", "-x"}, stagedAdded)...); err != nil {
+	if file.Staged == ChangeDeleted {
+		if err := r.requireDiscardPathAbsent(file.Path, "deleted path %s was recreated"); err != nil {
 			return err
 		}
 	}
-	if len(untracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d"}, untracked)...); err != nil {
+	if !supportedDiscardState(file.Staged) {
+		return fmt.Errorf("%w: %s", ErrUnsupportedStagedState, file.Path)
+	}
+	if file.Staged != ChangeNone && file.Unstaged != ChangeNone {
+		return fmt.Errorf("%w: %s", ErrMixedState, file.Path)
+	}
+	return nil
+}
+
+func (r *Repository) requireDiscardPathAbsent(path, conflictFormat string) error {
+	full := filepath.Join(r.workTree, filepath.FromSlash(path))
+	_, err := os.Lstat(full)
+	if err == nil {
+		return fmt.Errorf("%w: "+conflictFormat, ErrMixedState, path)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect %s: %w", conflictSubject(path, conflictFormat), err)
+	}
+	return nil
+}
+
+func conflictSubject(path, conflictFormat string) string {
+	if strings.HasPrefix(conflictFormat, "rename source") {
+		return "rename source " + path
+	}
+	return "deleted path " + path
+}
+
+func supportedDiscardState(state Change) bool {
+	switch state {
+	case ChangeNone, ChangeModified, ChangeAdded, ChangeDeleted, ChangeRenamed, ChangeTypeChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *discardPlan) add(file FileStatus) {
+	if file.Unstaged == ChangeUntracked {
+		p.untracked = append(p.untracked, file.Path)
+	} else if file.Unstaged != ChangeNone {
+		p.tracked = append(p.tracked, file.Path)
+	} else if file.Staged == ChangeAdded {
+		p.stagedAdded = append(p.stagedAdded, file.Path)
+	} else if file.Staged == ChangeRenamed {
+		p.stagedTracked = append(p.stagedTracked, file.OriginalPath, file.Path)
+	} else if file.Staged != ChangeNone {
+		p.stagedTracked = append(p.stagedTracked, file.Path)
+	}
+}
+
+func (r *Repository) executeDiscard(ctx context.Context, plan discardPlan) error {
+	// Planning inspects every requested path before any command mutates the tree.
+	if len(plan.stagedTracked) > 0 {
+		if err := r.run(ctx, pathsArgs([]string{"restore", "--source=HEAD", "--staged", "--worktree"}, plan.stagedTracked)...); err != nil {
+			return err
+		}
+	}
+	if len(plan.tracked) > 0 {
+		if err := r.run(ctx, pathsArgs([]string{"restore", "--worktree"}, plan.tracked)...); err != nil {
+			return err
+		}
+	}
+	if len(plan.stagedAdded) > 0 {
+		if err := r.run(ctx, pathsArgs([]string{"rm", "--cached", "-f", "--ignore-unmatch"}, plan.stagedAdded)...); err != nil {
+			return err
+		}
+		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d", "-x"}, plan.stagedAdded)...); err != nil {
+			return err
+		}
+	}
+	if len(plan.untracked) > 0 {
+		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d"}, plan.untracked)...); err != nil {
 			return err
 		}
 	}

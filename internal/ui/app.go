@@ -646,68 +646,62 @@ func (m *Model) handleHelpKey(key string) tea.Cmd {
 }
 
 func (m *Model) handlePendingTransientKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
-	if pending := m.resolver.PendingPrefix(); pending != "" && pending != "g" {
-		if m.resolver.ActiveTransient() != "" {
-			prefix := transientInvocationRoot(pending)
-			if cmd, handled := m.handleTransientEditKey(msg, key); handled {
-				return cmd, true
-			}
-			if key == "q" || key == "esc" {
-				m.cancelPrefix()
-				m.setMessage("Transient cancelled")
-				return nil, true
-			}
-			if m.scrollTransient(key) {
-				return nil, true
-			}
-			catalog, _ := m.transientCatalog(prefix)
-			relative := m.resolver.PendingSuffix()
-			candidate := strings.TrimSpace(relative + " " + key)
-			entry, found := catalog.entry(candidate)
-			hasDescendant := catalog.hasDescendant(candidate)
-			// A token can be both an infix and the first token of a longer
-			// suffix. Continue through the resolver trie in that case; exact
-			// suffixes still dispatch immediately. This is independent of depth.
-			if hasDescendant && (!found || entry.Kind == keymap.KindInfix || !entry.Available) {
-				result := m.resolver.Feed(m.keyContext(), key)
-				if result.Pending {
-					m.transientOffset = 0
-					return nil, true
-				}
-			}
-			if found && entry.Available {
-				if entry.Prefix {
-					if _, registered := m.workflowHandlers[entry.Command]; registered {
-						if err := m.validateTransientOptions(prefix, entry.Command); err != nil {
-							m.setError(err)
-							return nil, true
-						}
-						m.cancelPrefix()
-						return m.performEntry(entry, prefix), true
-					}
-					result := m.resolver.Feed(m.keyContext(), key)
-					if result.Pending {
-						m.transientOffset = 0
-						return nil, true
-					}
-				}
-				if entry.Kind == keymap.KindInfix {
-					m.resolver.ContinueTransient()
-					m.editTransientOption(entry)
-					return nil, true
-				}
-				if err := m.validateTransientOptions(prefix, entry.Command); err != nil {
-					m.setError(err)
-					return nil, true
-				}
-				m.cancelPrefix()
-				return m.performEntry(entry, prefix), true
-			}
-			return m.handleUnmatchedTransientKey(prefix, key, entry, found), true
+	pending := m.resolver.PendingPrefix()
+	if pending == "" || pending == "g" || m.resolver.ActiveTransient() == "" {
+		return nil, false
+	}
+	return m.handleActiveTransientKey(msg, key, transientInvocationRoot(pending)), true
+}
+
+func (m *Model) handleActiveTransientKey(msg tea.KeyPressMsg, key, prefix string) tea.Cmd {
+	if cmd, handled := m.handleTransientEditKey(msg, key); handled {
+		return cmd
+	}
+	if key == "q" || key == "esc" {
+		m.cancelPrefix()
+		m.setMessage("Transient cancelled")
+		return nil
+	}
+	if m.scrollTransient(key) {
+		return nil
+	}
+	catalog, _ := m.transientCatalog(prefix)
+	candidate := strings.TrimSpace(m.resolver.PendingSuffix() + " " + key)
+	entry, found := catalog.entry(candidate)
+	if catalog.hasDescendant(candidate) && (!found || entry.Kind == keymap.KindInfix || !entry.Available) && m.continueTransientKey(key) {
+		return nil
+	}
+	if found && entry.Available {
+		return m.dispatchTransientEntry(prefix, key, entry)
+	}
+	return m.handleUnmatchedTransientKey(prefix, key, entry, found)
+}
+
+func (m *Model) continueTransientKey(key string) bool {
+	if !m.resolver.Feed(m.keyContext(), key).Pending {
+		return false
+	}
+	m.transientOffset = 0
+	return true
+}
+
+func (m *Model) dispatchTransientEntry(prefix, key string, entry menuEntry) tea.Cmd {
+	if entry.Prefix && m.workflowHandlers[entry.Command] == nil {
+		if m.continueTransientKey(key) {
+			return nil
 		}
 	}
-	return nil, false
-
+	if entry.Kind == keymap.KindInfix {
+		m.resolver.ContinueTransient()
+		m.editTransientOption(entry)
+		return nil
+	}
+	if err := m.validateTransientOptions(prefix, entry.Command); err != nil {
+		m.setError(err)
+		return nil
+	}
+	m.cancelPrefix()
+	return m.performEntry(entry, prefix)
 }
 
 func (m *Model) handleUnmatchedTransientKey(prefix, key string, entry menuEntry, found bool) tea.Cmd {
@@ -790,43 +784,50 @@ func (m *Model) handleStatusKey(msg tea.KeyPressMsg, key string) (tea.Model, tea
 		result = m.resolver.Feed(m.keyContext(), key)
 	}
 	if result.Pending {
-		if m.scheme == schemeVim && key == "g" && m.resolver.PendingPrefix() == "g" {
-			m.vimGToken++
-			token := m.vimGToken
-			return m, tea.Tick(vimGTimeout, func(time.Time) tea.Msg { return vimGTimeoutMsg{token: token} })
-		}
-		if !hadPrefix {
-			if _, ok := m.transientCatalog(m.resolver.PendingPrefix()); ok {
-				m.transientOptions = make(map[keymap.CommandID]OptionValue)
-			}
-		}
-		m.transientOffset = 0
-		return m, nil
+		return m, m.handlePendingStatusResult(key, hadPrefix)
 	}
 	if prefix == "g" {
 		m.vimGToken++
 	}
+	return m, m.handleResolvedStatusResult(result)
+}
+
+func (m *Model) handlePendingStatusResult(key string, hadPrefix bool) tea.Cmd {
+	if m.scheme == schemeVim && key == "g" && m.resolver.PendingPrefix() == "g" {
+		m.vimGToken++
+		token := m.vimGToken
+		return tea.Tick(vimGTimeout, func(time.Time) tea.Msg { return vimGTimeoutMsg{token: token} })
+	}
+	if !hadPrefix {
+		if _, ok := m.transientCatalog(m.resolver.PendingPrefix()); ok {
+			m.transientOptions = make(map[keymap.CommandID]OptionValue)
+		}
+	}
+	m.transientOffset = 0
+	return nil
+}
+
+func (m *Model) handleResolvedStatusResult(result keymap.Result) tea.Cmd {
 	if result.Command != keymap.CommandNone {
-		return m, m.perform(result.Command)
+		return m.perform(result.Command)
 	}
-	if result.Handled && result.Binding != nil {
-		if _, registered := m.workflowHandlers[result.Binding.Command]; registered {
-			return m, m.perform(result.Binding.Command)
-		}
-		for id, capability := range m.workflowCapabilities {
-			if capability.Transient == "" && capability.UpstreamCommand == result.Binding.UpstreamCommand {
-				return m, m.perform(id)
-			}
+	if !result.Handled || result.Binding == nil {
+		return nil
+	}
+	if m.workflowHandlers[result.Binding.Command] != nil {
+		return m.perform(result.Binding.Command)
+	}
+	for id, capability := range m.workflowCapabilities {
+		if capability.Transient == "" && capability.UpstreamCommand == result.Binding.UpstreamCommand {
+			return m.perform(id)
 		}
 	}
-	if result.Handled && result.Binding != nil && result.Binding.Handler == keymap.HandlerUnsupported {
+	if result.Binding.Handler == keymap.HandlerUnsupported {
 		m.setMessage(fmt.Sprintf("%s unavailable: %s (%s)", result.Binding.Display, result.Binding.UpstreamCommand, result.Binding.Parity))
-		return m, nil
-	}
-	if result.Handled && result.Reason != "" {
+	} else if result.Reason != "" {
 		m.setMessage(result.Binding.Label + " unavailable: " + result.Reason)
 	}
-	return m, nil
+	return nil
 }
 
 func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
@@ -1620,43 +1621,66 @@ func loadSnapshot(ctx context.Context, repo *gitbackend.Repository) (snapshot, e
 
 func loadSnapshotWith(ctx context.Context, queries snapshotQueries) (snapshot, error) {
 	var s snapshot
+	steps := []func(context.Context, *snapshot, snapshotQueries) error{
+		loadSnapshotCore, loadSnapshotRepositoryState, loadSnapshotHistory,
+	}
+	for _, step := range steps {
+		if err := step(ctx, &s, queries); err != nil {
+			return s, err
+		}
+	}
+	return normalizeUpstreamSnapshot(s), nil
+}
+
+func loadSnapshotCore(ctx context.Context, s *snapshot, queries snapshotQueries) error {
 	var err error
 	if s.summary, err = queries.summary(ctx); err != nil {
-		return s, fmt.Errorf("summary: %w", err)
+		return fmt.Errorf("summary: %w", err)
 	}
 	if s.status, err = queries.status(ctx); err != nil {
-		return s, fmt.Errorf("status: %w", err)
+		return fmt.Errorf("status: %w", err)
 	}
 	if queries.stashes != nil {
 		if s.stashes, err = queries.stashes(ctx); err != nil {
-			return s, fmt.Errorf("stashes: %w", err)
+			return fmt.Errorf("stashes: %w", err)
 		}
 	}
 	if s.remotes, err = queries.remotes(ctx); err != nil {
-		return s, fmt.Errorf("remotes: %w", err)
+		return fmt.Errorf("remotes: %w", err)
 	}
+	return nil
+}
+
+func loadSnapshotRepositoryState(ctx context.Context, s *snapshot, queries snapshotQueries) error {
+	var err error
 	if s.pushRemote, err = queries.pushRemote(ctx); err != nil && !errors.Is(err, gitbackend.ErrNoFetchRemote) {
-		return s, fmt.Errorf("push remote: %w", err)
+		return fmt.Errorf("push remote: %w", err)
 	}
 	if queries.operations != nil {
 		if s.operations, err = queries.operations(ctx); err != nil {
-			return s, fmt.Errorf("operation state: %w", err)
+			return fmt.Errorf("operation state: %w", err)
 		}
 	}
 	if queries.sparse != nil {
 		if s.sparse, err = queries.sparse(ctx); err != nil {
-			return s, fmt.Errorf("sparse checkout state: %w", err)
+			return fmt.Errorf("sparse checkout state: %w", err)
 		}
 	}
+	return nil
+}
+
+func loadSnapshotHistory(ctx context.Context, s *snapshot, queries snapshotQueries) error {
+	var err error
 	if s.recent, err = queries.recentLog(ctx, 10); err != nil {
-		return s, fmt.Errorf("recent log: %w", err)
+		return fmt.Errorf("recent log: %w", err)
 	}
-	if s.summary.Upstream != "" {
-		if s.upstream, err = queries.upstreamLogLimit(ctx, 257); err != nil && !errors.Is(err, gitbackend.ErrNoUpstream) {
-			return s, fmt.Errorf("upstream log: %w", err)
-		}
+	if s.summary.Upstream == "" {
+		return nil
 	}
-	return normalizeUpstreamSnapshot(s), nil
+	if s.upstream, err = queries.upstreamLogLimit(ctx, 257); err != nil && !errors.Is(err, gitbackend.ErrNoUpstream) {
+		return fmt.Errorf("upstream log: %w", err)
+	}
+	return nil
 }
 
 func (m *Model) startOperation(name string, operation func(context.Context) error) tea.Cmd {

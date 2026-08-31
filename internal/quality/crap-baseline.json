@@ -1,31 +1,4 @@
 {
-  "threshold": 30,
-  "scores": {
-    "github.com/richard/lazymagit/internal/git/-/copyFileExclusive": 42,
-    "github.com/richard/lazymagit/internal/git/-/safeNewDirectory": 36.11082841441075,
-    "github.com/richard/lazymagit/internal/git/Repository/Discard": 46.367999999999995,
-    "github.com/richard/lazymagit/internal/git/Repository/ExecuteBranchConfigUpdate": 34.303612254229535,
-    "github.com/richard/lazymagit/internal/git/Repository/FetchWithArgs": 42.82996827846365,
-    "github.com/richard/lazymagit/internal/git/Repository/FormatPatch": 35.545833333333334,
-    "github.com/richard/lazymagit/internal/git/Repository/QueryCherry": 30.140157650361736,
-    "github.com/richard/lazymagit/internal/git/Repository/QueryOperationState": 42.5925925925926,
-    "github.com/richard/lazymagit/internal/git/Repository/QueryReflog": 37.61774434955412,
-    "github.com/richard/lazymagit/internal/git/Repository/RebaseInteractive": 34.24883562339491,
-    "github.com/richard/lazymagit/internal/git/Repository/SaveDiffPatch": 45.198552,
-    "github.com/richard/lazymagit/internal/git/Repository/commitArgs": 34.87136169346631,
-    "github.com/richard/lazymagit/internal/git/Repository/historyUIState": 41.7475735854543,
-    "github.com/richard/lazymagit/internal/git/Repository/resolveHistoryBranch": 42,
-    "github.com/richard/lazymagit/internal/git/Repository/selectedInteractivePatch": 35.915055295474595,
-    "github.com/richard/lazymagit/internal/git/Repository/subtreeRun": 1056,
-    "github.com/richard/lazymagit/internal/git/Repository/validateRefspec": 30.829247999999996,
-    "github.com/richard/lazymagit/internal/keymap/-/PrimaryBindings": 42,
-    "github.com/richard/lazymagit/internal/model/Model/ensureCursor": 33.57725947521865,
-    "github.com/richard/lazymagit/internal/ui/-/amOptions": 37.13063268092853,
-    "github.com/richard/lazymagit/internal/ui/-/formatPatchOptions": 32.86094306161721,
-    "github.com/richard/lazymagit/internal/ui/-/historyTransientHandler": 37.009736288120166,
-    "github.com/richard/lazymagit/internal/ui/-/renderWorkflowMultilineField": 42,
-    "github.com/richard/lazymagit/internal/ui/-/shortlogQueryFromCommand": 33.73102930127723,
-    "github.com/richard/lazymagit/internal/ui/Model/bindingCondition": 32.31824417009602,
-    "github.com/richard/lazymagit/internal/ui/Model/jumpToNextStatusSection": 42
-  }
+  "threshold": 19.999999999,
+  "scores": {}
 }

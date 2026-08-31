@@ -211,16 +211,24 @@ func branchCheckoutLocal(m *Model, command WorkflowCommand) tea.Cmd {
 
 func checkoutOptions(command WorkflowCommand) gitbackend.CheckoutOptions {
 	for id, value := range command.Options {
-		if !value.Enabled && value.Value == "" {
-			continue
-		}
-		for _, binding := range keymap.Registry() {
-			if binding.Command == id && binding.UpstreamCommand == "transient:magit-branch:--recurse-submodules" {
-				return gitbackend.CheckoutOptions{RecurseSubmodules: true}
-			}
+		if optionValueActive(value) && checkoutRecurseSubmodulesOption(id) {
+			return gitbackend.CheckoutOptions{RecurseSubmodules: true}
 		}
 	}
 	return gitbackend.CheckoutOptions{}
+}
+
+func optionValueActive(value OptionValue) bool {
+	return value.Enabled || value.Value != ""
+}
+
+func checkoutRecurseSubmodulesOption(id keymap.CommandID) bool {
+	for _, binding := range keymap.Registry() {
+		if binding.Command == id {
+			return binding.UpstreamCommand == "transient:magit-branch:--recurse-submodules"
+		}
+	}
+	return false
 }
 
 func branchOrphan(m *Model, _ WorkflowCommand) tea.Cmd {

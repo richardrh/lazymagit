@@ -106,76 +106,11 @@ func loadPushDialog(ctx context.Context, repo *gitbackend.Repository, kind pushW
 	if err != nil {
 		return d, err
 	}
-	needRemote := kind != pushCurrentRemote && kind != pushCurrentUpstream
-	configureRemote := false
-	if kind == pushCurrentRemote {
-		if _, err := repo.PushRemote(ctx); err != nil {
-			if !errors.Is(err, gitbackend.ErrNoFetchRemote) {
-				return d, fmt.Errorf("resolve push remote: %w", err)
-			}
-			needRemote, configureRemote = true, true
-		}
+	configureRemote, fields, err := loadPushFields(ctx, repo, kind)
+	if err != nil {
+		return d, err
 	}
-	if needRemote {
-		remotes, err := repo.Remotes(ctx)
-		if err != nil {
-			return d, fmt.Errorf("load remotes: %w", err)
-		}
-		choices := make([]WorkflowChoice, 0, len(remotes))
-		for _, remote := range remotes {
-			choices = append(choices, WorkflowChoice{Value: remote.Name, Label: remote.Name})
-		}
-		if len(choices) == 0 {
-			return d, errors.New("push: no remotes configured")
-		}
-		d.Fields = append(d.Fields, selectField("remote", "Remote", choices))
-	}
-
-	switch kind {
-	case pushAnotherBranch:
-		branches, err := repo.Branches(ctx)
-		if err != nil {
-			return d, fmt.Errorf("load branches: %w", err)
-		}
-		var choices []WorkflowChoice
-		for _, branch := range branches {
-			if !branch.Remote {
-				choices = append(choices, WorkflowChoice{Value: branch.Name, Label: branch.Name})
-			}
-		}
-		if len(choices) == 0 {
-			return d, errors.New("push: no local branches")
-		}
-		d.Fields = append(d.Fields, selectField("source", "Local branch", choices), WorkflowField{Name: "destination", Label: "Destination branch", Kind: WorkflowText, Value: choices[0].Value, Required: true})
-	case pushExplicitRefspecs:
-		d.Fields = append(d.Fields, WorkflowField{Name: "refspecs", Label: "Refspecs (space separated)", Kind: WorkflowText, Required: true})
-	case pushOneTag:
-		tags, err := repo.ListTags(ctx)
-		if err != nil {
-			return d, fmt.Errorf("load tags: %w", err)
-		}
-		choices := make([]WorkflowChoice, 0, len(tags))
-		for _, tag := range tags {
-			choices = append(choices, WorkflowChoice{Value: tag.Name, Label: tag.Name})
-		}
-		if len(choices) == 0 {
-			return d, errors.New("push: no tags")
-		}
-		d.Fields = append(d.Fields, selectField("tag", "Tag", choices))
-	case pushOneNotesRef:
-		refs, err := repo.ListNotesRefs(ctx)
-		if err != nil {
-			return d, fmt.Errorf("load notes refs: %w", err)
-		}
-		choices := make([]WorkflowChoice, 0, len(refs))
-		for _, ref := range refs {
-			choices = append(choices, WorkflowChoice{Value: ref, Label: ref})
-		}
-		if len(choices) == 0 {
-			return d, errors.New("push: no notes refs")
-		}
-		d.Fields = append(d.Fields, selectField("notes", "Notes ref", choices))
-	}
+	d.Fields = fields
 
 	d.Validate = func(values WorkflowValues) error { return validatePushFields(d.Fields, values) }
 	d.ReviewPreflight = func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
@@ -250,6 +185,113 @@ func loadPushDialog(ctx context.Context, repo *gitbackend.Repository, kind pushW
 		return repo.ExecuteReviewedPush(ctx, approved.Plan)
 	}
 	return d, nil
+}
+
+func loadPushFields(ctx context.Context, repo *gitbackend.Repository, kind pushWorkflowKind) (bool, []WorkflowField, error) {
+	needRemote, configure, err := pushRemoteRequirement(ctx, repo, kind)
+	if err != nil {
+		return false, nil, err
+	}
+	var fields []WorkflowField
+	if needRemote {
+		field, err := pushRemoteField(ctx, repo)
+		if err != nil {
+			return false, nil, err
+		}
+		fields = append(fields, field)
+	}
+	extra, err := pushKindFields(ctx, repo, kind)
+	return configure, append(fields, extra...), err
+}
+
+func pushRemoteRequirement(ctx context.Context, repo *gitbackend.Repository, kind pushWorkflowKind) (bool, bool, error) {
+	if kind != pushCurrentRemote {
+		return kind != pushCurrentUpstream, false, nil
+	}
+	if _, err := repo.PushRemote(ctx); err != nil {
+		if errors.Is(err, gitbackend.ErrNoFetchRemote) {
+			return true, true, nil
+		}
+		return false, false, fmt.Errorf("resolve push remote: %w", err)
+	}
+	return false, false, nil
+}
+
+func pushRemoteField(ctx context.Context, repo *gitbackend.Repository) (WorkflowField, error) {
+	remotes, err := repo.Remotes(ctx)
+	if err != nil {
+		return WorkflowField{}, fmt.Errorf("load remotes: %w", err)
+	}
+	choices := make([]WorkflowChoice, 0, len(remotes))
+	for _, remote := range remotes {
+		choices = append(choices, WorkflowChoice{Value: remote.Name, Label: remote.Name})
+	}
+	if len(choices) == 0 {
+		return WorkflowField{}, errors.New("push: no remotes configured")
+	}
+	return selectField("remote", "Remote", choices), nil
+}
+
+func pushKindFields(ctx context.Context, repo *gitbackend.Repository, kind pushWorkflowKind) ([]WorkflowField, error) {
+	switch kind {
+	case pushAnotherBranch:
+		return pushBranchFields(ctx, repo)
+	case pushExplicitRefspecs:
+		return []WorkflowField{{Name: "refspecs", Label: "Refspecs (space separated)", Kind: WorkflowText, Required: true}}, nil
+	case pushOneTag:
+		return pushTagFields(ctx, repo)
+	case pushOneNotesRef:
+		return pushNotesFields(ctx, repo)
+	default:
+		return nil, nil
+	}
+}
+
+func pushBranchFields(ctx context.Context, repo *gitbackend.Repository) ([]WorkflowField, error) {
+	branches, err := repo.Branches(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load branches: %w", err)
+	}
+	var choices []WorkflowChoice
+	for _, branch := range branches {
+		if !branch.Remote {
+			choices = append(choices, WorkflowChoice{Value: branch.Name, Label: branch.Name})
+		}
+	}
+	if len(choices) == 0 {
+		return nil, errors.New("push: no local branches")
+	}
+	return []WorkflowField{selectField("source", "Local branch", choices), {Name: "destination", Label: "Destination branch", Kind: WorkflowText, Value: choices[0].Value, Required: true}}, nil
+}
+
+func pushTagFields(ctx context.Context, repo *gitbackend.Repository) ([]WorkflowField, error) {
+	tags, err := repo.ListTags(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load tags: %w", err)
+	}
+	choices := make([]WorkflowChoice, 0, len(tags))
+	for _, tag := range tags {
+		choices = append(choices, WorkflowChoice{Value: tag.Name, Label: tag.Name})
+	}
+	if len(choices) == 0 {
+		return nil, errors.New("push: no tags")
+	}
+	return []WorkflowField{selectField("tag", "Tag", choices)}, nil
+}
+
+func pushNotesFields(ctx context.Context, repo *gitbackend.Repository) ([]WorkflowField, error) {
+	refs, err := repo.ListNotesRefs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load notes refs: %w", err)
+	}
+	choices := make([]WorkflowChoice, 0, len(refs))
+	for _, ref := range refs {
+		choices = append(choices, WorkflowChoice{Value: ref, Label: ref})
+	}
+	if len(choices) == 0 {
+		return nil, errors.New("push: no notes refs")
+	}
+	return []WorkflowField{selectField("notes", "Notes ref", choices)}, nil
 }
 
 func formatArgv(argv []string) string {

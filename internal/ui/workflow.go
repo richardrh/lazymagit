@@ -142,34 +142,48 @@ func (m *Model) hasInjectedBackend() bool {
 // It is exported for domain tests and is also exercised by central tests.
 func (m *Model) ValidateUIHandlers() error {
 	for _, binding := range keymap.Registry() {
-		if binding.Handler == keymap.HandlerExecute && !builtinUICommands[binding.Command] {
-			if _, ok := m.workflowHandlers[binding.Command]; !ok {
-				return fmt.Errorf("%s has no UI handler", binding.Command)
-			}
-		}
-		if binding.Handler == keymap.HandlerInfix && binding.Kind != keymap.KindInfix {
-			return fmt.Errorf("%s has invalid infix handler", binding.Command)
-		}
-		if binding.Availability == keymap.AvailabilityNever && (binding.Unavailable == "" || binding.UnavailableCategory == keymap.UnavailableNone) {
-			return fmt.Errorf("%s has untyped unavailability", binding.Command)
+		if err := validateUIBinding(binding, m.workflowHandlers); err != nil {
+			return err
 		}
 	}
 	for id, capability := range m.workflowCapabilities {
-		if _, ok := m.workflowHandlers[id]; !ok {
-			return fmt.Errorf("%s declares a capability without a handler", id)
-		}
-		matched := false
-		for _, binding := range keymap.Registry() {
-			if binding.UpstreamCommand == capability.UpstreamCommand && (capability.Transient == "" || binding.Transient == capability.Transient) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("%s capability does not match the manifest", id)
+		if err := validateUICapability(id, capability, m.workflowHandlers); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateUIBinding(binding keymap.Binding, handlers map[keymap.CommandID]WorkflowHandler) error {
+	if binding.Handler == keymap.HandlerExecute && !builtinUICommands[binding.Command] && handlers[binding.Command] == nil {
+		return fmt.Errorf("%s has no UI handler", binding.Command)
+	}
+	if binding.Handler == keymap.HandlerInfix && binding.Kind != keymap.KindInfix {
+		return fmt.Errorf("%s has invalid infix handler", binding.Command)
+	}
+	if binding.Availability == keymap.AvailabilityNever && (binding.Unavailable == "" || binding.UnavailableCategory == keymap.UnavailableNone) {
+		return fmt.Errorf("%s has untyped unavailability", binding.Command)
+	}
+	return nil
+}
+
+func validateUICapability(id keymap.CommandID, capability WorkflowCapability, handlers map[keymap.CommandID]WorkflowHandler) error {
+	if handlers[id] == nil {
+		return fmt.Errorf("%s declares a capability without a handler", id)
+	}
+	if !capabilityMatchesManifest(capability) {
+		return fmt.Errorf("%s capability does not match the manifest", id)
+	}
+	return nil
+}
+
+func capabilityMatchesManifest(capability WorkflowCapability) bool {
+	for _, binding := range keymap.Registry() {
+		if binding.UpstreamCommand == capability.UpstreamCommand && (capability.Transient == "" || binding.Transient == capability.Transient) {
+			return true
+		}
+	}
+	return false
 }
 
 var builtinUICommands = map[keymap.CommandID]bool{

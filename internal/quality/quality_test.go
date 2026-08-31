@@ -74,6 +74,44 @@ example.com/project/work.go:16.24,16.38 1 0
 	}
 }
 
+func TestCoverprofileHelpers(t *testing.T) {
+	root := t.TempDir()
+	block, err := parseCoverLine("example.com/project/work.go:2.3,4.5 6 7", root, "example.com/project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if block.file != "work.go" || block.startLine != 2 || block.startCol != 3 || block.endLine != 4 || block.endCol != 5 || block.statements != 6 || block.count != 7 {
+		t.Fatalf("block = %#v", block)
+	}
+	for _, text := range []string{"bad", "work.go 1 1", "work.go:2.3 1 1", "work.go:2.3,4.5 -1 1", "work.go:2.3,4.5 1 bad"} {
+		if _, err := parseCoverLine(text, root, "example.com/project"); err == nil {
+			t.Errorf("parseCoverLine(%q) succeeded", text)
+		}
+	}
+	if _, _, err := parsePositions("2.3"); err == nil {
+		t.Fatal("parsePositions accepted one position")
+	}
+	if _, err := parseNonnegative("-1", "statement"); err == nil {
+		t.Fatal("parseNonnegative accepted negative")
+	}
+	abs := filepath.Join(root, "dir", "work.go")
+	if got, err := normalizeCoverName(abs, root, "example.com/project"); err != nil || got != "dir/work.go" {
+		t.Fatalf("normalizeCoverName = %q, %v", got, err)
+	}
+}
+
+func TestParseCoverprofileErrors(t *testing.T) {
+	root := t.TempDir()
+	profile := filepath.Join(root, "cover.out")
+	writeTestFile(t, profile, "mode: set\nbad\n")
+	if _, err := parseCoverprofile(profile, root, "example.com/project"); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("parseCoverprofile error = %v", err)
+	}
+	if _, err := parseCoverprofile(filepath.Join(root, "missing"), root, "example.com/project"); err == nil {
+		t.Fatal("parseCoverprofile accepted missing file")
+	}
+}
+
 func TestScore(t *testing.T) {
 	if got, want := Score(4, .5), 6.0; got != want {
 		t.Fatalf("Score(4, .5) = %v, want %v", got, want)
@@ -103,6 +141,38 @@ func TestGate(t *testing.T) {
 				t.Fatalf("Gate error = %v, want substring %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestBaselineRoundTripAndErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	functions := []Function{{ID: "p/-/high", CRAP: 31}, {ID: "p/-/low", CRAP: 30}}
+	if err := WriteBaseline(path, 30, functions); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Threshold != 30 || len(got.Scores) != 1 || got.Scores["p/-/high"] != 31 {
+		t.Fatalf("baseline = %#v", got)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.json")
+	writeTestFile(t, empty, `{"threshold":30}`)
+	got, err = ReadBaseline(empty)
+	if err != nil || got.Scores == nil {
+		t.Fatalf("nil scores normalization = %#v, %v", got, err)
+	}
+	invalid := filepath.Join(t.TempDir(), "invalid.json")
+	writeTestFile(t, invalid, "{")
+	if _, err := ReadBaseline(invalid); err == nil {
+		t.Fatal("ReadBaseline accepted invalid JSON")
+	}
+	if _, err := ReadBaseline(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("ReadBaseline accepted missing file")
+	}
+	if err := WriteBaseline(filepath.Join(t.TempDir(), "missing", "baseline.json"), 30, nil); err == nil {
+		t.Fatal("WriteBaseline accepted missing parent")
 	}
 }
 

@@ -81,6 +81,44 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestArgumentParserHelpers(t *testing.T) {
+	p := argumentParser{opts: options{path: ".", theme: "default", layout: "standard"}}
+	if consumed, err := p.consumeTheme([]string{"--theme", "night"}); err != nil || consumed != 2 || p.opts.theme != "night" {
+		t.Fatalf("consumeTheme = %d, %v, theme %q", consumed, err, p.opts.theme)
+	}
+	if _, err := p.consumeTheme([]string{"--theme"}); err == nil {
+		t.Fatal("consumeTheme accepted missing value")
+	}
+	if err := p.setTheme(" "); err == nil {
+		t.Fatal("setTheme accepted blank value")
+	}
+	if consumed, err := p.consumeLayout([]string{"--layout", "compact"}); err != nil || consumed != 2 || p.opts.layout != "compact" {
+		t.Fatalf("consumeLayout = %d, %v, layout %q", consumed, err, p.opts.layout)
+	}
+	if _, err := p.consumeLayout([]string{"--layout"}); err == nil {
+		t.Fatal("consumeLayout accepted missing value")
+	}
+	if err := p.setLayout("wide"); err == nil {
+		t.Fatal("setLayout accepted invalid value")
+	}
+	if err := p.setPath("repo"); err != nil || p.opts.path != "repo" {
+		t.Fatalf("setPath: %v, %#v", err, p.opts)
+	}
+	if err := p.setPath("other"); err == nil {
+		t.Fatal("setPath accepted a second path")
+	}
+}
+
+func TestArgumentParserConsumeAfterOptionsEnd(t *testing.T) {
+	p := argumentParser{opts: options{path: ".", theme: "default", layout: "standard"}}
+	if consumed, err := p.consume([]string{"--"}); err != nil || consumed != 1 || !p.optionsEnded {
+		t.Fatalf("consume terminator = %d, %v, ended=%v", consumed, err, p.optionsEnded)
+	}
+	if consumed, err := p.consume([]string{"-repo"}); err != nil || consumed != 1 || p.opts.path != "-repo" {
+		t.Fatalf("consume path = %d, %v, path=%q", consumed, err, p.opts.path)
+	}
+}
+
 func TestInteractiveNonRepositoryAnswers(t *testing.T) {
 	for _, tt := range []struct {
 		name        string
@@ -245,5 +283,37 @@ func TestTerminalSafeDiagnosticEscapesAllTerminalControls(t *testing.T) {
 	got := terminalSafeDiagnostic(input.String())
 	if strings.IndexFunc(got, unicode.IsControl) >= 0 {
 		t.Fatalf("terminalSafeDiagnostic() retained a control character: %q", got)
+	}
+}
+
+func TestMainExit(t *testing.T) {
+	wantErr := errors.New("bad\nerror")
+	tests := []struct {
+		name        string
+		handled     bool
+		rebaseErr   error
+		runErr      error
+		wantCode    int
+		wantRunCall bool
+	}{
+		{name: "editor success", handled: true},
+		{name: "editor error", handled: true, rebaseErr: wantErr, wantCode: 1},
+		{name: "application success", wantRunCall: true},
+		{name: "application error", runErr: wantErr, wantCode: 1, wantRunCall: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr strings.Builder
+			runCalled := false
+			code := mainExit([]string{"arg"}, &stderr,
+				func(args []string) (bool, error) { return tt.handled, tt.rebaseErr },
+				func(args []string) error { runCalled = true; return tt.runErr })
+			if code != tt.wantCode || runCalled != tt.wantRunCall {
+				t.Fatalf("mainExit = %d, runCalled=%v", code, runCalled)
+			}
+			if tt.wantCode == 1 && (!strings.Contains(stderr.String(), "lazymagit:") || strings.Contains(stderr.String(), "bad\nerror")) {
+				t.Fatalf("unsafe diagnostic: %q", stderr.String())
+			}
+		})
 	}
 }

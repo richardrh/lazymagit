@@ -224,9 +224,12 @@ func (m *Model) visibleAncestor(id SectionID) SectionID {
 
 func (m *Model) ensureCursor(oldOrder []SectionID) {
 	visible := m.VisibleSectionIDs()
+	m.cursor = nearestVisibleCursor(oldOrder, visible, m.cursor)
+}
+
+func nearestVisibleCursor(oldOrder, visible []SectionID, cursor SectionID) SectionID {
 	if len(visible) == 0 {
-		m.cursor = ""
-		return
+		return ""
 	}
 	visibleSet := make(map[SectionID]bool, len(visible))
 	for _, id := range visible {
@@ -234,7 +237,7 @@ func (m *Model) ensureCursor(oldOrder []SectionID) {
 	}
 	oldIndex := -1
 	for i, id := range oldOrder {
-		if id == m.cursor {
+		if id == cursor {
 			oldIndex = i
 			break
 		}
@@ -243,14 +246,12 @@ func (m *Model) ensureCursor(oldOrder []SectionID) {
 	if oldIndex >= 0 {
 		for distance := 1; distance < len(oldOrder); distance++ {
 			if next := oldIndex + distance; next < len(oldOrder) && visibleSet[oldOrder[next]] {
-				m.cursor = oldOrder[next]
-				return
+				return oldOrder[next]
 			}
 			if previous := oldIndex - distance; previous >= 0 && visibleSet[oldOrder[previous]] {
-				m.cursor = oldOrder[previous]
-				return
+				return oldOrder[previous]
 			}
 		}
 	}
-	m.cursor = visible[0]
+	return visible[0]
 }

@@ -38,6 +38,17 @@ type FetchArgs struct {
 }
 
 func (r *Repository) FetchWithArgs(ctx context.Context, in FetchArgs) error {
+	if err := r.validateFetchArgs(ctx, in); err != nil {
+		return err
+	}
+	args, err := fetchArgs(in)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, args...)
+}
+
+func (r *Repository) validateFetchArgs(ctx context.Context, in FetchArgs) error {
 	if in.Branch != "" && in.Refspec != "" {
 		return errors.New("fetch branch and refspec are mutually exclusive")
 	}
@@ -56,6 +67,10 @@ func (r *Repository) FetchWithArgs(ctx context.Context, in FetchArgs) error {
 			return fmt.Errorf("fetch refspec: %w", err)
 		}
 	}
+	return nil
+}
+
+func fetchArgs(in FetchArgs) ([]string, error) {
 	args := []string{"fetch"}
 	if in.Prune {
 		args = append(args, "--prune")
@@ -67,7 +82,7 @@ func (r *Repository) FetchWithArgs(ctx context.Context, in FetchArgs) error {
 	case FetchNoTags:
 		args = append(args, "--no-tags")
 	default:
-		return errors.New("invalid fetch tags mode")
+		return nil, errors.New("invalid fetch tags mode")
 	}
 	if in.Unshallow {
 		args = append(args, "--unshallow")
@@ -84,11 +99,11 @@ func (r *Repository) FetchWithArgs(ctx context.Context, in FetchArgs) error {
 	case SubmodulesNo:
 		args = append(args, "--recurse-submodules=no")
 	default:
-		return errors.New("invalid submodule recursion mode")
+		return nil, errors.New("invalid submodule recursion mode")
 	}
 	if in.Remote != "" || in.Branch != "" || in.Refspec != "" {
 		if in.Remote == "" {
-			return errors.New("fetch suffix requires a remote")
+			return nil, errors.New("fetch suffix requires a remote")
 		}
 		args = append(args, "--", in.Remote)
 		if in.Branch != "" {
@@ -98,7 +113,7 @@ func (r *Repository) FetchWithArgs(ctx context.Context, in FetchArgs) error {
 			args = append(args, in.Refspec)
 		}
 	}
-	return r.run(ctx, args...)
+	return args, nil
 }
 
 type PullTarget uint8
@@ -161,64 +176,84 @@ func (r *Repository) PullWithArgs(ctx context.Context, in PullArgs) error {
 func (r *Repository) resolvePullTarget(ctx context.Context, in PullArgs) (string, string, error) {
 	switch in.Target {
 	case PullUpstream:
-		branch, err := r.currentBranch(ctx)
-		if err != nil {
-			return "", "", err
-		}
-		if branch == "" {
-			return "", "", ErrNoUpstream
-		}
-		remote, ok, err := r.configValue(ctx, "branch."+branch+".remote")
-		if err != nil {
-			return "", "", err
-		}
-		if !ok {
-			return "", "", ErrNoUpstream
-		}
-		merge, ok, err := r.configValue(ctx, "branch."+branch+".merge")
-		if err != nil {
-			return "", "", err
-		}
-		if !ok {
-			return "", "", ErrNoUpstream
-		}
-		if err := r.validateTransferRemote(ctx, remote); err != nil {
-			return "", "", err
-		}
-		return remote, strings.TrimPrefix(merge, "refs/heads/"), nil
+		return r.resolveUpstreamPullTarget(ctx)
 	case PullPushRemote:
-		remote, err := r.PushRemote(ctx)
-		if err != nil {
-			return "", "", err
-		}
-		branch := in.Branch
-		if branch == "" {
-			branch, err = r.currentBranch(ctx)
-			if err != nil {
-				return "", "", err
-			}
-		}
-		if branch == "" {
-			return "", "", errors.New("cannot pull current branch from a detached HEAD")
-		}
-		if err := r.validateBranch(ctx, branch); err != nil {
-			return "", "", err
-		}
-		return remote, branch, nil
+		return r.resolvePushRemotePullTarget(ctx, in.Branch)
 	case PullRemoteBranch:
-		if in.Remote == "" || in.Branch == "" {
-			return "", "", errors.New("explicit pull requires remote and branch")
-		}
-		if err := r.validateTransferRemote(ctx, in.Remote); err != nil {
-			return "", "", err
-		}
-		if err := r.validateBranch(ctx, in.Branch); err != nil {
-			return "", "", err
-		}
-		return in.Remote, in.Branch, nil
+		return r.resolveExplicitPullTarget(ctx, in.Remote, in.Branch)
 	default:
 		return "", "", errors.New("invalid pull target")
 	}
+}
+
+func (r *Repository) resolveUpstreamPullTarget(ctx context.Context) (string, string, error) {
+	branch, err := r.currentBranch(ctx)
+	if err != nil || branch == "" {
+		return "", "", pullUpstreamError(err)
+	}
+	remote, err := r.requiredPullConfig(ctx, "branch."+branch+".remote")
+	if err != nil {
+		return "", "", err
+	}
+	merge, err := r.requiredPullConfig(ctx, "branch."+branch+".merge")
+	if err != nil {
+		return "", "", err
+	}
+	if err := r.validateTransferRemote(ctx, remote); err != nil {
+		return "", "", err
+	}
+	return remote, strings.TrimPrefix(merge, "refs/heads/"), nil
+}
+
+func pullUpstreamError(err error) error {
+	if err != nil {
+		return err
+	}
+	return ErrNoUpstream
+}
+
+func (r *Repository) requiredPullConfig(ctx context.Context, key string) (string, error) {
+	value, ok, err := r.configValue(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrNoUpstream
+	}
+	return value, nil
+}
+
+func (r *Repository) resolvePushRemotePullTarget(ctx context.Context, branch string) (string, string, error) {
+	remote, err := r.PushRemote(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	if branch == "" {
+		branch, err = r.currentBranch(ctx)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if branch == "" {
+		return "", "", errors.New("cannot pull current branch from a detached HEAD")
+	}
+	if err := r.validateBranch(ctx, branch); err != nil {
+		return "", "", err
+	}
+	return remote, branch, nil
+}
+
+func (r *Repository) resolveExplicitPullTarget(ctx context.Context, remote, branch string) (string, string, error) {
+	if remote == "" || branch == "" {
+		return "", "", errors.New("explicit pull requires remote and branch")
+	}
+	if err := r.validateTransferRemote(ctx, remote); err != nil {
+		return "", "", err
+	}
+	if err := r.validateBranch(ctx, branch); err != nil {
+		return "", "", err
+	}
+	return remote, branch, nil
 }
 
 type PushTarget uint8
@@ -294,47 +329,63 @@ func validatePushSelectors(in PushArgs) error {
 	if in.Tags && in.AllTags {
 		return errors.New("push all-tags selectors are duplicated")
 	}
-	selectors := 0
-	for _, set := range []bool{in.Refspec != "" || in.Source != "" || in.Destination != "", in.Matching, in.Tag != "", in.AllTags, in.Notes} {
-		if set {
-			selectors++
-		}
-	}
-	if selectors > 1 {
+	if countPushSelectors(in) > 1 {
 		return errors.New("push selectors are mutually exclusive")
 	}
-	if (in.Tags || in.AllTags) && (in.Refspec != "" || in.Source != "" || in.Destination != "" || in.Matching || in.Tag != "" || in.Notes) {
+	if (in.Tags || in.AllTags) && hasNonAllTagsSelector(in) {
 		return errors.New("push all-tags cannot be combined with another selector")
 	}
 	return nil
 }
 
+func countPushSelectors(in PushArgs) int {
+	count := 0
+	for _, set := range []bool{hasPushRefSelector(in), in.Matching, in.Tag != "", in.AllTags, in.Notes} {
+		if set {
+			count++
+		}
+	}
+	return count
+}
+
+func hasPushRefSelector(in PushArgs) bool {
+	return in.Refspec != "" || in.Source != "" || in.Destination != ""
+}
+func hasNonAllTagsSelector(in PushArgs) bool {
+	return hasPushRefSelector(in) || in.Matching || in.Tag != "" || in.Notes
+}
+
 func appendPushFlags(args []string, in PushArgs) ([]string, error) {
-	switch in.Force {
+	args, err := appendPushForce(args, in.Force)
+	if err != nil {
+		return nil, err
+	}
+	for _, option := range []struct {
+		set  bool
+		flag string
+	}{{in.NoVerify, "--no-verify"}, {in.DryRun, "--dry-run"}, {in.SetUpstream, "--set-upstream"}, {in.Tags, "--tags"}, {in.FollowTags, "--follow-tags"}} {
+		if option.set {
+			args = append(args, option.flag)
+		}
+	}
+	return appendPushOptions(args, in.PushOptions)
+}
+
+func appendPushForce(args []string, force PushForce) ([]string, error) {
+	switch force {
 	case PushForceNone:
+		return args, nil
 	case PushForceWithLease:
-		args = append(args, "--force-with-lease")
+		return append(args, "--force-with-lease"), nil
 	case PushForceUnconditionally:
-		args = append(args, "--force")
+		return append(args, "--force"), nil
 	default:
 		return nil, errors.New("invalid push force mode")
 	}
-	if in.NoVerify {
-		args = append(args, "--no-verify")
-	}
-	if in.DryRun {
-		args = append(args, "--dry-run")
-	}
-	if in.SetUpstream {
-		args = append(args, "--set-upstream")
-	}
-	if in.Tags {
-		args = append(args, "--tags")
-	}
-	if in.FollowTags {
-		args = append(args, "--follow-tags")
-	}
-	for _, option := range in.PushOptions {
+}
+
+func appendPushOptions(args, options []string) ([]string, error) {
+	for _, option := range options {
 		if strings.ContainsAny(option, "\x00\r\n") {
 			return nil, errors.New("push option contains a control character")
 		}
@@ -492,39 +543,53 @@ func (r *Repository) validateRefspec(ctx context.Context, spec string, fetch boo
 	if err := validateToken("refspec", spec); err != nil {
 		return err
 	}
-	value := strings.TrimPrefix(spec, "+")
-	if strings.Count(value, ":") > 1 {
-		return fmt.Errorf("invalid refspec %q", spec)
+	source, destination, hasColon, err := splitRefspec(spec)
+	if err != nil {
+		return err
 	}
-	source, destination, hasColon := strings.Cut(value, ":")
 	if fetch && (!hasColon || source == "" || destination == "") {
 		return fmt.Errorf("fetch refspec requires source and destination")
 	}
 	for _, ref := range []string{source, destination} {
-		if ref == "" {
-			continue
+		if err := r.validateRefspecRef(ctx, ref, fetch); err != nil {
+			return err
 		}
-		if strings.HasPrefix(ref, "refs/") {
-			if _, err := r.output(ctx, "check-ref-format", "--refspec-pattern", ref); err != nil {
-				return fmt.Errorf("invalid refspec ref %q", ref)
-			}
-			continue
+	}
+	if fetch {
+		return nil
+	}
+	if source != "" && !strings.HasPrefix(source, "refs/") {
+		if err := r.validatePushSource(ctx, source); err != nil {
+			return err
 		}
+	}
+	if destination != "" && !strings.HasPrefix(destination, "refs/") {
+		return r.validateBranch(ctx, destination)
+	}
+	return nil
+}
+
+func splitRefspec(spec string) (source, destination string, hasColon bool, err error) {
+	value := strings.TrimPrefix(spec, "+")
+	if strings.Count(value, ":") > 1 {
+		return "", "", false, fmt.Errorf("invalid refspec %q", spec)
+	}
+	source, destination, hasColon = strings.Cut(value, ":")
+	return source, destination, hasColon, nil
+}
+
+func (r *Repository) validateRefspecRef(ctx context.Context, ref string, fetch bool) error {
+	if ref == "" {
+		return nil
+	}
+	if !strings.HasPrefix(ref, "refs/") {
 		if fetch {
 			return fmt.Errorf("fetch refspec ref %q is not fully qualified", ref)
 		}
+		return nil
 	}
-	if !fetch {
-		if source != "" && !strings.HasPrefix(source, "refs/") {
-			if err := r.validatePushSource(ctx, source); err != nil {
-				return err
-			}
-		}
-		if destination != "" && !strings.HasPrefix(destination, "refs/") {
-			if err := r.validateBranch(ctx, destination); err != nil {
-				return err
-			}
-		}
+	if _, err := r.output(ctx, "check-ref-format", "--refspec-pattern", ref); err != nil {
+		return fmt.Errorf("invalid refspec ref %q", ref)
 	}
 	return nil
 }

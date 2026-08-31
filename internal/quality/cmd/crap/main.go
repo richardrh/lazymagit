@@ -55,16 +55,28 @@ func execute(opts options, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	printFunctions(stdout, functions)
+	if opts.update {
+		return updateBaseline(opts, stdout, functions)
+	}
+	return gateBaseline(opts, functions)
+}
+
+func printFunctions(stdout io.Writer, functions []quality.Function) {
 	for _, fn := range functions {
 		fmt.Fprintf(stdout, "%s complexity=%d coverage=%.2f%% crap=%.2f\n", fn.ID, fn.Complexity, fn.Coverage*100, fn.CRAP)
 	}
-	if opts.update {
-		if err := quality.WriteBaseline(opts.baselinePath, opts.threshold, functions); err != nil {
-			return err
-		}
-		fmt.Fprintf(stdout, "updated %s\n", opts.baselinePath)
-		return nil
+}
+
+func updateBaseline(opts options, stdout io.Writer, functions []quality.Function) error {
+	if err := quality.WriteBaseline(opts.baselinePath, opts.threshold, functions); err != nil {
+		return err
 	}
+	fmt.Fprintf(stdout, "updated %s\n", opts.baselinePath)
+	return nil
+}
+
+func gateBaseline(opts options, functions []quality.Function) error {
 	baseline, err := quality.ReadBaseline(opts.baselinePath)
 	if err != nil {
 		return err

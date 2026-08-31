@@ -592,57 +592,93 @@ func (r *Repository) selectedInteractivePatch(ctx context.Context, request Inter
 		return nil, nil, 0, ErrInvalidChangePatchRegion
 	}
 	file := &doc.Files[0]
-	var patch []byte
-	var headings []string
-	changed := 0
-	switch request.Scope {
-	case InteractiveChangeFile:
-		patch, err = doc.FilePatch(0)
-		for _, hunk := range file.Hunks {
-			headings = append(headings, hunk.Heading)
-			changed += changedLineCount(hunk.Lines)
-		}
-	case InteractiveChangeHunk:
-		patch, err = doc.HunkPatch(0, request.Hunk)
-		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
-			headings = append(headings, file.Hunks[request.Hunk].Heading)
-			changed = changedLineCount(file.Hunks[request.Hunk].Lines)
-		}
-	case InteractiveChangeLines:
-		patch, err = doc.ChangedLineRegionPatch(0, request.Hunk, request.Start, request.End)
-		if request.Hunk >= 0 && request.Hunk < len(file.Hunks) {
-			headings = append(headings, file.Hunks[request.Hunk].Heading)
-			changed = changedLinesInRegion(file.Hunks[request.Hunk], request.Start, request.End)
-		}
-	case InteractiveChangeSelections:
-		patch, err = doc.ChangedLineSelectionsPatch(0, request.Selections)
-		if err == nil {
-			canonical, canonicalErr := canonicalChangeSelections(file.Hunks, request.Selections)
-			if canonicalErr != nil {
-				return nil, nil, 0, canonicalErr
-			}
-			for hunkIndex, hunk := range file.Hunks {
-				selections, ok := canonical[hunkIndex]
-				if !ok {
-					continue
-				}
-				headings = append(headings, hunk.Heading)
-				if selections[0].WholeHunk {
-					changed += changedLineCount(hunk.Lines)
-					continue
-				}
-				for _, selection := range selections {
-					changed += changedLinesInRegion(hunk, selection.Start, selection.End)
-				}
-			}
-		}
-	default:
-		return nil, nil, 0, errors.New("unknown interactive change scope")
-	}
+	patch, headings, changed, err := selectedPatchFromDocument(doc, file, request)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 	return patch, headings, changed, nil
+}
+
+func selectedPatchFromDocument(doc *DiffDocument, file *DiffFile, request InteractiveChangeRequest) ([]byte, []string, int, error) {
+	switch request.Scope {
+	case InteractiveChangeFile:
+		return selectedFilePatch(doc, file)
+	case InteractiveChangeHunk:
+		return selectedHunkPatch(doc, file, request.Hunk)
+	case InteractiveChangeLines:
+		return selectedLinePatch(doc, file, request)
+	case InteractiveChangeSelections:
+		return selectedSelectionsPatch(doc, file, request.Selections)
+	default:
+		return nil, nil, 0, errors.New("unknown interactive change scope")
+	}
+}
+
+func selectedFilePatch(doc *DiffDocument, file *DiffFile) ([]byte, []string, int, error) {
+	patch, err := doc.FilePatch(0)
+	var headings []string
+	changed := 0
+	for _, hunk := range file.Hunks {
+		headings = append(headings, hunk.Heading)
+		changed += changedLineCount(hunk.Lines)
+	}
+	return patch, headings, changed, err
+}
+
+func selectedHunkPatch(doc *DiffDocument, file *DiffFile, index int) ([]byte, []string, int, error) {
+	patch, err := doc.HunkPatch(0, index)
+	if index < 0 || index >= len(file.Hunks) {
+		return patch, nil, 0, err
+	}
+	hunk := file.Hunks[index]
+	return patch, []string{hunk.Heading}, changedLineCount(hunk.Lines), err
+}
+
+func selectedLinePatch(doc *DiffDocument, file *DiffFile, request InteractiveChangeRequest) ([]byte, []string, int, error) {
+	patch, err := doc.ChangedLineRegionPatch(0, request.Hunk, request.Start, request.End)
+	if request.Hunk < 0 || request.Hunk >= len(file.Hunks) {
+		return patch, nil, 0, err
+	}
+	hunk := file.Hunks[request.Hunk]
+	return patch, []string{hunk.Heading}, changedLinesInRegion(hunk, request.Start, request.End), err
+}
+
+func selectedSelectionsPatch(doc *DiffDocument, file *DiffFile, selections []InteractiveChangeSelection) ([]byte, []string, int, error) {
+	patch, err := doc.ChangedLineSelectionsPatch(0, selections)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	canonical, err := canonicalChangeSelections(file.Hunks, selections)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	headings, changed := selectedSelectionsSummary(file.Hunks, canonical)
+	return patch, headings, changed, nil
+}
+
+func selectedSelectionsSummary(hunks []DiffHunk, canonical map[int][]InteractiveChangeSelection) ([]string, int) {
+	var headings []string
+	changed := 0
+	for index, hunk := range hunks {
+		selections, ok := canonical[index]
+		if !ok {
+			continue
+		}
+		headings = append(headings, hunk.Heading)
+		changed += selectedHunkChangeCount(hunk, selections)
+	}
+	return headings, changed
+}
+
+func selectedHunkChangeCount(hunk DiffHunk, selections []InteractiveChangeSelection) int {
+	if selections[0].WholeHunk {
+		return changedLineCount(hunk.Lines)
+	}
+	changed := 0
+	for _, selection := range selections {
+		changed += changedLinesInRegion(hunk, selection.Start, selection.End)
+	}
+	return changed
 }
 
 func changedLinesInRegion(hunk DiffHunk, start, end int) int {

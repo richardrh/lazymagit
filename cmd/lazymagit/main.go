@@ -20,17 +20,22 @@ import (
 const usage = "usage: lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]"
 
 func main() {
-	if handled, err := gitbackend.RunRebaseTodoEditor(os.Args[1:]); handled {
+	os.Exit(mainExit(os.Args[1:], os.Stderr, gitbackend.RunRebaseTodoEditor, run))
+}
+
+func mainExit(args []string, stderr io.Writer, rebaseEditor func([]string) (bool, error), appRun func([]string) error) int {
+	if handled, err := rebaseEditor(args); handled {
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
-			os.Exit(1)
+			fmt.Fprintln(stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
+			return 1
 		}
-		return
+		return 0
 	}
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
-		os.Exit(1)
+	if err := appRun(args); err != nil {
+		fmt.Fprintln(stderr, "lazymagit:", terminalSafeDiagnostic(err.Error()))
+		return 1
 	}
+	return 0
 }
 
 func terminalSafeDiagnostic(text string) string {
@@ -92,59 +97,87 @@ type options struct {
 }
 
 func parseArgs(args []string) (options, error) {
-	opts := options{path: ".", theme: "default", layout: "standard"}
-	pathSet := false
-	optionsEnded := false
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if !optionsEnded {
-			switch {
-			case arg == "--":
-				optionsEnded = true
-				continue
-			case arg == "--init" && !pathSet && !opts.init:
-				opts.init = true
-				continue
-			case arg == "--theme" && !pathSet:
-				i++
-				if i >= len(args) || strings.TrimSpace(args[i]) == "" {
-					return options{}, fmt.Errorf("%s", usage)
-				}
-				opts.theme = args[i]
-				continue
-			case strings.HasPrefix(arg, "--theme=") && !pathSet:
-				opts.theme = strings.TrimPrefix(arg, "--theme=")
-				if strings.TrimSpace(opts.theme) == "" {
-					return options{}, fmt.Errorf("%s", usage)
-				}
-				continue
-			case arg == "--layout" && !pathSet:
-				i++
-				if i >= len(args) {
-					return options{}, fmt.Errorf("%s", usage)
-				}
-				opts.layout = args[i]
-				if opts.layout != "standard" && opts.layout != "compact" {
-					return options{}, fmt.Errorf("layout must be standard or compact")
-				}
-				continue
-			case strings.HasPrefix(arg, "--layout=") && !pathSet:
-				opts.layout = strings.TrimPrefix(arg, "--layout=")
-				if opts.layout != "standard" && opts.layout != "compact" {
-					return options{}, fmt.Errorf("layout must be standard or compact")
-				}
-				continue
-			case strings.HasPrefix(arg, "-"):
-				return options{}, fmt.Errorf("%s", usage)
-			}
+	parser := argumentParser{opts: options{path: ".", theme: "default", layout: "standard"}}
+	for len(args) > 0 {
+		consumed, err := parser.consume(args)
+		if err != nil {
+			return options{}, err
 		}
-		if pathSet {
-			return options{}, fmt.Errorf("%s", usage)
-		}
-		opts.path = arg
-		pathSet = true
+		args = args[consumed:]
 	}
-	return opts, nil
+	return parser.opts, nil
+}
+
+type argumentParser struct {
+	opts         options
+	pathSet      bool
+	optionsEnded bool
+}
+
+func (p *argumentParser) consume(args []string) (int, error) {
+	arg := args[0]
+	if p.optionsEnded {
+		return 1, p.setPath(arg)
+	}
+	switch {
+	case arg == "--":
+		p.optionsEnded = true
+		return 1, nil
+	case arg == "--init" && !p.pathSet && !p.opts.init:
+		p.opts.init = true
+		return 1, nil
+	case arg == "--theme" && !p.pathSet:
+		return p.consumeTheme(args)
+	case strings.HasPrefix(arg, "--theme=") && !p.pathSet:
+		return 1, p.setTheme(strings.TrimPrefix(arg, "--theme="))
+	case arg == "--layout" && !p.pathSet:
+		return p.consumeLayout(args)
+	case strings.HasPrefix(arg, "--layout=") && !p.pathSet:
+		return 1, p.setLayout(strings.TrimPrefix(arg, "--layout="))
+	case strings.HasPrefix(arg, "-"):
+		return 0, fmt.Errorf("%s", usage)
+	default:
+		return 1, p.setPath(arg)
+	}
+}
+
+func (p *argumentParser) consumeTheme(args []string) (int, error) {
+	if len(args) < 2 {
+		return 0, fmt.Errorf("%s", usage)
+	}
+	return 2, p.setTheme(args[1])
+}
+
+func (p *argumentParser) setTheme(theme string) error {
+	if strings.TrimSpace(theme) == "" {
+		return fmt.Errorf("%s", usage)
+	}
+	p.opts.theme = theme
+	return nil
+}
+
+func (p *argumentParser) consumeLayout(args []string) (int, error) {
+	if len(args) < 2 {
+		return 0, fmt.Errorf("%s", usage)
+	}
+	return 2, p.setLayout(args[1])
+}
+
+func (p *argumentParser) setLayout(layout string) error {
+	if layout != "standard" && layout != "compact" {
+		return fmt.Errorf("layout must be standard or compact")
+	}
+	p.opts.layout = layout
+	return nil
+}
+
+func (p *argumentParser) setPath(path string) error {
+	if p.pathSet {
+		return fmt.Errorf("%s", usage)
+	}
+	p.opts.path = path
+	p.pathSet = true
+	return nil
 }
 
 func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
