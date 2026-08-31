@@ -55,25 +55,41 @@ func (r *Repository) ReviewGitCommand(ctx context.Context, argv []string, allowE
 	if err != nil {
 		return ReviewedCommand{}, err
 	}
-	if strings.HasPrefix(argv[0], "-") || argv[0] == "git" {
-		return ReviewedCommand{}, errors.New("enter a Git subcommand first; global options and a leading git are not allowed")
+	if err := validateReviewedGitSubcommand(argv); err != nil {
+		return ReviewedCommand{}, err
 	}
-	if blockedGitSubcommands[argv[0]] {
-		return ReviewedCommand{}, fmt.Errorf("Git subcommand %q can launch an interactive or credential program and is unsupported", argv[0])
-	}
-	if argv[0] == "bisect" && len(argv) > 1 && argv[1] == "run" {
-		return ReviewedCommand{}, errors.New("bisect run is history-owned and unavailable from raw command execution")
-	}
-	if alias, truncated, err := r.outputLimited(ctx, 64<<10, "config", "--get", "alias."+argv[0]); err == nil && (truncated || strings.TrimSpace(string(alias)) != "") {
-		return ReviewedCommand{}, fmt.Errorf("%w: %s", ErrRawCommandAlias, argv[0])
-	} else if err != nil && !isExitCode(err, 1) {
-		return ReviewedCommand{}, fmt.Errorf("check Git alias: %w", err)
+	if err := r.rejectReviewedGitAlias(ctx, argv[0]); err != nil {
+		return ReviewedCommand{}, err
 	}
 	external := !builtinGitSubcommands[argv[0]]
 	if external && !allowExternal {
 		return ReviewedCommand{}, fmt.Errorf("%w: %s", ErrExternalGitCommand, argv[0])
 	}
 	return ReviewedCommand{kind: reviewedGit, argv: argv, external: external, marker: &struct{}{}}, nil
+}
+
+func validateReviewedGitSubcommand(argv []string) error {
+	if strings.HasPrefix(argv[0], "-") || argv[0] == "git" {
+		return errors.New("enter a Git subcommand first; global options and a leading git are not allowed")
+	}
+	if blockedGitSubcommands[argv[0]] {
+		return fmt.Errorf("Git subcommand %q can launch an interactive or credential program and is unsupported", argv[0])
+	}
+	if argv[0] == "bisect" && len(argv) > 1 && argv[1] == "run" {
+		return errors.New("bisect run is history-owned and unavailable from raw command execution")
+	}
+	return nil
+}
+
+func (r *Repository) rejectReviewedGitAlias(ctx context.Context, subcommand string) error {
+	alias, truncated, err := r.outputLimited(ctx, 64<<10, "config", "--get", "alias."+subcommand)
+	if err == nil && (truncated || strings.TrimSpace(string(alias)) != "") {
+		return fmt.Errorf("%w: %s", ErrRawCommandAlias, subcommand)
+	}
+	if err != nil && !isExitCode(err, 1) {
+		return fmt.Errorf("check Git alias: %w", err)
+	}
+	return nil
 }
 
 // ReviewRunCommand adapts Magit's shell-oriented run facility to direct argv

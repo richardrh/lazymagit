@@ -28,28 +28,12 @@ func (r *Repository) ReviewPush(ctx context.Context, in PushUIArgs) (ReviewedPus
 	if err != nil {
 		return ReviewedPush{}, err
 	}
-	p := ReviewedPush{Argv: append([]string(nil), argv...)}
-	for i, arg := range argv {
-		if arg == "--" && i+1 < len(argv) {
-			p.Remote = argv[i+1]
-			p.Refspecs = append([]string(nil), argv[i+2:]...)
-			break
-		}
-	}
+	p := reviewedPushFromArgv(argv)
 	if p.Branch, err = r.currentBranch(ctx); err != nil {
 		return p, err
 	}
-	if p.Branch != "" {
-		p.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".remote")
-		if err == nil {
-			p.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".merge")
-		}
-		if err == nil {
-			p.PushRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".pushRemote")
-		}
-		if err != nil {
-			return p, err
-		}
+	if err = r.loadReviewedPushBranchConfig(ctx, &p); err != nil {
+		return p, err
 	}
 	p.SourceRef = reviewedPushSourceRef(p.Branch, in)
 	if err := r.freezeReviewedPrimarySource(ctx, &p); err != nil {
@@ -58,20 +42,52 @@ func (r *Repository) ReviewPush(ctx context.Context, in PushUIArgs) (ReviewedPus
 	if err := r.bindReviewedPushSources(ctx, &p); err != nil {
 		return p, err
 	}
-	p.SourceNamespace = reviewedPushSourceNamespace(p)
-	if p.SourceNamespace != "" {
-		p.Sources, err = r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
-		if err != nil {
-			return p, err
-		}
-	} else {
-		freezeReviewedPushRefspecs(&p)
+	if err := r.freezeReviewedPushNamespace(ctx, &p); err != nil {
+		return p, err
 	}
 	if p.RemoteConfig, err = r.remoteIdentityConfig(ctx, p.Remote); err != nil {
 		return p, err
 	}
 	p.Token = NewConfirmationToken(reviewedPushIdentity(p))
 	return p, nil
+}
+
+func reviewedPushFromArgv(argv []string) ReviewedPush {
+	p := ReviewedPush{Argv: append([]string(nil), argv...)}
+	for i, arg := range argv {
+		if arg == "--" && i+1 < len(argv) {
+			p.Remote = argv[i+1]
+			p.Refspecs = append([]string(nil), argv[i+2:]...)
+			break
+		}
+	}
+	return p
+}
+
+func (r *Repository) loadReviewedPushBranchConfig(ctx context.Context, p *ReviewedPush) error {
+	if p.Branch == "" {
+		return nil
+	}
+	var err error
+	p.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".remote")
+	if err == nil {
+		p.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".merge")
+	}
+	if err == nil {
+		p.PushRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".pushRemote")
+	}
+	return err
+}
+
+func (r *Repository) freezeReviewedPushNamespace(ctx context.Context, p *ReviewedPush) error {
+	p.SourceNamespace = reviewedPushSourceNamespace(*p)
+	if p.SourceNamespace == "" {
+		freezeReviewedPushRefspecs(p)
+		return nil
+	}
+	var err error
+	p.Sources, err = r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
+	return err
 }
 
 func reviewedPushSourceRef(branch string, in PushUIArgs) string {

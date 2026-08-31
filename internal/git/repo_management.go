@@ -384,27 +384,12 @@ func (r *Repository) RenamePath(ctx context.Context, source, destination string)
 	if err := r.requireWorkTree(); err != nil {
 		return err
 	}
-	src, err := validateRepoRelative(source, false)
-	if err != nil {
-		return err
-	}
-	dst, err := validateRepoRelative(destination, false)
+	src, dst, err := validateRenamePaths(source, destination)
 	if err != nil {
 		return err
 	}
 	srcFull, dstFull := filepath.Join(r.workTree, src), filepath.Join(r.workTree, dst)
-	if err := ensurePathParentWithin(r.workTree, srcFull); err != nil {
-		return err
-	}
-	if err := ensurePathParentWithin(r.workTree, dstFull); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(srcFull); err != nil {
-		return fmt.Errorf("inspect rename source: %w", err)
-	}
-	if _, err := os.Lstat(dstFull); err == nil {
-		return fmt.Errorf("%w: destination already exists", ErrUnsafeDestination)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := validateRenameFilesystem(r.workTree, srcFull, dstFull); err != nil {
 		return err
 	}
 	tracked, err := r.output(ctx, "ls-files", "-z", "--", filepath.ToSlash(src))
@@ -418,6 +403,33 @@ func (r *Repository) RenamePath(ctx context.Context, source, destination string)
 		return err
 	}
 	return os.Rename(srcFull, dstFull)
+}
+
+func validateRenamePaths(source, destination string) (string, string, error) {
+	src, err := validateRepoRelative(source, false)
+	if err != nil {
+		return "", "", err
+	}
+	dst, err := validateRepoRelative(destination, false)
+	return src, dst, err
+}
+
+func validateRenameFilesystem(root, source, destination string) error {
+	if err := ensurePathParentWithin(root, source); err != nil {
+		return err
+	}
+	if err := ensurePathParentWithin(root, destination); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(source); err != nil {
+		return fmt.Errorf("inspect rename source: %w", err)
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("%w: destination already exists", ErrUnsafeDestination)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 type Worktree struct {

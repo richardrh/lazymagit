@@ -455,6 +455,13 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 
 func formatPatchArgs(dir, revisionRange string, options FormatPatchOptions) []string {
 	args := []string{"format-patch", "--quiet", "--output-directory=" + dir}
+	args = appendFormatPatchFlags(args, options)
+	args = appendFormatPatchValues(args, options)
+	args = appendFormatPatchRecipients(args, options)
+	return append(args, revisionRange)
+}
+
+func appendFormatPatchFlags(args []string, options FormatPatchOptions) []string {
 	if options.Numbered {
 		args = append(args, "--numbered")
 	}
@@ -472,6 +479,10 @@ func formatPatchArgs(dir, revisionRange string, options FormatPatchOptions) []st
 	if options.RFC {
 		args = append(args, "--rfc")
 	}
+	return args
+}
+
+func appendFormatPatchValues(args []string, options FormatPatchOptions) []string {
 	if options.SubjectPrefix != "" {
 		args = append(args, "--subject-prefix="+options.SubjectPrefix)
 	}
@@ -490,13 +501,17 @@ func formatPatchArgs(dir, revisionRange string, options FormatPatchOptions) []st
 	if options.Base != "" {
 		args = append(args, "--base="+options.Base)
 	}
+	return args
+}
+
+func appendFormatPatchRecipients(args []string, options FormatPatchOptions) []string {
 	for _, address := range options.To {
 		args = append(args, "--to="+address)
 	}
 	for _, address := range options.Cc {
 		args = append(args, "--cc="+address)
 	}
-	return append(args, revisionRange)
+	return args
 }
 
 func newFormatPatchFiles(dir string, before map[string]bool) ([]string, error) {
@@ -620,35 +635,47 @@ func validFormatPatchHeader(name, value string, optional bool) error {
 }
 
 func replaceFormatPatchCoverLetter(paths []string, body string) error {
-	const placeholder = "*** BLURB HERE ***"
-	var cover string
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read generated cover letter: %w", err)
-		}
-		if bytes.Count(data, []byte(placeholder)) == 1 {
-			if cover != "" {
-				return errors.New("format-patch generated multiple cover letters")
-			}
-			cover = path
-		}
-	}
-	if cover == "" {
-		return errors.New("format-patch did not generate an editable cover letter")
-	}
-	info, err := os.Lstat(cover)
+	cover, info, err := editableFormatPatchCoverLetter(paths)
 	if err != nil {
-		return fmt.Errorf("inspect generated cover letter: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("generated cover letter is not a regular file")
+		return err
 	}
 	data, err := os.ReadFile(cover)
 	if err != nil {
 		return fmt.Errorf("read generated cover letter: %w", err)
 	}
-	updated := bytes.Replace(data, []byte(placeholder), []byte(body), 1)
+	updated := bytes.Replace(data, []byte("*** BLURB HERE ***"), []byte(body), 1)
+	return installFormatPatchCoverLetter(cover, updated, info.Mode().Perm())
+}
+
+func editableFormatPatchCoverLetter(paths []string) (string, os.FileInfo, error) {
+	const placeholder = "*** BLURB HERE ***"
+	var cover string
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", nil, fmt.Errorf("read generated cover letter: %w", err)
+		}
+		if bytes.Count(data, []byte(placeholder)) == 1 {
+			if cover != "" {
+				return "", nil, errors.New("format-patch generated multiple cover letters")
+			}
+			cover = path
+		}
+	}
+	if cover == "" {
+		return "", nil, errors.New("format-patch did not generate an editable cover letter")
+	}
+	info, err := os.Lstat(cover)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect generated cover letter: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, errors.New("generated cover letter is not a regular file")
+	}
+	return cover, info, nil
+}
+
+func installFormatPatchCoverLetter(cover string, updated []byte, mode os.FileMode) error {
 	// Do not reopen the final pathname for writing: a concurrent replacement
 	// with a symlink must never redirect a cover-letter edit outside its output
 	// directory. Rename replaces that final entry rather than following it.
@@ -658,7 +685,7 @@ func replaceFormatPatchCoverLetter(paths []string, body string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(info.Mode().Perm()); err == nil {
+	if err := temporary.Chmod(mode); err == nil {
 		_, err = temporary.Write(updated)
 	}
 	if closeErr := temporary.Close(); err == nil {

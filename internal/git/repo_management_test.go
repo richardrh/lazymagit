@@ -170,6 +170,43 @@ func TestUntrackAndRenamePreserveAndProtectPaths(t *testing.T) {
 	}
 }
 
+func TestValidateRenamePathsDirect(t *testing.T) {
+	src, dst, err := validateRenamePaths("dir/source", "dir/destination")
+	if err != nil || src != "dir/source" || dst != "dir/destination" {
+		t.Fatalf("valid rename paths = %q, %q, %v", src, dst, err)
+	}
+	if _, _, err := validateRenamePaths("../source", "destination"); err == nil {
+		t.Fatal("unsafe source was accepted")
+	}
+	if _, _, err := validateRenamePaths("source", "../destination"); err == nil {
+		t.Fatal("unsafe destination was accepted")
+	}
+}
+
+func TestValidateRenameFilesystemDirect(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	destination := filepath.Join(root, "nested", "destination")
+	if err := os.WriteFile(source, []byte("source\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRenameFilesystem(root, source, destination); err != nil {
+		t.Fatalf("safe rename filesystem rejected: %v", err)
+	}
+	if err := validateRenameFilesystem(root, filepath.Join(root, "missing"), destination); err == nil || !strings.Contains(err.Error(), "inspect rename source") {
+		t.Fatalf("missing source error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, []byte("occupied\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRenameFilesystem(root, source, destination); !errors.Is(err, ErrUnsafeDestination) {
+		t.Fatalf("occupied destination error = %v", err)
+	}
+}
+
 func TestWorktreePreflightAndSparseCheckout(t *testing.T) {
 	r, repo := managementRepo(t)
 	ctx := context.Background()

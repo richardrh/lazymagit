@@ -164,20 +164,55 @@ func TestSafeNewDirectoryHelpers(t *testing.T) {
 }
 
 func TestFetchArgsHelper(t *testing.T) {
-	in := FetchArgs{Remote: "origin", Prune: true, Tags: FetchAllTags, Unshallow: true, Force: true, Refspec: "+refs/heads/main:refs/remotes/origin/main", RecurseSubmodules: SubmodulesOnDemand}
-	args, err := fetchArgs(in)
-	if err != nil {
-		t.Fatal(err)
+	refspec := "+refs/heads/main:refs/remotes/origin/main"
+	tests := []struct {
+		name    string
+		in      FetchArgs
+		want    []string
+		wantErr string
+	}{
+		{name: "defaults", want: []string{"fetch"}},
+		{
+			name: "all options and refspec",
+			in: FetchArgs{
+				Remote: "origin", Prune: true, Tags: FetchAllTags, Unshallow: true,
+				Force: true, Refspec: refspec, RecurseSubmodules: SubmodulesOnDemand,
+			},
+			want: []string{"fetch", "--prune", "--tags", "--unshallow", "--force", "--recurse-submodules=on-demand", "--", "origin", refspec},
+		},
+		{
+			name: "no tags recursive branch",
+			in:   FetchArgs{Remote: "upstream", Tags: FetchNoTags, Branch: "main", RecurseSubmodules: SubmodulesYes},
+			want: []string{"fetch", "--no-tags", "--recurse-submodules=yes", "--", "upstream", "main"},
+		},
+		{
+			name: "remote and disabled recursion",
+			in:   FetchArgs{Remote: "origin", RecurseSubmodules: SubmodulesNo},
+			want: []string{"fetch", "--recurse-submodules=no", "--", "origin"},
+		},
+		{name: "invalid tags", in: FetchArgs{Tags: FetchTags(255)}, wantErr: "invalid fetch tags mode"},
+		{name: "invalid recursion", in: FetchArgs{RecurseSubmodules: SubmoduleRecursion(255)}, wantErr: "invalid submodule recursion mode"},
+		{name: "branch without remote", in: FetchArgs{Branch: "main"}, wantErr: "fetch suffix requires a remote"},
+		{name: "refspec without remote", in: FetchArgs{Refspec: refspec}, wantErr: "fetch suffix requires a remote"},
 	}
-	want := []string{"fetch", "--prune", "--tags", "--unshallow", "--force", "--recurse-submodules=on-demand", "--", "origin", in.Refspec}
-	if !reflect.DeepEqual(args, want) {
-		t.Fatalf("fetchArgs = %#v, want %#v", args, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := fetchArgs(tt.in)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("fetchArgs error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("fetchArgs = %#v, want %#v", got, tt.want)
+			}
+		})
 	}
-	for _, invalid := range []FetchArgs{{Tags: FetchTags(255)}, {RecurseSubmodules: SubmoduleRecursion(255)}, {Branch: "main"}} {
-		if _, err := fetchArgs(invalid); err == nil {
-			t.Errorf("fetchArgs(%#v) succeeded", invalid)
-		}
-	}
+
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -353,6 +388,50 @@ func TestRefspecHelpers(t *testing.T) {
 		if (err == nil) != test.valid {
 			t.Errorf("validateRefspec(%q, %t) = %v", test.spec, test.fetch, err)
 		}
+	}
+}
+
+func TestValidateExtractedRefspecHelpers(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, test := range []struct {
+		name                string
+		source, destination string
+		hasColon, invalid   bool
+	}{
+		{"fetch accepts complete pair", "refs/heads/main", "refs/remotes/origin/main", true, false},
+		{"fetch rejects missing colon", "refs/heads/main", "", false, true},
+		{"fetch rejects missing source", "", "refs/remotes/origin/main", true, true},
+		{"fetch rejects missing destination", "refs/heads/main", "", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := repo.validateFetchRefspec(ctx, test.source, test.destination, test.hasColon)
+			if (err != nil) != test.invalid {
+				t.Fatalf("validateFetchRefspec() = %v", err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name, source, destination string
+		invalid                   bool
+	}{
+		{"valid source and destination", "main", "reviewed", false},
+		{"invalid source", "missing", "reviewed", true},
+		{"invalid destination", "main", "bad..branch", true},
+		{"fully qualified refs", "refs/heads/main", "refs/heads/reviewed", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := repo.validatePushRefspec(ctx, test.source, test.destination)
+			if (err != nil) != test.invalid {
+				t.Fatalf("validatePushRefspec() = %v", err)
+			}
+		})
 	}
 }
 

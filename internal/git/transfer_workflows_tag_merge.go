@@ -216,38 +216,69 @@ func (r *Repository) CompareRemoteTags(ctx context.Context, remote string) (Remo
 	if err := r.validateTransferRemote(ctx, remote); err != nil {
 		return RemoteTagComparison{}, err
 	}
+	local, err := r.localTagSet(ctx)
+	if err != nil {
+		return RemoteTagComparison{}, err
+	}
+	upstream, err := r.remoteTagSet(ctx, remote)
+	if err != nil {
+		return RemoteTagComparison{}, err
+	}
+	return compareTagSets(remote, local, upstream), nil
+}
+
+func (r *Repository) localTagSet(ctx context.Context) (map[string]bool, error) {
 	localOut, truncated, err := r.outputLimited(ctx, 8<<20, "for-each-ref", "--format=%(refname:strip=2)", "refs/tags")
 	if err != nil {
-		return RemoteTagComparison{}, err
+		return nil, err
 	}
 	if truncated {
-		return RemoteTagComparison{}, &TooLargeError{Resource: "local tag listing"}
+		return nil, &TooLargeError{Resource: "local tag listing"}
 	}
+	local := tagNames(localOut)
+	if len(local) > 100000 {
+		return nil, &TooLargeError{Resource: "local tag count"}
+	}
+	return local, nil
+}
+
+func (r *Repository) remoteTagSet(ctx context.Context, remote string) (map[string]bool, error) {
 	remoteOut, truncated, err := r.outputLimited(ctx, 8<<20, "ls-remote", "--tags", "--refs", "--", remote)
 	if err != nil {
-		return RemoteTagComparison{}, err
+		return nil, err
 	}
 	if truncated {
-		return RemoteTagComparison{}, &TooLargeError{Resource: "remote tag listing"}
+		return nil, &TooLargeError{Resource: "remote tag listing"}
 	}
-	local, upstream := map[string]bool{}, map[string]bool{}
-	for _, name := range strings.Split(trimLine(localOut), "\n") {
+	upstream := remoteTagNames(remoteOut)
+	if len(upstream) > 100000 {
+		return nil, &TooLargeError{Resource: "remote tag count"}
+	}
+	return upstream, nil
+}
+
+func tagNames(output []byte) map[string]bool {
+	tags := map[string]bool{}
+	for _, name := range strings.Split(trimLine(output), "\n") {
 		if name != "" {
-			local[name] = true
+			tags[name] = true
 		}
 	}
-	if len(local) > 100000 {
-		return RemoteTagComparison{}, &TooLargeError{Resource: "local tag count"}
-	}
-	for _, line := range bytes.Split(remoteOut, []byte{'\n'}) {
+	return tags
+}
+
+func remoteTagNames(output []byte) map[string]bool {
+	tags := map[string]bool{}
+	for _, line := range bytes.Split(output, []byte{'\n'}) {
 		fields := bytes.Fields(line)
 		if len(fields) == 2 {
-			upstream[strings.TrimPrefix(string(fields[1]), "refs/tags/")] = true
+			tags[strings.TrimPrefix(string(fields[1]), "refs/tags/")] = true
 		}
 	}
-	if len(upstream) > 100000 {
-		return RemoteTagComparison{}, &TooLargeError{Resource: "remote tag count"}
-	}
+	return tags
+}
+
+func compareTagSets(remote string, local, upstream map[string]bool) RemoteTagComparison {
 	p := RemoteTagComparison{Remote: remote}
 	for name := range local {
 		if upstream[name] {
@@ -265,7 +296,7 @@ func (r *Repository) CompareRemoteTags(ctx context.Context, remote string) (Remo
 	sort.Strings(p.RemoteOnly)
 	sort.Strings(p.Common)
 	p.RequiresConfirmation = len(p.LocalOnly) != 0
-	return p, nil
+	return p
 }
 
 // PruneRemoteTags deletes local tags absent from remote; it never deletes a

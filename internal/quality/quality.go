@@ -51,33 +51,37 @@ func Score(complexity int, coverage float64) float64 {
 // Analyze parses production Go declarations under root and attributes the
 // statements in a native Go coverprofile to them.
 func Analyze(root, coverprofile string) ([]Function, error) {
-	root, err := filepath.Abs(root)
+	functions, blocks, err := loadAnalysisInputs(root, coverprofile)
 	if err != nil {
 		return nil, err
 	}
-	module, err := modulePath(root)
+	attributeCoverage(functions, blocks)
+	return analysisResults(functions), nil
+}
+
+func loadAnalysisInputs(root, coverprofile string) ([]sourceFunction, []coverBlock, error) {
+	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	functions, err := parseFunctions(root, module)
+	module, err := modulePath(absRoot)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	blocks, err := parseCoverprofile(coverprofile, root, module)
+	functions, err := parseFunctions(absRoot, module)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	blocks, err := parseCoverprofile(coverprofile, absRoot, module)
+	if err != nil {
+		return nil, nil, err
+	}
+	return functions, blocks, nil
+}
+
+func attributeCoverage(functions []sourceFunction, blocks []coverBlock) {
 	for _, block := range blocks {
-		best := -1
-		for i := range functions {
-			fn := &functions[i]
-			if fn.file != block.file || !contains(fn, block) {
-				continue
-			}
-			if best < 0 || positionSpan(fn) < positionSpan(&functions[best]) {
-				best = i
-			}
-		}
+		best := containingFunction(functions, block)
 		if best >= 0 {
 			functions[best].statements += block.statements
 			if block.count > 0 {
@@ -85,6 +89,23 @@ func Analyze(root, coverprofile string) ([]Function, error) {
 			}
 		}
 	}
+}
+
+func containingFunction(functions []sourceFunction, block coverBlock) int {
+	best := -1
+	for i := range functions {
+		fn := &functions[i]
+		if fn.file != block.file || !contains(fn, block) {
+			continue
+		}
+		if best < 0 || positionSpan(fn) < positionSpan(&functions[best]) {
+			best = i
+		}
+	}
+	return best
+}
+
+func analysisResults(functions []sourceFunction) []Function {
 	result := make([]Function, len(functions))
 	for i := range functions {
 		fn := &functions[i]
@@ -95,7 +116,7 @@ func Analyze(root, coverprofile string) ([]Function, error) {
 		result[i] = fn.Function
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
-	return result, nil
+	return result
 }
 
 func parseFunctions(root, module string) ([]sourceFunction, error) {

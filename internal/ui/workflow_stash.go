@@ -85,47 +85,66 @@ func stashPushWorkflow(forceKeepIndex bool) WorkflowHandler {
 }
 
 func stashPushOptions(command WorkflowCommand, forceKeepIndex bool) (gitbackend.StashPushOptions, error) {
-	options := gitbackend.StashPushOptions{KeepIndex: forceKeepIndex}
-	keep, noKeep := false, false
-	wantedTransient := "magit-stash"
-	if command.ID == stashPushID {
-		wantedTransient = "magit-stash-push"
-	}
+	state := stashPushOptionState{options: gitbackend.StashPushOptions{KeepIndex: forceKeepIndex}}
+	wantedTransient := stashPushTransient(command.ID)
 	for id, value := range command.Options {
-		if !value.Enabled && value.Value == "" {
+		if !optionValueActive(value) {
 			continue
 		}
 		transient, upstream := stashOptionIdentity(id)
 		if transient != wantedTransient {
 			continue
 		}
-		switch upstream {
-		case "transient:magit-stash:--include-untracked", "transient:magit-stash-push:--include-untracked":
-			options.IncludeUntracked = value.Enabled
-		case "transient:magit-stash:--all", "transient:magit-stash-push:--all":
-			options.All = value.Enabled
-		case "transient:magit-stash-push:--keep-index":
-			keep = value.Enabled
-		case "transient:magit-stash-push:--no-keep-index":
-			noKeep = value.Enabled
-		case "magit:--":
-			paths, err := stashPaths(value.Value)
-			if err != nil {
-				return options, err
-			}
-			options.Paths = paths
+		if err := applyStashPushOption(&state, upstream, value); err != nil {
+			return state.options, err
 		}
 	}
-	if keep && noKeep {
-		return options, errors.New("keep-index and no-keep-index are mutually exclusive")
+	return finalizeStashPushOptions(state, forceKeepIndex)
+}
+
+type stashPushOptionState struct {
+	options      gitbackend.StashPushOptions
+	keep, noKeep bool
+}
+
+func stashPushTransient(id keymap.CommandID) string {
+	if id == stashPushID {
+		return "magit-stash-push"
 	}
-	if keep {
-		options.KeepIndex = true
+	return "magit-stash"
+}
+
+func applyStashPushOption(state *stashPushOptionState, upstream string, value OptionValue) error {
+	switch upstream {
+	case "transient:magit-stash:--include-untracked", "transient:magit-stash-push:--include-untracked":
+		state.options.IncludeUntracked = value.Enabled
+	case "transient:magit-stash:--all", "transient:magit-stash-push:--all":
+		state.options.All = value.Enabled
+	case "transient:magit-stash-push:--keep-index":
+		state.keep = value.Enabled
+	case "transient:magit-stash-push:--no-keep-index":
+		state.noKeep = value.Enabled
+	case "magit:--":
+		paths, err := stashPaths(value.Value)
+		if err != nil {
+			return err
+		}
+		state.options.Paths = paths
 	}
-	if noKeep && forceKeepIndex {
-		return options, errors.New("no-keep-index is incompatible with keep-index stash")
+	return nil
+}
+
+func finalizeStashPushOptions(state stashPushOptionState, forceKeepIndex bool) (gitbackend.StashPushOptions, error) {
+	if state.keep && state.noKeep {
+		return state.options, errors.New("keep-index and no-keep-index are mutually exclusive")
 	}
-	return options, nil
+	if state.keep {
+		state.options.KeepIndex = true
+	}
+	if state.noKeep && forceKeepIndex {
+		return state.options, errors.New("no-keep-index is incompatible with keep-index stash")
+	}
+	return state.options, nil
 }
 
 func stashOptionIdentity(id keymap.CommandID) (string, string) {

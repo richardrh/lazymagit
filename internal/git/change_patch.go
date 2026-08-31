@@ -141,53 +141,22 @@ func completePatchLines(patch []byte) ([]string, error) {
 }
 
 func parseDiffHunk(lines []string, at int) (DiffHunk, int, error) {
-	m := hunkHeaderRE.FindStringSubmatch(lines[at])
-	if m == nil {
-		return DiffHunk{}, at, malformed(at+1, "invalid hunk header")
-	}
-	oldStart, err := strconv.Atoi(m[1])
+	h, err := parseDiffHunkHeader(lines[at], at+1)
 	if err != nil {
-		return DiffHunk{}, at, malformed(at+1, "invalid old start")
+		return DiffHunk{}, at, err
 	}
-	newStart, err := strconv.Atoi(m[3])
-	if err != nil {
-		return DiffHunk{}, at, malformed(at+1, "invalid new start")
-	}
-	oldCount, err := rangeCount(m[2])
-	if err != nil {
-		return DiffHunk{}, at, malformed(at+1, "invalid old range")
-	}
-	newCount, err := rangeCount(m[4])
-	if err != nil {
-		return DiffHunk{}, at, malformed(at+1, "invalid new range")
-	}
-	h := DiffHunk{OldRange: DiffRange{oldStart, oldCount}, NewRange: DiffRange{newStart, newCount}, Heading: m[5]}
-	oldLine, newLine := oldStart, newStart
+	oldLine, newLine := h.OldRange.Start, h.NewRange.Start
 	oldSeen, newSeen := 0, 0
 	i := at + 1
-	for oldSeen < oldCount || newSeen < newCount {
+	for oldSeen < h.OldRange.Count || newSeen < h.NewRange.Count {
 		if i >= len(lines) {
 			return DiffHunk{}, at, malformed(at+1, "truncated hunk")
 		}
-		line := lines[i]
-		if line == "" {
-			return DiffHunk{}, at, malformed(i+1, "unprefixed hunk line")
+		dl, err := parseDiffHunkLine(lines[i], i+1, &oldLine, &newLine, &oldSeen, &newSeen)
+		if err != nil {
+			return DiffHunk{}, at, err
 		}
-		dl := DiffLine{Kind: DiffLineKind(line[0]), Text: line[1:]}
-		switch dl.Kind {
-		case DiffLineContext:
-			dl.OldLine, dl.NewLine = oldLine, newLine
-			oldLine, newLine, oldSeen, newSeen = oldLine+1, newLine+1, oldSeen+1, newSeen+1
-		case DiffLineDeleted:
-			dl.OldLine = oldLine
-			oldLine, oldSeen = oldLine+1, oldSeen+1
-		case DiffLineAdded:
-			dl.NewLine = newLine
-			newLine, newSeen = newLine+1, newSeen+1
-		default:
-			return DiffHunk{}, at, malformed(i+1, "invalid hunk line prefix")
-		}
-		if oldSeen > oldCount || newSeen > newCount {
+		if oldSeen > h.OldRange.Count || newSeen > h.NewRange.Count {
 			return DiffHunk{}, at, malformed(i+1, "hunk exceeds declared range")
 		}
 		h.Lines = append(h.Lines, dl)
@@ -198,6 +167,56 @@ func parseDiffHunk(lines []string, at int) (DiffHunk, int, error) {
 		}
 	}
 	return h, i, nil
+}
+
+func parseDiffHunkHeader(line string, lineNumber int) (DiffHunk, error) {
+	m := hunkHeaderRE.FindStringSubmatch(line)
+	if m == nil {
+		return DiffHunk{}, malformed(lineNumber, "invalid hunk header")
+	}
+	oldStart, err := strconv.Atoi(m[1])
+	if err != nil {
+		return DiffHunk{}, malformed(lineNumber, "invalid old start")
+	}
+	newStart, err := strconv.Atoi(m[3])
+	if err != nil {
+		return DiffHunk{}, malformed(lineNumber, "invalid new start")
+	}
+	oldCount, err := rangeCount(m[2])
+	if err != nil {
+		return DiffHunk{}, malformed(lineNumber, "invalid old range")
+	}
+	newCount, err := rangeCount(m[4])
+	if err != nil {
+		return DiffHunk{}, malformed(lineNumber, "invalid new range")
+	}
+	return DiffHunk{
+		OldRange: DiffRange{oldStart, oldCount},
+		NewRange: DiffRange{newStart, newCount},
+		Heading:  m[5],
+	}, nil
+}
+
+func parseDiffHunkLine(line string, lineNumber int, oldLine, newLine, oldSeen, newSeen *int) (DiffLine, error) {
+	if line == "" {
+		return DiffLine{}, malformed(lineNumber, "unprefixed hunk line")
+	}
+	dl := DiffLine{Kind: DiffLineKind(line[0]), Text: line[1:]}
+	switch dl.Kind {
+	case DiffLineContext:
+		dl.OldLine, dl.NewLine = *oldLine, *newLine
+		*oldLine, *newLine = *oldLine+1, *newLine+1
+		*oldSeen, *newSeen = *oldSeen+1, *newSeen+1
+	case DiffLineDeleted:
+		dl.OldLine = *oldLine
+		*oldLine, *oldSeen = *oldLine+1, *oldSeen+1
+	case DiffLineAdded:
+		dl.NewLine = *newLine
+		*newLine, *newSeen = *newLine+1, *newSeen+1
+	default:
+		return DiffLine{}, malformed(lineNumber, "invalid hunk line prefix")
+	}
+	return dl, nil
 }
 
 func rangeCount(s string) (int, error) {
@@ -450,43 +469,51 @@ func canonicalChangeSelections(hunks []DiffHunk, selections []InteractiveChangeS
 	}
 	grouped := make(map[int][]InteractiveChangeSelection)
 	for _, selection := range selections {
-		if selection.Hunk < 0 || selection.Hunk >= len(hunks) {
-			return nil, ErrInvalidChangePatchRegion
-		}
-		if selection.WholeHunk {
-			if selection.Start != 0 || selection.End != 0 {
-				return nil, ErrInvalidChangePatchRegion
-			}
-		} else if selection.Start < 0 || selection.End > len(hunks[selection.Hunk].Lines) || selection.Start >= selection.End {
+		if !validChangeSelection(hunks, selection) {
 			return nil, ErrInvalidChangePatchRegion
 		}
 		grouped[selection.Hunk] = append(grouped[selection.Hunk], selection)
 	}
 	for hunk, group := range grouped {
-		sort.Slice(group, func(i, j int) bool {
-			if group[i].WholeHunk != group[j].WholeHunk {
-				return group[i].WholeHunk
-			}
-			if group[i].Start != group[j].Start {
-				return group[i].Start < group[j].Start
-			}
-			return group[i].End < group[j].End
-		})
-		if group[0].WholeHunk {
-			grouped[hunk] = group[:1]
-			continue
-		}
-		merged := group[:0]
-		for _, selection := range group {
-			if len(merged) == 0 || selection.Start > merged[len(merged)-1].End {
-				merged = append(merged, selection)
-				continue
-			}
-			merged[len(merged)-1].End = max(merged[len(merged)-1].End, selection.End)
-		}
-		grouped[hunk] = merged
+		grouped[hunk] = canonicalChangeSelectionGroup(group)
 	}
 	return grouped, nil
+}
+
+func validChangeSelection(hunks []DiffHunk, selection InteractiveChangeSelection) bool {
+	if selection.Hunk < 0 || selection.Hunk >= len(hunks) {
+		return false
+	}
+	if selection.WholeHunk {
+		return selection.Start == 0 && selection.End == 0
+	}
+	return selection.Start >= 0 && selection.End <= len(hunks[selection.Hunk].Lines) && selection.Start < selection.End
+}
+
+func canonicalChangeSelectionGroup(group []InteractiveChangeSelection) []InteractiveChangeSelection {
+	sort.Slice(group, func(i, j int) bool { return changeSelectionLess(group[i], group[j]) })
+	if group[0].WholeHunk {
+		return group[:1]
+	}
+	merged := group[:0]
+	for _, selection := range group {
+		if len(merged) == 0 || selection.Start > merged[len(merged)-1].End {
+			merged = append(merged, selection)
+			continue
+		}
+		merged[len(merged)-1].End = max(merged[len(merged)-1].End, selection.End)
+	}
+	return merged
+}
+
+func changeSelectionLess(left, right InteractiveChangeSelection) bool {
+	if left.WholeHunk != right.WholeHunk {
+		return left.WholeHunk
+	}
+	if left.Start != right.Start {
+		return left.Start < right.Start
+	}
+	return left.End < right.End
 }
 
 func mutableFile(f *DiffFile) error {

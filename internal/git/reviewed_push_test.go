@@ -105,3 +105,39 @@ func TestReviewedPushFreezesTagNamespace(t *testing.T) {
 		t.Fatalf("reviewed tag = %q, want %q", got, plan.Sources[0].OID)
 	}
 }
+
+func TestReviewedPushFromArgv(t *testing.T) {
+	argv := []string{"push", "--force", "--", "origin", "main:reviewed"}
+	plan := reviewedPushFromArgv(argv)
+	argv[0] = "changed"
+	if !reflect.DeepEqual(plan.Argv, []string{"push", "--force", "--", "origin", "main:reviewed"}) || plan.Remote != "origin" || !reflect.DeepEqual(plan.Refspecs, []string{"main:reviewed"}) {
+		t.Fatalf("reviewedPushFromArgv = %#v", plan)
+	}
+	if got := reviewedPushFromArgv([]string{"push", "--force"}); got.Remote != "" || got.Refspecs != nil {
+		t.Fatalf("reviewedPushFromArgv without separator = %#v", got)
+	}
+}
+
+func TestLoadReviewedPushBranchConfig(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	r.commitAll("base")
+	r.git("config", "branch.main.remote", "origin")
+	r.git("config", "branch.main.merge", "refs/heads/upstream")
+	r.git("config", "branch.main.pushRemote", "publish")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := ReviewedPush{Branch: "main"}
+	if err := repo.loadReviewedPushBranchConfig(context.Background(), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.UpstreamRemote.Value != "origin" || plan.UpstreamMerge.Value != "refs/heads/upstream" || plan.PushRemote.Value != "publish" {
+		t.Fatalf("branch config = %#v", plan)
+	}
+	detached := ReviewedPush{}
+	if err := repo.loadReviewedPushBranchConfig(context.Background(), &detached); err != nil || detached.UpstreamRemote.Set || detached.UpstreamMerge.Set || detached.PushRemote.Set {
+		t.Fatalf("detached branch config = %#v, %v", detached, err)
+	}
+}

@@ -185,31 +185,46 @@ func (p *argumentParser) setPath(path string) error {
 }
 
 func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
-	opts, err := parseArgs(args)
+	opts, abs, err := resolveRunOptions(args)
 	if err != nil {
 		return err
 	}
-	abs, err := filepath.Abs(opts.path)
-	if err != nil {
-		return fmt.Errorf("resolve repository path %s: %w", quotePath(opts.path), err)
-	}
-
 	repo, discoverErr := rt.discover(opts.path)
 	if discoverErr == nil {
-		if opts.init && !isExactRepository(repo, abs) {
-			repo, err = initialize(ctx, rt, abs)
-			if err != nil {
-				return err
-			}
-		}
-		return startUI(rt, repo, opts.theme, opts.layout)
+		return runDiscoveredRepository(ctx, rt, repo, opts, abs)
 	}
+	return runUndiscoveredRepository(ctx, rt, opts, abs, discoverErr)
+}
+
+func resolveRunOptions(args []string) (options, string, error) {
+	opts, err := parseArgs(args)
+	if err != nil {
+		return options{}, "", err
+	}
+	abs, err := filepath.Abs(opts.path)
+	if err != nil {
+		return options{}, "", fmt.Errorf("resolve repository path %s: %w", quotePath(opts.path), err)
+	}
+	return opts, abs, nil
+}
+
+func runDiscoveredRepository(ctx context.Context, rt *runtimeDeps, repo repository, opts options, abs string) error {
+	if opts.init && !isExactRepository(repo, abs) {
+		initialized, err := initialize(ctx, rt, abs)
+		if err != nil {
+			return err
+		}
+		repo = initialized
+	}
+	return startUI(rt, repo, opts.theme, opts.layout)
+}
+
+func runUndiscoveredRepository(ctx context.Context, rt *runtimeDeps, opts options, abs string, discoverErr error) error {
 	if !errors.Is(discoverErr, gitbackend.ErrNotRepository) {
 		return fmt.Errorf("cannot open repository %s: %w", quotePath(abs), discoverErr)
 	}
-
 	if opts.init {
-		repo, err = initialize(ctx, rt, abs)
+		repo, err := initialize(ctx, rt, abs)
 		if err != nil {
 			return err
 		}
@@ -226,7 +241,7 @@ func runWith(ctx context.Context, args []string, rt *runtimeDeps) error {
 	if !create {
 		return nil
 	}
-	repo, err = initialize(ctx, rt, abs)
+	repo, err := initialize(ctx, rt, abs)
 	if err != nil {
 		return err
 	}

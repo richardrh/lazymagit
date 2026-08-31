@@ -45,6 +45,55 @@ func TestRunRebaseTodoEditorOnlyReplacesExpectedTodoFile(t *testing.T) {
 	if handled, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor", admin, admin, destination}); !handled || err == nil {
 		t.Fatalf("unsafe source = handled %t, err %v", handled, err)
 	}
+	if err := os.WriteFile(source, []byte("exec echo unsafe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if handled, err := RunRebaseTodoEditor(args); !handled || err == nil {
+		t.Fatalf("invalid todo source = handled %t, err %v", handled, err)
+	}
+	link := filepath.Join(t.TempDir(), "todo-link")
+	if err := os.Symlink(source, link); err != nil {
+		t.Fatal(err)
+	}
+	if handled, err := RunRebaseTodoEditor([]string{"--lazymagit-rebase-todo-editor", link, admin, destination}); !handled || err == nil {
+		t.Fatalf("symlink source = handled %t, err %v", handled, err)
+	}
+}
+
+func TestCanonicalRebaseTodoDirectlyNormalizesAndRejectsInvalidPlans(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file", "one\n")
+	first := r.commitAll("first")
+	r.write("file", "two\n")
+	second := r.commitAll("second")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	expected := []string{first, second}
+	todo := "# comment\n  pick " + first[:8] + "   first subject  \n\tsquash " + second[:8] + " second subject\n"
+	canonical, err := repo.canonicalRebaseTodo(ctx, todo, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "pick " + first + " first subject\nsquash " + second + " second subject\n"
+	if canonical != want {
+		t.Fatalf("canonical todo = %q, want %q", canonical, want)
+	}
+
+	invalid := []string{
+		"fixup " + first + " first\npick " + second + " second\n",
+		"drop " + first + " first\nfixup " + second + " second\n",
+		"pick " + first + " first\npick " + first + " duplicate\n",
+		"pick " + first + " missing second\n",
+		"pick " + strings.Repeat("f", 40) + " unselected\npick " + second + " second\n",
+	}
+	for _, input := range invalid {
+		if _, err := repo.canonicalRebaseTodo(ctx, input, expected); err == nil {
+			t.Errorf("canonicalRebaseTodo(%q) succeeded", input)
+		}
+	}
 }
 
 func TestCherryPickOrderedNoCommitAndProcessRecord(t *testing.T) {
@@ -123,6 +172,37 @@ func TestCherryPickConflictUsesAdminStateAndCanAbort(t *testing.T) {
 	}
 	if err := repo.CherryPickContinue(context.Background()); !errors.Is(err, ErrWorkflowNotActive) {
 		t.Fatalf("continue outside workflow = %v", err)
+	}
+}
+
+func TestAppendRebaseStartOptionsDirect(t *testing.T) {
+	opts := RebaseOptions{
+		KeepEmpty: true, RebaseMerges: true, UpdateRefs: true,
+		Autostash: true, ForceRebase: true, Strategy: "ort", Signoff: true,
+	}
+	want := []string{"prefix", "--keep-empty", "--rebase-merges", "--update-refs", "--autostash", "--force-rebase", "--strategy=ort", "--signoff"}
+	if got := appendRebaseStartOptions([]string{"prefix"}, opts); !reflect.DeepEqual(got, want) {
+		t.Fatalf("appendRebaseStartOptions = %#v, want %#v", got, want)
+	}
+	if got := appendRebaseStartOptions(nil, RebaseOptions{}); len(got) != 0 {
+		t.Fatalf("empty appendRebaseStartOptions = %#v", got)
+	}
+}
+
+func TestRebaseStartRejectsInvalidOntoAndBranch(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := repo.RebaseStart(ctx, RebaseOptions{Upstream: "HEAD", Onto: "missing"}); err == nil || !strings.Contains(err.Error(), "rebase onto") {
+		t.Fatalf("invalid onto error = %v", err)
+	}
+	if err := repo.RebaseStart(ctx, RebaseOptions{Upstream: "HEAD", Branch: "missing"}); err == nil || !strings.Contains(err.Error(), "rebase branch") {
+		t.Fatalf("invalid branch error = %v", err)
 	}
 }
 
@@ -241,6 +321,37 @@ func TestResetRequiresConfirmationAndReportsDestruction(t *testing.T) {
 	}
 	if got := r.git("rev-parse", "HEAD"); got != base {
 		t.Fatalf("HEAD = %s, want %s", got, base)
+	}
+}
+
+func TestValidateResetPreflightOptionsAndLossesDirect(t *testing.T) {
+	valid := []ResetOptions{{Mode: ResetMixed}, {Mode: ResetIndex, Paths: []string{"one"}}, {Mode: ResetWorktree, Paths: []string{"one"}}, {Mode: ResetFile, Paths: []string{"one"}}}
+	for _, opts := range valid {
+		if err := validateResetPreflightOptions(opts); err != nil {
+			t.Errorf("valid options %#v: %v", opts, err)
+		}
+	}
+	invalid := []ResetOptions{{Mode: ResetMode(255)}, {Mode: ResetFile}, {Mode: ResetFile, Paths: []string{"one", "two"}}, {Mode: ResetHard, Paths: []string{"one"}}}
+	for _, opts := range invalid {
+		if err := validateResetPreflightOptions(opts); err == nil {
+			t.Errorf("invalid options %#v succeeded", opts)
+		}
+	}
+	tests := []struct {
+		mode                  ResetMode
+		head, index, worktree bool
+	}{
+		{ResetSoft, true, false, false}, {ResetMixed, true, true, false},
+		{ResetHard, true, true, true}, {ResetKeep, true, true, true},
+		{ResetIndex, false, true, false}, {ResetWorktree, false, false, true},
+		{ResetFile, false, false, true},
+	}
+	for _, test := range tests {
+		var got DestructivePreflight
+		setResetPreflightLosses(&got, test.mode)
+		if got.LosesHEAD != test.head || got.LosesIndex != test.index || got.LosesWorktree != test.worktree {
+			t.Errorf("losses(%d) = (%t, %t, %t), want (%t, %t, %t)", test.mode, got.LosesHEAD, got.LosesIndex, got.LosesWorktree, test.head, test.index, test.worktree)
+		}
 	}
 }
 

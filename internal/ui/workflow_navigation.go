@@ -85,6 +85,10 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 	if cmd, handled := m.performTerminalNavigation(command); handled {
 		return cmd, true
 	}
+	return m.performBasicNavigation(command)
+}
+
+func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandSectionParent:
 		return m.finishNavigationMove(m.tree.MoveToParent()), true

@@ -445,24 +445,42 @@ func (m *Model) workflowValues() WorkflowValues {
 }
 
 func validateWorkflow(d WorkflowDialog, values WorkflowValues) error {
-	for _, field := range d.Fields {
+	if err := validateRequiredWorkflowFields(d.Fields, values); err != nil {
+		return err
+	}
+	if err := validateWorkflowCallbacks(d); err != nil {
+		return err
+	}
+	if d.Validate != nil {
+		return d.Validate(values)
+	}
+	return nil
+}
+
+func validateRequiredWorkflowFields(fields []WorkflowField, values WorkflowValues) error {
+	for _, field := range fields {
 		if field.Required && strings.TrimSpace(values[field.Name]) == "" {
 			return fmt.Errorf("%s is required", field.Label)
 		}
 	}
+	return nil
+}
+
+func validateWorkflowCallbacks(d WorkflowDialog) error {
 	if d.Run != nil {
 		if d.Submit != nil || d.Preflight != nil || d.ReviewPreflight != nil || d.SubmitReview != nil {
 			return errors.New("workflow run callback is mutually exclusive with submit and preflight callbacks")
 		}
-	} else if d.ReviewPreflight != nil || d.SubmitReview != nil {
+		return nil
+	}
+	if d.ReviewPreflight != nil || d.SubmitReview != nil {
 		if d.ReviewPreflight == nil || d.SubmitReview == nil {
 			return errors.New("reviewed workflow requires both preflight and submit callbacks")
 		}
-	} else if d.Submit == nil {
-		return errors.New("workflow submit callback is not configured")
+		return nil
 	}
-	if d.Validate != nil {
-		return d.Validate(values)
+	if d.Submit == nil {
+		return errors.New("workflow submit callback is not configured")
 	}
 	return nil
 }

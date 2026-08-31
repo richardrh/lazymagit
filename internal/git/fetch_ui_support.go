@@ -38,15 +38,7 @@ func (r *Repository) FetchChoices(ctx context.Context, limit int) (FetchUIChoice
 	if truncated {
 		return FetchUIChoices{}, errors.New("configured remote list exceeds fetch chooser limit")
 	}
-	result := FetchUIChoices{Remotes: make([]string, 0, limit)}
-	configured := make(map[string]bool, limit)
-	for _, remote := range strings.Split(trimLine(remoteOutput), "\n") {
-		if remote == "" || len(result.Remotes) >= limit {
-			continue
-		}
-		result.Remotes = append(result.Remotes, remote)
-		configured[remote] = true
-	}
+	result, configured := fetchRemoteChoices(remoteOutput, limit)
 	branchOutput, truncated, err := r.outputLimited(ctx, fetchChoicesByteLimit,
 		"for-each-ref", "--count="+strconv.Itoa(limit+1), "--sort=refname", "--format=%(refname)%09%(symref)", "refs/remotes")
 	if err != nil {
@@ -55,31 +47,61 @@ func (r *Repository) FetchChoices(ctx context.Context, limit int) (FetchUIChoice
 	if truncated {
 		return FetchUIChoices{}, errors.New("remote branch list exceeds fetch chooser limit")
 	}
-	for _, line := range strings.Split(trimLine(branchOutput), "\n") {
-		if line == "" || len(result.RemoteBranches) >= limit {
-			continue
-		}
-		full, symref, found := strings.Cut(line, "\t")
-		if !found || symref != "" || !strings.HasPrefix(full, "refs/remotes/") {
-			continue
-		}
-		name := strings.TrimPrefix(full, "refs/remotes/")
-		// Match the longest configured remote prefix; remote names may contain '/'.
-		best := ""
-		for remote := range configured {
-			if strings.HasPrefix(name, remote+"/") && len(remote) > len(best) {
-				best = remote
-			}
-		}
-		if best != "" {
-			result.RemoteBranches = append(result.RemoteBranches, FetchRemoteBranch{Remote: best, Branch: strings.TrimPrefix(name, best+"/")})
-		}
-	}
+	result.RemoteBranches = fetchRemoteBranchChoices(branchOutput, configured, limit)
 	sort.Slice(result.RemoteBranches, func(i, j int) bool {
 		left, right := result.RemoteBranches[i], result.RemoteBranches[j]
 		return left.Remote+"/"+left.Branch < right.Remote+"/"+right.Branch
 	})
 	return result, nil
+}
+
+func fetchRemoteChoices(output []byte, limit int) (FetchUIChoices, map[string]bool) {
+	result := FetchUIChoices{Remotes: make([]string, 0, limit)}
+	configured := make(map[string]bool, limit)
+	for _, remote := range strings.Split(trimLine(output), "\n") {
+		if remote == "" || len(result.Remotes) >= limit {
+			continue
+		}
+		result.Remotes = append(result.Remotes, remote)
+		configured[remote] = true
+	}
+	return result, configured
+}
+
+func fetchRemoteBranchChoices(output []byte, configured map[string]bool, limit int) []FetchRemoteBranch {
+	result := make([]FetchRemoteBranch, 0, limit)
+	for _, line := range strings.Split(trimLine(output), "\n") {
+		if line == "" || len(result) >= limit {
+			continue
+		}
+		if branch, ok := fetchRemoteBranchChoice(line, configured); ok {
+			result = append(result, branch)
+		}
+	}
+	return result
+}
+
+func fetchRemoteBranchChoice(line string, configured map[string]bool) (FetchRemoteBranch, bool) {
+	full, symref, found := strings.Cut(line, "\t")
+	if !found || symref != "" || !strings.HasPrefix(full, "refs/remotes/") {
+		return FetchRemoteBranch{}, false
+	}
+	name := strings.TrimPrefix(full, "refs/remotes/")
+	remote := longestFetchRemotePrefix(name, configured)
+	if remote == "" {
+		return FetchRemoteBranch{}, false
+	}
+	return FetchRemoteBranch{Remote: remote, Branch: strings.TrimPrefix(name, remote+"/")}, true
+}
+
+func longestFetchRemotePrefix(name string, configured map[string]bool) string {
+	best := ""
+	for remote := range configured {
+		if strings.HasPrefix(name, remote+"/") && len(remote) > len(best) {
+			best = remote
+		}
+	}
+	return best
 }
 
 // FetchUpstreamWithArgs preserves fetch options while resolving the same

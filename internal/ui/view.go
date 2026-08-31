@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/richard/lazymagit/internal/keymap"
+	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
 func (m *Model) View() tea.View {
@@ -198,64 +199,71 @@ func (m *Model) renderStatusPanel(width, height int) string {
 		return fitBlock("Status", width, height)
 	}
 	innerW, innerH := width-2, height-2
-	ids := m.tree.VisibleSectionIDs()
-	cursor := 0
-	for i, id := range ids {
-		if id == m.tree.Cursor() {
-			cursor = i
-		}
-	}
-	start := 0
-	if cursor >= innerH {
-		start = cursor - innerH + 1
-	}
-	end := min(len(ids), start+innerH)
 	lines := make([]string, 0, innerH)
-	for _, id := range ids[start:end] {
-		section := m.tree.Section(id)
-		r := m.rows[id]
-		selected := id == m.tree.Cursor()
-		prefix := "  "
-		if r.kind == rowHeading {
-			if len(section.Children()) > 0 {
-				if m.tree.IsFolded(id) {
-					prefix = "▸ "
-				} else {
-					prefix = "▾ "
-				}
-			} else {
-				prefix = "  "
-			}
-		} else {
-			if m.rowMarked(r) {
-				prefix = "  ● "
-			} else {
-				prefix = "    "
-			}
-		}
-		text := truncate(prefix+section.Title(), innerW)
-		style := lipgloss.NewStyle().Width(innerW)
-		if r.kind == rowHeading {
-			style = style.Bold(true).Foreground(colorPurple)
-		} else if r.kind == rowUntracked || r.kind == rowUnstaged {
-			style = style.Foreground(colorGold)
-		} else if r.kind == rowStaged {
-			style = style.Foreground(colorGreen)
-		} else {
-			style = style.Foreground(colorCyan)
-		}
-		if m.statusSearchMatch(id) {
-			style = style.Underline(true).Foreground(colorCyan)
-		}
-		if selected {
-			style = style.Reverse(true).Bold(true)
-		}
-		lines = append(lines, style.Render(text))
+	for _, id := range m.statusPanelViewport(innerH) {
+		lines = append(lines, m.renderStatusRow(id, innerW))
 	}
 	for len(lines) < innerH {
 		lines = append(lines, "")
 	}
 	return panelStyle(width, height).Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) statusPanelViewport(height int) []sectionmodel.SectionID {
+	ids := m.tree.VisibleSectionIDs()
+	cursor := 0
+	for i, id := range ids {
+		if id == m.tree.Cursor() {
+			cursor = i
+			break
+		}
+	}
+	start := max(0, cursor-height+1)
+	return ids[start:min(len(ids), start+height)]
+}
+
+func (m *Model) renderStatusRow(id sectionmodel.SectionID, width int) string {
+	section := m.tree.Section(id)
+	row := m.rows[id]
+	text := truncate(m.statusRowPrefix(id, row)+section.Title(), width)
+	return m.statusRowStyle(id, row, width).Render(text)
+}
+
+func (m *Model) statusRowPrefix(id sectionmodel.SectionID, row row) string {
+	if row.kind != rowHeading {
+		if m.rowMarked(row) {
+			return "  ● "
+		}
+		return "    "
+	}
+	if len(m.tree.Section(id).Children()) == 0 {
+		return "  "
+	}
+	if m.tree.IsFolded(id) {
+		return "▸ "
+	}
+	return "▾ "
+}
+
+func (m *Model) statusRowStyle(id sectionmodel.SectionID, row row, width int) lipgloss.Style {
+	style := lipgloss.NewStyle().Width(width)
+	switch {
+	case row.kind == rowHeading:
+		style = style.Bold(true).Foreground(colorPurple)
+	case row.kind == rowUntracked || row.kind == rowUnstaged:
+		style = style.Foreground(colorGold)
+	case row.kind == rowStaged:
+		style = style.Foreground(colorGreen)
+	default:
+		style = style.Foreground(colorCyan)
+	}
+	if m.statusSearchMatch(id) {
+		style = style.Underline(true).Foreground(colorCyan)
+	}
+	if id == m.tree.Cursor() {
+		style = style.Reverse(true).Bold(true)
+	}
+	return style
 }
 
 func (m *Model) renderDetailPanel(width, height int) string {
@@ -546,10 +554,7 @@ func renderWorkflowFields(w *workflowState) []string {
 }
 
 func renderWorkflowField(field WorkflowField, selected bool) []string {
-	mark := "  "
-	if selected {
-		mark = "▶ "
-	}
+	mark := workflowFieldMark(selected)
 	if field.Kind == WorkflowSearch {
 		return renderWorkflowSearchField(field, mark, selected)
 	}
@@ -557,20 +562,17 @@ func renderWorkflowField(field WorkflowField, selected bool) []string {
 		return renderWorkflowMultilineField(field, mark, selected)
 	}
 	value := workflowFieldValue(field)
-	if field.Kind == WorkflowMultiline {
-		lines := []string{mark + sanitizeSingleLine(field.Label) + " (Ctrl-J new line):"}
-		for _, line := range strings.Split(value, "\n") {
-			lines = append(lines, "    "+sanitizeSingleLine(line))
-		}
-		if selected {
-			lines[len(lines)-1] += "█"
-		}
-		return lines
-	}
 	if selected && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
 		value += "█"
 	}
 	return []string{mark + sanitizeSingleLine(field.Label) + ": " + sanitizeSingleLine(value)}
+}
+
+func workflowFieldMark(selected bool) string {
+	if selected {
+		return "▶ "
+	}
+	return "  "
 }
 
 func renderWorkflowMultilineField(field WorkflowField, mark string, selected bool) []string {

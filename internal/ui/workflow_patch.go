@@ -455,8 +455,18 @@ func setFormatPatchOutputDirectory(out *gitbackend.FormatPatchOptions, value Opt
 }
 
 func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values WorkflowValues) (gitbackend.FormatPatchOptions, error) {
+	out := formatPatchWorkflowValues(defaults, values)
+	if err := parseFormatPatchWorkflowValues(&out, values); err != nil {
+		return out, err
+	}
+	if err := validateFormatPatchWorkflowValues(out); err != nil {
+		return out, err
+	}
+	return out, nil
+}
+
+func formatPatchWorkflowValues(defaults gitbackend.FormatPatchOptions, values WorkflowValues) gitbackend.FormatPatchOptions {
 	out := defaults
-	var err error
 	out.OutputDirectory, out.Numbered, out.CoverLetter, out.Signoff, out.Thread, out.SubjectPrefix = values["directory"], values["numbered"] == "true", values["cover"] == "true", values["signoff"] == "true", values["thread"] == "true", values["subject"]
 	out.CoverLetterBody, out.From, out.InReplyTo, out.Base = values["cover-message"], values["from"], values["in-reply-to"], values["base"]
 	if !out.Thread {
@@ -465,37 +475,43 @@ func formatPatchOptionsFromValues(defaults gitbackend.FormatPatchOptions, values
 	if out.CoverLetterBody != "" {
 		out.CoverLetter = true
 	}
+	return out
+}
+
+func parseFormatPatchWorkflowValues(out *gitbackend.FormatPatchOptions, values WorkflowValues) error {
+	var err error
 	if out.RerollCount, err = patchNonNegative("reroll count", values["reroll"]); err != nil {
-		return out, err
+		return err
 	}
 	if out.StartNumber, err = patchNonNegative("start number", values["start"]); err != nil {
-		return out, err
+		return err
 	}
 	if out.To, err = patchAddresses("To recipients", values["to"]); err != nil {
-		return out, err
+		return err
 	}
 	out.Cc, err = patchAddresses("Cc recipients", values["cc"])
-	if err != nil {
-		return out, err
-	}
+	return err
+}
+
+func validateFormatPatchWorkflowValues(out gitbackend.FormatPatchOptions) error {
 	if err := patchHeader("subject prefix", out.SubjectPrefix, true); err != nil {
-		return out, err
+		return err
 	}
 	if err := patchCoverMessage(out.CoverLetterBody); err != nil {
-		return out, err
+		return err
 	}
 	if err := patchMailAddress("From identity", out.From, true); err != nil {
-		return out, err
+		return err
 	}
 	if err := patchMessageID(out.InReplyTo); err != nil {
-		return out, err
+		return err
 	}
 	if out.Base != "" {
 		if err := validBoundedText("base commit", out.Base); err != nil {
-			return out, err
+			return err
 		}
 	}
-	return out, nil
+	return nil
 }
 
 func patchNonNegative(name, value string) (int, error) {

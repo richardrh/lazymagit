@@ -73,6 +73,80 @@ func TestParseUnifiedDiffMetadataNoNewlineAndFailures(t *testing.T) {
 	}
 }
 
+func TestParseDiffHunkDirectlyPreservesCoordinatesAndRejectsMalformedLines(t *testing.T) {
+	lines := []string{
+		"@@ -2,2 +4,3 @@ heading",
+		" keep",
+		"-old",
+		"+new",
+		"+extra",
+		`\ No newline at end of file`,
+		"next",
+	}
+	hunk, next, err := parseDiffHunk(lines, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next != 6 || hunk.Heading != " heading" || len(hunk.Lines) != 4 {
+		t.Fatalf("parsed hunk = %#v, next %d", hunk, next)
+	}
+	if got := hunk.Lines[0]; got.OldLine != 2 || got.NewLine != 4 {
+		t.Fatalf("context coordinates = %#v", got)
+	}
+	if got := hunk.Lines[1]; got.OldLine != 3 || got.NewLine != 0 {
+		t.Fatalf("deletion coordinates = %#v", got)
+	}
+	if got := hunk.Lines[3]; got.NewLine != 6 || !got.NoNewline {
+		t.Fatalf("final addition = %#v", got)
+	}
+
+	bad := [][]string{
+		{"not a header"},
+		{"@@ -1 +1 @@", ""},
+		{"@@ -1 +1 @@", "?bad"},
+		{"@@ -0,0 +1,1 @@", " context"},
+	}
+	for _, input := range bad {
+		if _, _, err := parseDiffHunk(input, 0); !errors.Is(err, ErrMalformedChangePatch) {
+			t.Errorf("parseDiffHunk(%q) error = %v", input, err)
+		}
+	}
+}
+
+func TestCanonicalChangeSelectionsDirectlyMergesAndValidates(t *testing.T) {
+	hunks := []DiffHunk{{Lines: make([]DiffLine, 6)}, {Lines: make([]DiffLine, 2)}}
+	canonical, err := canonicalChangeSelections(hunks, []InteractiveChangeSelection{
+		{Hunk: 0, Start: 3, End: 5},
+		{Hunk: 1, Start: 0, End: 1},
+		{Hunk: 0, Start: 1, End: 3},
+		{Hunk: 1, WholeHunk: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := canonical[0]; len(got) != 1 || got[0].Start != 1 || got[0].End != 5 {
+		t.Fatalf("merged selections = %#v", got)
+	}
+	if got := canonical[1]; len(got) != 1 || !got[0].WholeHunk {
+		t.Fatalf("whole-hunk selection = %#v", got)
+	}
+
+	invalid := [][]InteractiveChangeSelection{
+		nil,
+		{{Hunk: -1, Start: 0, End: 1}},
+		{{Hunk: 2, Start: 0, End: 1}},
+		{{Hunk: 0, WholeHunk: true, End: 1}},
+		{{Hunk: 0, Start: -1, End: 1}},
+		{{Hunk: 0, Start: 1, End: 7}},
+		{{Hunk: 0, Start: 1, End: 1}},
+	}
+	for _, selections := range invalid {
+		if _, err := canonicalChangeSelections(hunks, selections); !errors.Is(err, ErrInvalidChangePatchRegion) {
+			t.Errorf("canonicalChangeSelections(%#v) error = %v", selections, err)
+		}
+	}
+}
+
 func TestChangePatchExactRepositoryState(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("-option é.txt", "one\ntwo\nthree\nfour\n")

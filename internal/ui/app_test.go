@@ -14,6 +14,50 @@ import (
 	sectionmodel "github.com/richard/lazymagit/internal/model"
 )
 
+func TestDiscardConfirmationHelpers(t *testing.T) {
+	for key, want := range map[string]discardConfirmationAction{
+		"y": discardConfirmationAccepted, "Y": discardConfirmationAccepted,
+		"n": discardConfirmationCancelled, "N": discardConfirmationCancelled,
+		"q": discardConfirmationCancelled, "esc": discardConfirmationCancelled,
+		"other": discardConfirmationIgnored,
+	} {
+		if got := discardConfirmationActionForKey(key); got != want {
+			t.Errorf("discardConfirmationActionForKey(%q) = %v, want %v", key, got, want)
+		}
+	}
+
+	original := []string{"one", "two"}
+	confirmed := confirmedDiscardPaths(original, "fallback")
+	original[0] = "changed"
+	if !reflect.DeepEqual(confirmed, []string{"one", "two"}) {
+		t.Fatalf("confirmed paths were not copied: %v", confirmed)
+	}
+	if got := confirmedDiscardPaths(nil, "fallback"); !reflect.DeepEqual(got, []string{"fallback"}) {
+		t.Fatalf("fallback confirmed paths = %v", got)
+	}
+	if got := confirmedDiscardPaths(nil, ""); got != nil {
+		t.Fatalf("empty confirmed paths = %#v", got)
+	}
+}
+
+func TestHandleConfirmKeyRoutesEveryAction(t *testing.T) {
+	m := New(nil)
+	m.setMode(modeConfirm)
+	m.confirmPath = "one"
+	if cmd := m.handleConfirmKey("other"); cmd != nil || m.mode != modeConfirm || m.confirmPath != "one" {
+		t.Fatalf("ignored confirmation changed state: mode=%v path=%q cmd=%v", m.mode, m.confirmPath, cmd)
+	}
+	if cmd := m.handleConfirmKey("n"); cmd != nil || m.mode != modeStatus || m.confirmPath != "" || m.message != "Discard cancelled" {
+		t.Fatalf("cancel confirmation state: mode=%v path=%q message=%q cmd=%v", m.mode, m.confirmPath, m.message, cmd)
+	}
+
+	m.setMode(modeConfirm)
+	m.confirmPaths = []string{"one", "two"}
+	if cmd := m.handleConfirmKey("y"); cmd == nil || m.mode != modeStatus || len(m.confirmPaths) != 0 || !m.busy {
+		t.Fatalf("accepted confirmation state: mode=%v paths=%v busy=%v cmd=%v", m.mode, m.confirmPaths, m.busy, cmd)
+	}
+}
+
 func TestVimGTimeoutRefreshesAndGGStillNavigatesFirst(t *testing.T) {
 	m := New(nil)
 	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}, {Path: "b", Staged: gitbackend.ChangeModified}}}})

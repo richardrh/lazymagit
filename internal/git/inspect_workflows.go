@@ -533,39 +533,63 @@ func (r *Repository) QueryRequestPull(ctx context.Context, q RequestPullQuery) (
 }
 
 func (r *Repository) resolveRevisionRange(ctx context.Context, value string) (string, error) {
+	rangeSpec, err := parseRevisionRange(value)
+	if err != nil {
+		return "", err
+	}
+	if rangeSpec.separator == "" {
+		return r.resolveCommitOID(ctx, rangeSpec.left)
+	}
+	leftOID, err := r.resolveCommitOID(ctx, rangeSpec.left)
+	if err != nil {
+		return "", err
+	}
+	rightOID, err := r.resolveCommitOID(ctx, rangeSpec.right)
+	if err != nil {
+		return "", err
+	}
+	return leftOID + rangeSpec.separator + rightOID, nil
+}
+
+type revisionRange struct {
+	left, separator, right string
+}
+
+func parseRevisionRange(value string) (revisionRange, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n") {
-		return "", errors.New("invalid revision or range")
+	if invalidRevisionRange(value) {
+		return revisionRange{}, errors.New("invalid revision or range")
 	}
-	separator := ""
-	position := strings.Index(value, "...")
-	if position >= 0 {
-		separator = "..."
-	} else if position = strings.Index(value, ".."); position >= 0 {
-		separator = ".."
-	}
+	separator, position := revisionRangeSeparator(value)
 	if separator == "" {
-		return r.resolveCommitOID(ctx, value)
+		return revisionRange{left: value}, nil
 	}
 	left, right := value[:position], value[position+len(separator):]
 	if strings.Contains(left, "..") || strings.Contains(right, "..") {
-		return "", errors.New("revision range has multiple separators")
+		return revisionRange{}, errors.New("revision range has multiple separators")
 	}
-	if left == "" {
-		left = "HEAD"
+	return revisionRange{left: defaultRangeEndpoint(left), separator: separator, right: defaultRangeEndpoint(right)}, nil
+}
+
+func invalidRevisionRange(value string) bool {
+	return value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n")
+}
+
+func revisionRangeSeparator(value string) (string, int) {
+	if position := strings.Index(value, "..."); position >= 0 {
+		return "...", position
 	}
-	if right == "" {
-		right = "HEAD"
+	if position := strings.Index(value, ".."); position >= 0 {
+		return "..", position
 	}
-	leftOID, err := r.resolveCommitOID(ctx, left)
-	if err != nil {
-		return "", err
+	return "", -1
+}
+
+func defaultRangeEndpoint(value string) string {
+	if value == "" {
+		return "HEAD"
 	}
-	rightOID, err := r.resolveCommitOID(ctx, right)
-	if err != nil {
-		return "", err
-	}
-	return leftOID + separator + rightOID, nil
+	return value
 }
 
 type LogQuery struct {
@@ -693,6 +717,18 @@ func logItemLimit(requested int) (int, bool) {
 }
 
 func logQueryOptions(q LogQuery) ([]string, error) {
+	args := logDisplayOptions(q)
+	order, err := logOrderOption(q.Order)
+	if err != nil {
+		return nil, err
+	}
+	if order != "" {
+		args = append(args, order)
+	}
+	return appendLogFilterOptions(args, q), nil
+}
+
+func logDisplayOptions(q LogQuery) []string {
 	var args []string
 	if q.Graph {
 		args = append(args, "--graph")
@@ -713,17 +749,25 @@ func logQueryOptions(q LogQuery) ([]string, error) {
 			args = append(args, candidate.option)
 		}
 	}
-	switch q.Order {
+	return args
+}
+
+func logOrderOption(order LogOrder) (string, error) {
+	switch order {
 	case LogOrderDefault:
+		return "", nil
 	case LogOrderDate:
-		args = append(args, "--date-order")
+		return "--date-order", nil
 	case LogOrderAuthorDate:
-		args = append(args, "--author-date-order")
+		return "--author-date-order", nil
 	case LogOrderTopo:
-		args = append(args, "--topo-order")
+		return "--topo-order", nil
 	default:
-		return nil, errors.New("unknown log order")
+		return "", errors.New("unknown log order")
 	}
+}
+
+func appendLogFilterOptions(args []string, q LogQuery) []string {
 	if q.Author != "" {
 		args = append(args, "--author="+q.Author)
 	}
@@ -742,7 +786,7 @@ func logQueryOptions(q LogQuery) ([]string, error) {
 	if q.TagPattern != "" {
 		args = append(args, "HEAD", "--tags="+q.TagPattern)
 	}
-	return args, nil
+	return args
 }
 
 func (r *Repository) logQuerySelectors(ctx context.Context, q LogQuery) ([]string, error) {

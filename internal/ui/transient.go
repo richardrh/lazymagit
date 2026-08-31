@@ -157,11 +157,7 @@ func (m *Model) transientAvailability(prefix string, binding keymap.Binding, ctx
 	category := menuEntryRegistry
 	switch {
 	case binding.Kind == keymap.KindInfix:
-		consumers := m.optionConsumers(prefix, binding)
-		available, reason, category = active && len(consumers) > 0, conditionReason, menuEntryInfix
-		if active && len(consumers) == 0 {
-			reason = "no registered workflow consumes this option"
-		}
+		available, reason, category = infixAvailability(active, conditionReason, len(m.optionConsumers(prefix, binding)))
 	case binding.Handler == keymap.HandlerPrefix:
 		available, reason = active, conditionReason
 	case m.workflowHandlers[binding.Command] != nil:
@@ -173,6 +169,23 @@ func (m *Model) transientAvailability(prefix string, binding keymap.Binding, ctx
 		if reason == "" {
 			reason = "workflow handler is not registered"
 		}
+	}
+	return finalizeTransientAvailability(available, reason, category, active, conditionReason)
+}
+
+func infixAvailability(active bool, conditionReason string, consumers int) (bool, string, menuEntryCategory) {
+	if !active {
+		return false, conditionReason, menuEntryInfix
+	}
+	if consumers == 0 {
+		return false, "no registered workflow consumes this option", menuEntryInfix
+	}
+	return true, "", menuEntryInfix
+}
+
+func finalizeTransientAvailability(available bool, reason string, category menuEntryCategory, active bool, conditionReason string) (bool, string, menuEntryCategory) {
+	if available {
+		reason = ""
 	}
 	if !active {
 		category = menuEntryContext
@@ -275,51 +288,73 @@ func (m *Model) singleBindingCondition(kind keymap.EntryKind, condition string) 
 
 func (m *Model) staticBindingCondition(kind keymap.EntryKind, condition string) (bool, string) {
 	switch {
-	case kind == keymap.KindInfix && strings.Contains(condition, "direct-configure"):
+	case directConfigureCondition(kind, condition):
 		return false, "configured in the corresponding Configure dialog"
-	case strings.Contains(condition, "magit-get-some-remote") && len(m.snapshot.remotes) == 0:
+	case m.missingRemoteCondition(condition):
 		return false, "requires a configured remote"
-	case strings.Contains(condition, "inapt-if-not") && strings.Contains(condition, "magit-get-current-branch") && (m.snapshot.summary.Branch == "" || m.snapshot.summary.Detached):
+	case m.missingCurrentBranchCondition(condition):
 		return false, "requires a current local branch"
-	case strings.Contains(condition, "inapt-if-not") && strings.Contains(condition, "magit-get-current-remote") && m.snapshot.summary.Upstream == "":
+	case m.missingCurrentRemoteCondition(condition):
 		return false, "requires a configured upstream"
 	default:
 		return true, ""
 	}
 }
 
-func (m *Model) statusBindingCondition(condition string) (matched, active bool, reason string) {
-	kind := ""
-	for _, candidate := range []string{"unmerged", "unstaged", "staged", "modified"} {
-		if strings.Contains(condition, "magit-anything-"+candidate+"-p") {
-			kind = candidate
-			break
-		}
+func directConfigureCondition(kind keymap.EntryKind, condition string) bool {
+	return kind == keymap.KindInfix && strings.Contains(condition, "direct-configure")
+}
+
+func (m *Model) missingRemoteCondition(condition string) bool {
+	return len(m.snapshot.remotes) == 0 && strings.Contains(condition, "magit-get-some-remote")
+}
+
+func (m *Model) missingCurrentBranchCondition(condition string) bool {
+	if !strings.Contains(condition, "inapt-if-not") || !strings.Contains(condition, "magit-get-current-branch") {
+		return false
 	}
+	return m.snapshot.summary.Branch == "" || m.snapshot.summary.Detached
+}
+
+func (m *Model) missingCurrentRemoteCondition(condition string) bool {
+	return m.snapshot.summary.Upstream == "" && strings.Contains(condition, "inapt-if-not") && strings.Contains(condition, "magit-get-current-remote")
+}
+
+func (m *Model) statusBindingCondition(condition string) (matched, active bool, reason string) {
+	kind := statusConditionKind(condition)
 	if kind == "" {
 		return false, false, ""
 	}
 	for _, file := range m.snapshot.status.Files {
-		switch kind {
-		case "unmerged":
-			if file.Staged == gitbackend.ChangeUnmerged || file.Unstaged == gitbackend.ChangeUnmerged {
-				return true, true, ""
-			}
-		case "unstaged":
-			if file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked {
-				return true, true, ""
-			}
-		case "staged":
-			if file.Staged != gitbackend.ChangeNone {
-				return true, true, ""
-			}
-		case "modified":
-			if file.Staged != gitbackend.ChangeNone || file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked {
-				return true, true, ""
-			}
+		if fileMatchesStatusCondition(file, kind) {
+			return true, true, ""
 		}
 	}
 	return true, false, "requires " + strings.ReplaceAll(kind, "unstaged", "unstaged changes")
+}
+
+func statusConditionKind(condition string) string {
+	for _, candidate := range []string{"unmerged", "unstaged", "staged", "modified"} {
+		if strings.Contains(condition, "magit-anything-"+candidate+"-p") {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func fileMatchesStatusCondition(file gitbackend.FileStatus, kind string) bool {
+	switch kind {
+	case "unmerged":
+		return file.Staged == gitbackend.ChangeUnmerged || file.Unstaged == gitbackend.ChangeUnmerged
+	case "unstaged":
+		return file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked
+	case "staged":
+		return file.Staged != gitbackend.ChangeNone
+	case "modified":
+		return file.Staged != gitbackend.ChangeNone || file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked
+	default:
+		return false
+	}
 }
 
 func (m *Model) sparseCheckoutBindingCondition(condition string) (matched, active bool, reason string) {

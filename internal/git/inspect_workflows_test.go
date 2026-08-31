@@ -439,6 +439,32 @@ func TestLogQueryPureHelpersDirectly(t *testing.T) {
 	if got, err := singleSelector("abc", nil); err != nil || len(got) != 1 || got[0] != "abc" {
 		t.Fatalf("singleSelector = %#v, %v", got, err)
 	}
+	since := time.Date(2026, 1, 2, 3, 4, 5, 6, time.FixedZone("offset", 3600))
+	until := since.Add(time.Hour)
+	options, err = logQueryOptions(LogQuery{
+		All: true, Reflog: true, FirstParent: true, MergesOnly: true, Reverse: true,
+		Order: LogOrderAuthorDate, Grep: "literal", Since: &since, Until: &until, BranchPattern: "release/*",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined = strings.Join(options, " ")
+	for _, want := range []string{
+		"--no-decorate", "--all", "--reflog", "--first-parent", "--merges", "--reverse",
+		"--author-date-order", "--fixed-strings", "--grep=literal",
+		"--since=" + since.UTC().Format(time.RFC3339Nano), "--until=" + until.UTC().Format(time.RFC3339Nano),
+		"HEAD", "--branches=release/*",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("options %q missing %q", joined, want)
+		}
+	}
+	if options, err = logQueryOptions(LogQuery{NoMerges: true, Order: LogOrderDate, TagPattern: "v*"}); err != nil || !strings.Contains(strings.Join(options, " "), "--tags=v*") {
+		t.Fatalf("tag options = %#v, %v", options, err)
+	}
+	if _, err := logQueryOptions(LogQuery{Order: LogOrder(99)}); err == nil {
+		t.Fatal("unknown log order was accepted")
+	}
 }
 
 func TestShortlogQueryPureHelpersDirectly(t *testing.T) {

@@ -44,6 +44,35 @@ func TestReviewedGitCommandRequiresSeparateExternalConfirmation(t *testing.T) {
 	}
 }
 
+func TestValidateReviewedGitSubcommandDirect(t *testing.T) {
+	for _, argv := range [][]string{{"-c", "x=y", "status"}, {"git", "status"}, {"credential"}, {"bisect", "run", "true"}} {
+		if err := validateReviewedGitSubcommand(argv); err == nil {
+			t.Fatalf("unsupported subcommand was accepted: %#v", argv)
+		}
+	}
+	if err := validateReviewedGitSubcommand([]string{"status", "--short"}); err != nil {
+		t.Fatalf("status was rejected: %v", err)
+	}
+}
+
+func TestRejectReviewedGitAliasDirect(t *testing.T) {
+	r := newTestRepo(t)
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := repo.rejectReviewedGitAlias(ctx, "status"); err != nil {
+		t.Fatalf("missing alias rejected: %v", err)
+	}
+	if err := repo.run(ctx, "config", "alias.direct-test", "status --short"); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.rejectReviewedGitAlias(ctx, "direct-test"); !errors.Is(err, ErrRawCommandAlias) {
+		t.Fatalf("configured alias error = %v", err)
+	}
+}
+
 func TestDirectRunRecordsLiteralMetacharactersAndRedacts(t *testing.T) {
 	r := newTestRepo(t)
 	repo, err := Discover(r.dir)

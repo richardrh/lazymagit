@@ -580,23 +580,10 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 		m.shutdown()
 		return tea.Quit, true
 	}
-	if key == "esc" && m.revisionActive && m.graphReturn != nil && m.resolver.PendingPrefix() == "" {
-		m.restoreGraphInspection()
-		m.setMessage("Returned to graph")
-		return nil, true
-	}
-	if key == "esc" && m.revisionActive && m.blameReturn != nil && m.resolver.PendingPrefix() == "" {
-		m.restoreBlameInspection()
-		m.setMessage("Returned to blame")
-		return nil, true
-	}
-	if key == "esc" && m.inspectionActive && m.resolver.PendingPrefix() == "" {
-		m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
-		m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
-		m.conflictInspectPath, m.conflictResolution = "", ""
-		m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
-		m.setMessage("Inspection closed")
-		return m.loadDetailCmd(), true
+	if key == "esc" && m.resolver.PendingPrefix() == "" {
+		if cmd, handled := m.handleInspectionEscape(); handled {
+			return cmd, true
+		}
 	}
 	if key == "esc" && m.workflowLoading {
 		m.cancelWorkflowLoad()
@@ -618,6 +605,32 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 		m.setMessage("Vim key scheme active")
 	}
 	return nil, true
+}
+
+func (m *Model) handleInspectionEscape() (tea.Cmd, bool) {
+	if m.revisionActive && m.graphReturn != nil {
+		m.restoreGraphInspection()
+		m.setMessage("Returned to graph")
+		return nil, true
+	}
+	if m.revisionActive && m.blameReturn != nil {
+		m.restoreBlameInspection()
+		m.setMessage("Returned to blame")
+		return nil, true
+	}
+	if !m.inspectionActive {
+		return nil, false
+	}
+	m.closeInspection()
+	return m.loadDetailCmd(), true
+}
+
+func (m *Model) closeInspection() {
+	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
+	m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
+	m.conflictInspectPath, m.conflictResolution = "", ""
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
+	m.setMessage("Inspection closed")
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -673,25 +686,47 @@ func (m *Model) routeProcessKey(msg tea.KeyPressMsg, key string) tea.Cmd {
 	}
 }
 
+type discardConfirmationAction uint8
+
+const (
+	discardConfirmationIgnored discardConfirmationAction = iota
+	discardConfirmationAccepted
+	discardConfirmationCancelled
+)
+
+func discardConfirmationActionForKey(key string) discardConfirmationAction {
+	switch key {
+	case "y", "Y":
+		return discardConfirmationAccepted
+	case "n", "N", "q", "esc":
+		return discardConfirmationCancelled
+	default:
+		return discardConfirmationIgnored
+	}
+}
+
+func confirmedDiscardPaths(paths []string, path string) []string {
+	confirmed := append([]string(nil), paths...)
+	if len(confirmed) == 0 && path != "" {
+		return []string{path}
+	}
+	return confirmed
+}
+
 func (m *Model) handleConfirmKey(key string) tea.Cmd {
-	if key == "y" || key == "Y" {
-		paths := append([]string(nil), m.confirmPaths...)
-		if len(paths) == 0 && m.confirmPath != "" {
-			paths = []string{m.confirmPath}
-		}
-		m.setMode(modeStatus)
-		m.confirmPath = ""
-		m.confirmPaths = nil
+	action := discardConfirmationActionForKey(key)
+	if action == discardConfirmationIgnored {
+		return nil
+	}
+	paths := confirmedDiscardPaths(m.confirmPaths, m.confirmPath)
+	m.setMode(modeStatus)
+	m.confirmPath = ""
+	m.confirmPaths = nil
+	if action == discardConfirmationAccepted {
 		return m.startOperation(fileOperationName("discard", paths), func(ctx context.Context) error { return m.repo.Discard(ctx, paths) })
 	}
-	if key == "n" || key == "N" || key == "q" || key == "esc" {
-		m.setMode(modeStatus)
-		m.confirmPath = ""
-		m.confirmPaths = nil
-		m.setMessage("Discard cancelled")
-		return m.loadDetailCmd()
-	}
-	return nil
+	m.setMessage("Discard cancelled")
+	return m.loadDetailCmd()
 }
 
 func (m *Model) handleHelpKey(key string) tea.Cmd {
@@ -709,12 +744,15 @@ func (m *Model) handleHelpKey(key string) tea.Cmd {
 		return nil
 	}
 	entry, found := dispatcherEntry(m.dispatcherCatalog(), key)
-	if found && entry.Available && entry.Command != keymap.CommandNone {
+	if !found {
+		return nil
+	}
+	if entry.Available && entry.Command != keymap.CommandNone {
 		m.setMode(modeStatus)
 		m.transientOffset = 0
 		return m.perform(entry.Command)
 	}
-	if found && !entry.Available {
+	if !entry.Available {
 		m.setMessage(entry.Label + " unavailable: " + entry.Reason)
 	}
 	return nil
@@ -1392,30 +1430,15 @@ func (m *Model) performDisplayCommand(command keymap.CommandID) (tea.Cmd, bool) 
 func (m *Model) performChangeCommand(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandStage:
-		if paths := m.fileOperationPaths(rowUnstaged, rowUntracked); len(paths) > 0 && m.canOperate() {
-			return m.startOperation(fileOperationName("stage", paths), func(ctx context.Context) error { return m.repo.Stage(ctx, paths) }), true
-		}
+		return m.performFileChange("stage", m.repo.Stage, rowUnstaged, rowUntracked), true
 	case keymap.CommandUnstage:
-		if paths := m.fileOperationPaths(rowStaged); len(paths) > 0 && m.canOperate() {
-			return m.startOperation(fileOperationName("unstage", paths), func(ctx context.Context) error { return m.repo.Unstage(ctx, paths) }), true
-		}
+		return m.performFileChange("unstage", m.repo.Unstage, rowStaged), true
 	case keymap.CommandStageAll:
-		if m.canOperate() {
-			if m.stageAll == nil {
-				return m.startOperation("stage all tracked changes", nil), true
-			}
-			return m.startOperation("stage all tracked changes", m.stageAll), true
-		}
+		return m.performAggregateChange("stage all tracked changes", m.stageAll), true
 	case keymap.CommandUnstageAll:
-		if m.canOperate() {
-			return m.startOperation("unstage all", m.unstageAll), true
-		}
+		return m.performAggregateChange("unstage all", m.unstageAll), true
 	case keymap.CommandDiscard:
-		if m.scheme == schemeMagit {
-			m.beginDiscard(rowUnstaged, rowUntracked, rowStaged)
-		} else {
-			m.beginDiscard(rowUnstaged, rowUntracked)
-		}
+		m.performDiscardChange()
 	case keymap.CommandCommit:
 		if m.canOperate() {
 			m.setMode(modeCommit)
@@ -1425,6 +1448,31 @@ func (m *Model) performChangeCommand(command keymap.CommandID) (tea.Cmd, bool) {
 		return nil, false
 	}
 	return nil, true
+}
+
+func (m *Model) performFileChange(name string, operation func(context.Context, []string) error, kinds ...rowKind) tea.Cmd {
+	paths := m.fileOperationPaths(kinds...)
+	if len(paths) == 0 || !m.canOperate() {
+		return nil
+	}
+	return m.startOperation(fileOperationName(name, paths), func(ctx context.Context) error {
+		return operation(ctx, paths)
+	})
+}
+
+func (m *Model) performAggregateChange(name string, operation func(context.Context) error) tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	return m.startOperation(name, operation)
+}
+
+func (m *Model) performDiscardChange() {
+	if m.scheme == schemeMagit {
+		m.beginDiscard(rowUnstaged, rowUntracked, rowStaged)
+		return
+	}
+	m.beginDiscard(rowUnstaged, rowUntracked)
 }
 
 func (m *Model) performRepositoryCommand(command keymap.CommandID) (tea.Cmd, bool) {

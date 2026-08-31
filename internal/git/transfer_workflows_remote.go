@@ -420,31 +420,7 @@ func (r *Repository) ConfigureRemote(ctx context.Context, in RemoteConfigArgs) e
 }
 
 func (r *Repository) validateRemoteConfigArgs(ctx context.Context, in RemoteConfigArgs) error {
-	if err := r.validateTransferRemote(ctx, in.Remote); err != nil {
-		return err
-	}
-	for name, value := range map[string]*string{"fetch": in.FetchURL, "push": in.PushURL} {
-		if value != nil && (*value == "" || strings.ContainsAny(*value, "\x00\r\n")) {
-			return fmt.Errorf("%s URL is empty or contains a control character", name)
-		}
-	}
-	for _, pair := range []struct {
-		values []string
-		fetch  bool
-	}{{in.FetchRefspecs, true}, {in.PushRefspecs, false}} {
-		for _, spec := range pair.values {
-			if err := r.validateRefspec(ctx, spec, pair.fetch); err != nil {
-				return err
-			}
-		}
-	}
-	if in.TagOpt != nil && *in.TagOpt != RemoteTagsDefault && *in.TagOpt != RemoteTagsAll && *in.TagOpt != RemoteTagsNone {
-		return errors.New("invalid remote tag option")
-	}
-	if in.FollowRemoteHEAD != nil && (*in.FollowRemoteHEAD < RemoteFollowRemoteHEADDefault || *in.FollowRemoteHEAD > RemoteFollowRemoteHEADAlways) {
-		return errors.New("invalid remote followRemoteHEAD option")
-	}
-	return nil
+	return r.validateRemoteConfigurationRequest(ctx, in)
 }
 
 func (r *Repository) applyRemoteConfig(ctx context.Context, in RemoteConfigArgs, rollback func(error) error) error {

@@ -22,6 +22,21 @@ var (
 	rawRunCommandIDs []keymap.CommandID
 )
 
+type commandArgvQuoteMode uint8
+
+const (
+	commandArgvUnquoted commandArgvQuoteMode = iota
+	commandArgvSingleQuoted
+	commandArgvDoubleQuoted
+)
+
+type commandArgvParser struct {
+	argv             []string
+	word             strings.Builder
+	mode             commandArgvQuoteMode
+	escaped, started bool
+}
+
 func init() {
 	for _, binding := range keymap.Registry() {
 		if binding.Context == keymap.ContextStatus && binding.UpstreamCommand == "magit-git-command" {
@@ -67,73 +82,86 @@ func appendUniqueCommandID(ids []keymap.CommandID, id keymap.CommandID) []keymap
 // removed. There is intentionally no variable, command, tilde, glob, comment,
 // operator, redirect, or semicolon processing.
 func parseCommandArgv(input string) ([]string, error) {
-	type quoteMode uint8
-	const (
-		unquoted quoteMode = iota
-		singleQuoted
-		doubleQuoted
-	)
-	var argv []string
-	var word strings.Builder
-	mode, escaped, started := unquoted, false, false
-	flush := func() {
-		if started {
-			argv = append(argv, word.String())
-			word.Reset()
-			started = false
-		}
-	}
+	parser := commandArgvParser{}
 	for _, r := range input {
-		if escaped {
-			word.WriteRune(r)
-			escaped, started = false, true
-			continue
-		}
-		switch mode {
-		case singleQuoted:
-			if r == '\'' {
-				mode = unquoted
-			} else {
-				word.WriteRune(r)
-			}
-			started = true
-		case doubleQuoted:
-			switch r {
-			case '"':
-				mode = unquoted
-			case '\\':
-				escaped = true
-			default:
-				word.WriteRune(r)
-			}
-			started = true
-		default:
-			switch {
-			case unicode.IsSpace(r):
-				flush()
-			case r == '\'':
-				mode, started = singleQuoted, true
-			case r == '"':
-				mode, started = doubleQuoted, true
-			case r == '\\':
-				escaped, started = true, true
-			default:
-				word.WriteRune(r)
-				started = true
-			}
-		}
+		parser.consume(r)
 	}
-	if escaped {
+	return parser.finish()
+}
+
+func (p *commandArgvParser) consume(r rune) {
+	if p.escaped {
+		p.word.WriteRune(r)
+		p.escaped, p.started = false, true
+		return
+	}
+	switch p.mode {
+	case commandArgvSingleQuoted:
+		p.consumeSingleQuoted(r)
+	case commandArgvDoubleQuoted:
+		p.consumeDoubleQuoted(r)
+	default:
+		p.consumeUnquoted(r)
+	}
+}
+
+func (p *commandArgvParser) consumeSingleQuoted(r rune) {
+	if r == '\'' {
+		p.mode = commandArgvUnquoted
+	} else {
+		p.word.WriteRune(r)
+	}
+	p.started = true
+}
+
+func (p *commandArgvParser) consumeDoubleQuoted(r rune) {
+	switch r {
+	case '"':
+		p.mode = commandArgvUnquoted
+	case '\\':
+		p.escaped = true
+	default:
+		p.word.WriteRune(r)
+	}
+	p.started = true
+}
+
+func (p *commandArgvParser) consumeUnquoted(r rune) {
+	switch {
+	case unicode.IsSpace(r):
+		p.flush()
+	case r == '\'':
+		p.mode, p.started = commandArgvSingleQuoted, true
+	case r == '"':
+		p.mode, p.started = commandArgvDoubleQuoted, true
+	case r == '\\':
+		p.escaped, p.started = true, true
+	default:
+		p.word.WriteRune(r)
+		p.started = true
+	}
+}
+
+func (p *commandArgvParser) finish() ([]string, error) {
+	if p.escaped {
 		return nil, errors.New("argv ends with an incomplete backslash escape")
 	}
-	if mode != unquoted {
+	if p.mode != commandArgvUnquoted {
 		return nil, errors.New("argv contains an unterminated quote")
 	}
-	flush()
-	if len(argv) == 0 {
+	p.flush()
+	if len(p.argv) == 0 {
 		return nil, errors.New("command argv is required")
 	}
-	return argv, nil
+	return p.argv, nil
+}
+
+func (p *commandArgvParser) flush() {
+	if p.started {
+		p.argv = append(p.argv, p.word.String())
+		p.word.Reset()
+		p.started = false
+	}
 }
 
 func openRawCommandWorkflow(m *Model, run bool) tea.Cmd {

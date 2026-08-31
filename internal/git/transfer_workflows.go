@@ -71,47 +71,81 @@ func (r *Repository) validateFetchArgs(ctx context.Context, in FetchArgs) error 
 }
 
 func fetchArgs(in FetchArgs) ([]string, error) {
-	args := []string{"fetch"}
+	options, err := fetchOptionArgs(in)
+	if err != nil {
+		return nil, err
+	}
+	suffix, err := fetchSuffixArgs(in)
+	if err != nil {
+		return nil, err
+	}
+	return append(append([]string{"fetch"}, options...), suffix...), nil
+}
+
+func fetchOptionArgs(in FetchArgs) ([]string, error) {
+	var args []string
 	if in.Prune {
 		args = append(args, "--prune")
 	}
-	switch in.Tags {
-	case FetchTagsDefault:
-	case FetchAllTags:
-		args = append(args, "--tags")
-	case FetchNoTags:
-		args = append(args, "--no-tags")
-	default:
-		return nil, errors.New("invalid fetch tags mode")
+	tags, err := fetchTagsArgs(in.Tags)
+	if err != nil {
+		return nil, err
 	}
+	args = append(args, tags...)
 	if in.Unshallow {
 		args = append(args, "--unshallow")
 	}
 	if in.Force {
 		args = append(args, "--force")
 	}
-	switch in.RecurseSubmodules {
+	submodules, err := fetchSubmoduleArgs(in.RecurseSubmodules)
+	if err != nil {
+		return nil, err
+	}
+	return append(args, submodules...), nil
+}
+
+func fetchTagsArgs(mode FetchTags) ([]string, error) {
+	switch mode {
+	case FetchTagsDefault:
+		return nil, nil
+	case FetchAllTags:
+		return []string{"--tags"}, nil
+	case FetchNoTags:
+		return []string{"--no-tags"}, nil
+	default:
+		return nil, errors.New("invalid fetch tags mode")
+	}
+}
+
+func fetchSubmoduleArgs(mode SubmoduleRecursion) ([]string, error) {
+	switch mode {
 	case SubmodulesDefault:
+		return nil, nil
 	case SubmodulesOnDemand:
-		args = append(args, "--recurse-submodules=on-demand")
+		return []string{"--recurse-submodules=on-demand"}, nil
 	case SubmodulesYes:
-		args = append(args, "--recurse-submodules=yes")
+		return []string{"--recurse-submodules=yes"}, nil
 	case SubmodulesNo:
-		args = append(args, "--recurse-submodules=no")
+		return []string{"--recurse-submodules=no"}, nil
 	default:
 		return nil, errors.New("invalid submodule recursion mode")
 	}
-	if in.Remote != "" || in.Branch != "" || in.Refspec != "" {
-		if in.Remote == "" {
+}
+
+func fetchSuffixArgs(in FetchArgs) ([]string, error) {
+	if in.Remote == "" {
+		if in.Branch != "" || in.Refspec != "" {
 			return nil, errors.New("fetch suffix requires a remote")
 		}
-		args = append(args, "--", in.Remote)
-		if in.Branch != "" {
-			args = append(args, in.Branch)
-		}
-		if in.Refspec != "" {
-			args = append(args, in.Refspec)
-		}
+		return nil, nil
+	}
+	args := []string{"--", in.Remote}
+	if in.Branch != "" {
+		args = append(args, in.Branch)
+	}
+	if in.Refspec != "" {
+		args = append(args, in.Refspec)
 	}
 	return args, nil
 }
@@ -547,17 +581,40 @@ func (r *Repository) validateRefspec(ctx context.Context, spec string, fetch boo
 	if err != nil {
 		return err
 	}
-	if fetch && (!hasColon || source == "" || destination == "") {
-		return fmt.Errorf("fetch refspec requires source and destination")
+	if err := validateFetchRefspecParts(source, destination, hasColon, fetch); err != nil {
+		return err
+	}
+	if fetch {
+		return r.validateFetchRefspec(ctx, source, destination, hasColon)
 	}
 	for _, ref := range []string{source, destination} {
-		if err := r.validateRefspecRef(ctx, ref, fetch); err != nil {
+		if err := r.validateRefspecRef(ctx, ref, false); err != nil {
 			return err
 		}
 	}
-	if fetch {
-		return nil
+	return r.validatePushRefspec(ctx, source, destination)
+}
+
+func validateFetchRefspecParts(source, destination string, hasColon, fetch bool) error {
+	if fetch && (!hasColon || source == "" || destination == "") {
+		return fmt.Errorf("fetch refspec requires source and destination")
 	}
+	return nil
+}
+
+func (r *Repository) validateFetchRefspec(ctx context.Context, source, destination string, hasColon bool) error {
+	if err := validateFetchRefspecParts(source, destination, hasColon, true); err != nil {
+		return err
+	}
+	for _, ref := range []string{source, destination} {
+		if err := r.validateRefspecRef(ctx, ref, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *Repository) validatePushRefspec(ctx context.Context, source, destination string) error {
 	if source != "" && !strings.HasPrefix(source, "refs/") {
 		if err := r.validatePushSource(ctx, source); err != nil {
 			return err
