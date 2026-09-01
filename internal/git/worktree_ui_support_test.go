@@ -52,6 +52,32 @@ func TestReviewedWorktreeAddMoveLockUnlockAndRemove(t *testing.T) {
 	}
 }
 
+func TestReviewedWorktreeAddSupportsNoCheckoutAndLockOnCreate(t *testing.T) {
+	_, repo := managementRepo(t)
+	ctx := context.Background()
+	linked := filepath.Join(t.TempDir(), "advanced")
+	checkout := false
+	review, err := repo.ReviewWorktreeAdd(ctx, linked, "HEAD", "advanced-topic", WorktreeAddOptions{
+		Checkout: &checkout, Lock: true, LockReason: "offline disk",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.AddWorktreeReviewed(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(linked, "tracked.txt")); !os.IsNotExist(err) {
+		t.Fatalf("no-checkout worktree populated tracked files: %v", err)
+	}
+	all, err := repo.Worktrees(ctx)
+	if err != nil || len(all) != 2 || !all[1].Locked || all[1].LockReason != "offline disk" || all[1].Branch != "advanced-topic" {
+		t.Fatalf("advanced worktree = %#v, %v", all, err)
+	}
+	if _, err := repo.ReviewWorktreeAdd(ctx, filepath.Join(t.TempDir(), "invalid"), "HEAD", "", WorktreeAddOptions{LockReason: "missing lock"}); err == nil {
+		t.Fatal("lock reason without lock-on-create was accepted")
+	}
+}
+
 func TestReviewedWorktreeRemovalRejectsStaleStateAndUnsafePaths(t *testing.T) {
 	r, repo := managementRepo(t)
 	ctx := context.Background()

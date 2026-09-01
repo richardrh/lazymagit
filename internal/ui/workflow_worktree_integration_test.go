@@ -119,6 +119,12 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	worktreeE2ETab(t, m) // revision: HEAD
 	worktreeE2ETab(t, m) // detached
 	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // no-checkout
+	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // lock on create
+	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // lock reason
+	worktreeE2EText(t, m, "portable disk")
 	worktreeE2ETab(t, m) // force
 	worktreeE2ETab(t, m) // submit
 	worktreeE2EEnter(t, m)
@@ -126,6 +132,17 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	if got := r.git("-C", detached, "branch", "--show-current"); got != "" {
 		t.Fatalf("detached worktree branch = %q", got)
 	}
+	if _, err := os.Stat(filepath.Join(detached, "base.txt")); !os.IsNotExist(err) {
+		t.Fatalf("no-checkout worktree unexpectedly populated base.txt: %v", err)
+	}
+	if got := r.git("worktree", "list", "--porcelain"); !strings.Contains(got, "locked portable disk") {
+		t.Fatalf("lock-on-create state missing:\n%s", got)
+	}
+	// Terminal-native keys supplement Magit's worktree transient.
+	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("U"))
+	worktreeE2ETab(t, m) // submit
+	worktreeE2EEnter(t, m)
 
 	branched := filepath.Join(root, "branched")
 	sendE2EKey(t, m, keyMsg("%"))
@@ -134,6 +151,9 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	worktreeE2ETab(t, m)
 	worktreeE2EText(t, m, "worktree-topic")
 	worktreeE2ETab(t, m) // start: HEAD
+	worktreeE2ETab(t, m) // no-checkout
+	worktreeE2ETab(t, m) // lock
+	worktreeE2ETab(t, m) // lock reason
 	worktreeE2ETab(t, m) // force
 	worktreeE2ETab(t, m) // submit
 	worktreeE2EEnter(t, m)

@@ -332,6 +332,28 @@ func buildRegistry() []Binding {
 	out = append(out, portable("ctrl+b", CommandBlame, "Blame selected file")...)
 	out = append(out, portable("ctrl+g", CommandGraph, "Browse all-refs graph")...)
 	out = append(out, transientBindings(m)...)
+	out = append(out, nativeWorktreeBindings()...)
+	return out
+}
+
+// nativeWorktreeBindings exposes useful git-worktree operations that Magit's
+// pinned transient does not provide. They deliberately remain outside the
+// upstream manifest ledger while participating in the same resolver and menu.
+func nativeWorktreeBindings() []Binding {
+	items := []struct {
+		key, command, label string
+	}{
+		{"L", "worktree.worktree-lock", "Lock worktree"},
+		{"U", "worktree.worktree-unlock", "Unlock worktree"},
+		{"p", "worktree.worktree-prune", "Prune stale worktree records"},
+	}
+	var out []Binding
+	for i, item := range items {
+		local := canonicalSequence(item.key)
+		seq := append([]string{"Z"}, local...)
+		b := Binding{Occurrence: fmt.Sprintf("lazymagit-worktree:%02d", i), Sequence: seq, LocalSequence: local, Transient: "magit-worktree", Display: displaySequence(seq), Command: CommandID(item.command), Label: item.label, Scheme: SchemeMagit, Context: ContextTransient + "Z", Parity: ParityAdapted, UpstreamKey: item.key, Kind: KindSuffix, Domain: "git", Handler: HandlerExecute, Availability: AvailabilityAlways, Group: "Advanced"}
+		out = append(out, b, vimTransientBinding(b))
+	}
 	return out
 }
 

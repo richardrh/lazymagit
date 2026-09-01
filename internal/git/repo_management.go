@@ -536,15 +536,38 @@ func (r *Repository) AddWorktree(ctx context.Context, path, revision string, opt
 }
 
 func (r *Repository) AddWorktreeWithBranch(ctx context.Context, path, branch, startPoint string, force ConfirmedForce) error {
+	return r.AddWorktreeWithBranchOptions(ctx, path, branch, startPoint, WorktreeAddOptions{Force: force})
+}
+
+// AddWorktreeWithBranchOptions creates a new branch worktree while preserving
+// the advanced add options supported by git-worktree. Detaching is inherently
+// incompatible with creating and checking out a named branch.
+func (r *Repository) AddWorktreeWithBranchOptions(ctx context.Context, path, branch, startPoint string, opts WorktreeAddOptions) error {
 	if branch == "" {
 		return errors.New("branch name is empty")
+	}
+	if opts.Detach {
+		return errors.New("new-branch worktree cannot be detached")
 	}
 	if err := safeNewDirectory(path); err != nil {
 		return err
 	}
 	args := []string{"worktree", "add", "-b", branch}
-	if force == Confirmed {
+	if opts.Force == Confirmed {
 		args = append(args, "--force")
+	}
+	if opts.Checkout != nil {
+		if *opts.Checkout {
+			args = append(args, "--checkout")
+		} else {
+			args = append(args, "--no-checkout")
+		}
+	}
+	if opts.Lock {
+		args = append(args, "--lock")
+		if opts.LockReason != "" {
+			args = append(args, "--reason", opts.LockReason)
+		}
 	}
 	args = append(args, "--", path)
 	if startPoint != "" {

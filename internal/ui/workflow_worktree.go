@@ -48,24 +48,52 @@ func worktreeForce(v WorkflowValues) gitbackend.ConfirmedForce {
 	return gitbackend.NotConfirmed
 }
 
+func worktreeAddOptions(v WorkflowValues, allowDetach bool) gitbackend.WorktreeAddOptions {
+	opts := gitbackend.WorktreeAddOptions{
+		Detach: allowDetach && v["detached"] == "true",
+		Force:  worktreeForce(v),
+		Lock:   v["lock"] == "true",
+	}
+	if v["no-checkout"] == "true" {
+		checkout := false
+		opts.Checkout = &checkout
+	}
+	if opts.Lock {
+		opts.LockReason = v["lock-reason"]
+	}
+	return opts
+}
+
+func worktreeAdvancedAddFields() []WorkflowField {
+	return []WorkflowField{
+		{Name: "no-checkout", Label: "Do not populate files", Kind: WorkflowBool},
+		{Name: "lock", Label: "Lock on create", Kind: WorkflowBool},
+		{Name: "lock-reason", Label: "Lock reason", Kind: WorkflowText},
+		{Name: "force", Label: "Force", Kind: WorkflowBool},
+	}
+}
+
+func worktreeAddOptionPlan(opts gitbackend.WorktreeAddOptions) string {
+	return fmt.Sprintf("detached: %t; checkout: %t; lock: %t; force: %t", opts.Detach, opts.Checkout == nil || *opts.Checkout, opts.Lock, opts.Force == gitbackend.Confirmed)
+}
+
 func worktreeAddWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 	return m.LoadWorkflow("worktree add", func(context.Context) (WorkflowDialog, error) {
 		return WorkflowDialog{
 			Title: "Add worktree", Operation: "add worktree",
-			Plan: []string{"Create a worktree at a reviewed destination", "Detached and force are explicit opt-ins"},
-			Fields: []WorkflowField{
+			Plan: []string{"Create a worktree at a reviewed destination", "Detached, no-checkout, lock, and force are explicit opt-ins"},
+			Fields: append([]WorkflowField{
 				{Name: "path", Label: "Destination", Kind: WorkflowText, Required: true},
 				{Name: "revision", Label: "Branch or revision", Kind: WorkflowText, Value: "HEAD", Required: true},
 				{Name: "detached", Label: "Detached HEAD", Kind: WorkflowBool},
-				{Name: "force", Label: "Force", Kind: WorkflowBool},
-			},
+			}, worktreeAdvancedAddFields()...),
 			ReviewPreflight: func(ctx context.Context, v WorkflowValues) (WorkflowReview, error) {
-				opts := gitbackend.WorktreeAddOptions{Detach: v["detached"] == "true", Force: worktreeForce(v)}
+				opts := worktreeAddOptions(v, true)
 				p, err := m.repo.ReviewWorktreeAdd(ctx, v["path"], v["revision"], "", opts)
 				if err != nil {
 					return WorkflowReview{}, err
 				}
-				return WorkflowReview{Plan: []string{"destination: " + p.Path, "commit: " + p.OID, fmt.Sprintf("detached: %t; force: %t", opts.Detach, opts.Force == gitbackend.Confirmed)}, Confirmation: "Create exactly this worktree?", Data: p}, nil
+				return WorkflowReview{Plan: []string{"destination: " + p.Path, "commit: " + p.OID, worktreeAddOptionPlan(opts)}, Confirmation: "Create exactly this worktree?", Data: p}, nil
 			},
 			SubmitReview: submitWorktreeAddReview(m),
 		}, nil
@@ -76,19 +104,18 @@ func worktreeBranchWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 	return m.LoadWorkflow("worktree branch", func(context.Context) (WorkflowDialog, error) {
 		return WorkflowDialog{
 			Title: "Add worktree with new branch", Operation: "add branch worktree",
-			Fields: []WorkflowField{
+			Fields: append([]WorkflowField{
 				{Name: "path", Label: "Destination", Kind: WorkflowText, Required: true},
 				{Name: "branch", Label: "New branch", Kind: WorkflowText, Required: true},
 				{Name: "revision", Label: "Start point", Kind: WorkflowText, Value: "HEAD", Required: true},
-				{Name: "force", Label: "Force", Kind: WorkflowBool},
-			},
+			}, worktreeAdvancedAddFields()...),
 			ReviewPreflight: func(ctx context.Context, v WorkflowValues) (WorkflowReview, error) {
-				opts := gitbackend.WorktreeAddOptions{Force: worktreeForce(v)}
+				opts := worktreeAddOptions(v, false)
 				p, err := m.repo.ReviewWorktreeAdd(ctx, v["path"], v["revision"], v["branch"], opts)
 				if err != nil {
 					return WorkflowReview{}, err
 				}
-				return WorkflowReview{Plan: []string{"destination: " + p.Path, "new branch: " + p.Branch, "start commit: " + p.OID, fmt.Sprintf("force: %t", opts.Force == gitbackend.Confirmed)}, Confirmation: "Create exactly this branch worktree?", Data: p}, nil
+				return WorkflowReview{Plan: []string{"destination: " + p.Path, "new branch: " + p.Branch, "start commit: " + p.OID, worktreeAddOptionPlan(opts)}, Confirmation: "Create exactly this branch worktree?", Data: p}, nil
 			},
 			SubmitReview: submitWorktreeAddReview(m),
 		}, nil
@@ -223,7 +250,7 @@ func worktreeListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			Help: []string{
 				"Each worktree is another folder checked out from this repository.",
 				"[current] is this UI; [main] is the original checkout; [linked] is an additional checkout.",
-				"From the Worktree menu: b add, c add with branch, m move, k remove, L lock, U unlock.",
+				"From the Worktree menu: b add, c add with branch, m move, k remove, L lock, U unlock, p prune.",
 			},
 			Fields: []WorkflowField{{Name: "worktree", Label: "Filter worktrees", Kind: WorkflowSearch, Value: choices[0].Value, Choices: choices, Required: true}},
 			Run:    func(WorkflowValues) tea.Cmd { return nil },

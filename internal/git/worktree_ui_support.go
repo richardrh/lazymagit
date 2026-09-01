@@ -32,9 +32,12 @@ func (r *Repository) ReviewWorktreeAdd(ctx context.Context, path, revision, bran
 	if err := safeNewDirectory(path); err != nil {
 		return ReviewedWorktreeAdd{}, err
 	}
+	if opts.LockReason != "" && !opts.Lock {
+		return ReviewedWorktreeAdd{}, errors.New("worktree lock reason requires lock-on-create")
+	}
 	if branch != "" {
-		if opts.Detach || opts.Checkout != nil || opts.Lock || opts.LockReason != "" {
-			return ReviewedWorktreeAdd{}, errors.New("new-branch worktree does not support detached, checkout, or lock options")
+		if opts.Detach {
+			return ReviewedWorktreeAdd{}, errors.New("new-branch worktree cannot be detached")
 		}
 		if err := r.validateBranchName(ctx, branch); err != nil {
 			return ReviewedWorktreeAdd{}, err
@@ -67,7 +70,7 @@ func (r *Repository) AddWorktreeReviewed(ctx context.Context, reviewed ReviewedW
 		if err := r.validateBranchName(ctx, reviewed.Branch); err != nil {
 			return err
 		}
-		return r.AddWorktreeWithBranch(ctx, reviewed.Path, reviewed.Branch, reviewed.OID, reviewed.Options.Force)
+		return r.AddWorktreeWithBranchOptions(ctx, reviewed.Path, reviewed.Branch, reviewed.OID, reviewed.Options)
 	}
 	return r.AddWorktree(ctx, reviewed.Path, reviewed.OID, reviewed.Options)
 }
