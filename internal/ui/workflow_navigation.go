@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/richard/lazymagit/internal/keymap"
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	"github.com/richardrh/lazymagit/internal/keymap"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 const defaultDiffContext = 3
@@ -76,39 +76,26 @@ func navigationCommand(command keymap.CommandID) bool {
 // false for commands owned by another domain, making it suitable as a fallback
 // from Model.perform.
 func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	if cmd, handled := m.performFoldNavigation(command); handled {
+		return cmd, true
+	}
+	if cmd, handled := m.performDepthNavigation(command); handled {
+		return cmd, true
+	}
+	if cmd, handled := m.performTerminalNavigation(command); handled {
+		return cmd, true
+	}
+	return m.performBasicNavigation(command)
+}
+
+func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
-	case keymap.CommandSectionCycle:
-		if m.tree.CycleLocal() {
-			m.rememberNavigationFolds()
-			m.bumpState()
-		}
-		return m.loadDetailCmd(), true
-	case keymap.CommandSectionCycleGlobal:
-		if m.tree.CycleGlobal() {
-			m.rememberNavigationFolds()
-			m.bumpState()
-		}
-		return m.loadDetailCmd(), true
 	case keymap.CommandSectionParent:
 		return m.finishNavigationMove(m.tree.MoveToParent()), true
 	case keymap.CommandSiblingPrevious:
 		return m.finishNavigationMove(m.tree.MoveToPreviousSibling()), true
 	case keymap.CommandSiblingNext:
 		return m.finishNavigationMove(m.tree.MoveToNextSibling()), true
-	case keymap.CommandLocalDepth1, keymap.CommandLocalDepth2, keymap.CommandLocalDepth3, keymap.CommandLocalDepth4:
-		depth := int(command[len(command)-1] - '0')
-		if m.tree.RevealSelectedDepth(depth) {
-			m.rememberNavigationFolds()
-			m.bumpState()
-		}
-		return m.loadDetailCmd(), true
-	case keymap.CommandGlobalDepth1, keymap.CommandGlobalDepth2, keymap.CommandGlobalDepth3, keymap.CommandGlobalDepth4:
-		depth := int(command[len(command)-1] - '0')
-		if m.tree.RevealGlobalDepth(depth) {
-			m.rememberNavigationFolds()
-			m.bumpState()
-		}
-		return m.loadDetailCmd(), true
 	case keymap.CommandVisitThing:
 		return m.visitSelectedThing(), true
 	case keymap.CommandCycleDiffs:
@@ -130,6 +117,15 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 	case keymap.CommandDisplayRepository:
 		m.displayRepositoryStatus()
 		return nil, true
+	case keymap.CommandNextReference:
+		return m.nextVisibleReference(), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) performTerminalNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandCopyThing, keymap.CommandCopySectionValue:
 		return m.copySelectedSection(), true
 	case keymap.CommandCopyBufferRevision:
@@ -138,11 +134,46 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 		return m.openSelectedTerminalThing("Edit"), true
 	case keymap.CommandBrowseThing:
 		return m.openSelectedTerminalThing("Browse"), true
-	case keymap.CommandNextReference:
-		return m.nextVisibleReference(), true
 	default:
 		return nil, false
 	}
+}
+
+func (m *Model) performFoldNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	var changed bool
+	switch command {
+	case keymap.CommandSectionCycle:
+		changed = m.tree.CycleLocal()
+	case keymap.CommandSectionCycleGlobal:
+		changed = m.tree.CycleGlobal()
+	default:
+		return nil, false
+	}
+	m.finishFoldNavigation(changed)
+	return m.loadDetailCmd(), true
+}
+
+func (m *Model) performDepthNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	local := command >= keymap.CommandLocalDepth1 && command <= keymap.CommandLocalDepth4
+	global := command >= keymap.CommandGlobalDepth1 && command <= keymap.CommandGlobalDepth4
+	if !local && !global {
+		return nil, false
+	}
+	depth := int(command[len(command)-1] - '0')
+	changed := m.tree.RevealGlobalDepth(depth)
+	if local {
+		changed = m.tree.RevealSelectedDepth(depth)
+	}
+	m.finishFoldNavigation(changed)
+	return m.loadDetailCmd(), true
+}
+
+func (m *Model) finishFoldNavigation(changed bool) {
+	if !changed {
+		return
+	}
+	m.rememberNavigationFolds()
+	m.bumpState()
 }
 
 func (m *Model) finishNavigationMove(moved bool) tea.Cmd {

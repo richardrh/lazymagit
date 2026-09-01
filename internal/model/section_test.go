@@ -95,6 +95,28 @@ func TestCursorRetainsSectionIdentityWhenARefreshReordersSections(t *testing.T) 
 	assertVisible(t, m, unstagedID, fileBID, fileAID, hunkAID, stagedID)
 }
 
+func TestNearestVisibleCursor(t *testing.T) {
+	order := []SectionID{"a", "b", "c", "d"}
+	tests := []struct {
+		name    string
+		visible []SectionID
+		cursor  SectionID
+		want    SectionID
+	}{
+		{"empty", nil, "b", ""},
+		{"next surviving", []SectionID{"a", "c"}, "b", "c"},
+		{"previous surviving", []SectionID{"a"}, "c", "a"},
+		{"fallback first", []SectionID{"d", "a"}, "missing", "d"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nearestVisibleCursor(order, test.visible, test.cursor); got != test.want {
+				t.Fatalf("nearestVisibleCursor() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func assertVisible(t *testing.T, m *Model, want ...SectionID) {
 	t.Helper()
 	if got := m.VisibleSectionIDs(); !reflect.DeepEqual(got, want) {

@@ -235,6 +235,29 @@ func (b Binding) Available(ctx Context) (bool, string) {
 //go:embed testdata/magit-v4.7.0-status-bindings.json
 var upstreamManifest []byte
 
+type manifestCondition struct{ Type, Expression string }
+
+type manifestEntry struct {
+	Key, Command, Kind, Class string
+	Description               json.RawMessage
+	Argument                  *string
+	Groups                    []string
+	Conditions                []manifestCondition
+	Domain                    string
+}
+
+type manifestTransient struct {
+	Name    string
+	Source  Source
+	Entries []manifestEntry `json:"entries"`
+}
+
+type manifestTop struct {
+	Key, Command, Kind, Domain, Layer string
+	Effective                         bool
+	Source                            Source
+}
+
 type manifest struct {
 	SchemaVersion string `json:"schema_version"`
 	Subject       string `json:"subject"`
@@ -247,23 +270,8 @@ type manifest struct {
 		MapChain      []string `json:"map_chain"`
 		TransientRule string   `json:"transient_rule"`
 	} `json:"scope"`
-	Top []struct {
-		Key, Command, Kind, Domain, Layer string
-		Effective                         bool
-		Source                            Source
-	} `json:"top_level_bindings"`
-	Transients []struct {
-		Name    string
-		Source  Source
-		Entries []struct {
-			Key, Command, Kind, Class string
-			Description               json.RawMessage
-			Argument                  *string
-			Groups                    []string
-			Conditions                []struct{ Type, Expression string }
-			Domain                    string
-		} `json:"entries"`
-	} `json:"transients"`
+	Top        []manifestTop       `json:"top_level_bindings"`
+	Transients []manifestTransient `json:"transients"`
 }
 
 var registry = buildRegistry()
@@ -347,95 +355,117 @@ func keyAvailableInVim(key string) bool {
 	return true
 }
 
+var topNavigationCommands = map[string]CommandID{
+	"magit-section-cycle":             CommandSectionCycle,
+	"magit-section-cycle-global":      CommandSectionCycleGlobal,
+	"magit-section-up":                CommandSectionParent,
+	"magit-section-backward-sibling":  CommandSiblingPrevious,
+	"magit-section-forward-sibling":   CommandSiblingNext,
+	"magit-section-show-level-1":      CommandLocalDepth1,
+	"magit-section-show-level-2":      CommandLocalDepth2,
+	"magit-section-show-level-3":      CommandLocalDepth3,
+	"magit-section-show-level-4":      CommandLocalDepth4,
+	"magit-section-show-level-1-all":  CommandGlobalDepth1,
+	"magit-section-show-level-2-all":  CommandGlobalDepth2,
+	"magit-section-show-level-3-all":  CommandGlobalDepth3,
+	"magit-section-show-level-4-all":  CommandGlobalDepth4,
+	"magit-visit-thing":               CommandVisitThing,
+	"magit-section-cycle-diffs":       CommandCycleDiffs,
+	"magit-diff-show-or-scroll-down":  CommandDetailBackward,
+	"magit-diff-more-context":         CommandDiffMoreContext,
+	"magit-diff-less-context":         CommandDiffLessContext,
+	"magit-diff-default-context":      CommandDiffDefaultContext,
+	"magit-describe-section":          CommandDescribeSection,
+	"magit-display-repository-buffer": CommandDisplayRepository,
+	"magit-copy-thing":                CommandCopyThing,
+	"magit-copy-section-value":        CommandCopySectionValue,
+	"magit-copy-buffer-revision":      CommandCopyBufferRevision,
+	"magit-edit-thing":                CommandEditThing,
+	"magit-browse-thing":              CommandBrowseThing,
+	"magit-next-reference":            CommandNextReference,
+}
+
+var topKeyCommands = map[string]CommandID{
+	"tab": CommandToggleSection, "n": CommandMoveDown, "p": CommandMoveUp,
+	"1": CommandDepth1, "2": CommandDepth2, "3": CommandDepth3,
+	"space": CommandScrollDown, "shift+space": CommandScrollUp,
+	"g": CommandRefresh, "G": CommandRefresh, "h": CommandOpenDispatcher,
+	"?": CommandOpenDispatcher, "k": CommandDiscard, "s": CommandStage,
+	"S": CommandStageAll, "u": CommandUnstage, "U": CommandUnstageAll,
+	"$": CommandShowProcesses, "q": CommandQuit,
+	"b": "transient.branch", "c": "transient.commit", "f": "transient.fetch",
+	"P": "transient.push", "M": "transient.remote",
+}
+
 func classifyTop(b *Binding, transientNames map[string]bool) {
-	key := strings.Join(b.Sequence, " ")
-	navigation := map[string]CommandID{
-		"magit-section-cycle":             CommandSectionCycle,
-		"magit-section-cycle-global":      CommandSectionCycleGlobal,
-		"magit-section-up":                CommandSectionParent,
-		"magit-section-backward-sibling":  CommandSiblingPrevious,
-		"magit-section-forward-sibling":   CommandSiblingNext,
-		"magit-section-show-level-1":      CommandLocalDepth1,
-		"magit-section-show-level-2":      CommandLocalDepth2,
-		"magit-section-show-level-3":      CommandLocalDepth3,
-		"magit-section-show-level-4":      CommandLocalDepth4,
-		"magit-section-show-level-1-all":  CommandGlobalDepth1,
-		"magit-section-show-level-2-all":  CommandGlobalDepth2,
-		"magit-section-show-level-3-all":  CommandGlobalDepth3,
-		"magit-section-show-level-4-all":  CommandGlobalDepth4,
-		"magit-visit-thing":               CommandVisitThing,
-		"magit-section-cycle-diffs":       CommandCycleDiffs,
-		"magit-diff-show-or-scroll-down":  CommandDetailBackward,
-		"magit-diff-more-context":         CommandDiffMoreContext,
-		"magit-diff-less-context":         CommandDiffLessContext,
-		"magit-diff-default-context":      CommandDiffDefaultContext,
-		"magit-describe-section":          CommandDescribeSection,
-		"magit-display-repository-buffer": CommandDisplayRepository,
-		"magit-copy-thing":                CommandCopyThing,
-		"magit-copy-section-value":        CommandCopySectionValue,
-		"magit-copy-buffer-revision":      CommandCopyBufferRevision,
-		"magit-edit-thing":                CommandEditThing,
-		"magit-browse-thing":              CommandBrowseThing,
-		"magit-next-reference":            CommandNextReference,
-	}
-	if command, ok := navigation[b.UpstreamCommand]; ok {
-		b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
-		switch command {
-		case CommandCycleDiffs:
-			// A terminal has no inline diff sections. The UI safely cycles the
-			// selected row's detail pane instead.
-			b.Parity = ParityAdapted
-		case CommandEditThing, CommandBrowseThing, CommandNextReference:
-			// The terminal has neither Emacs remaps nor text properties. These
-			// commands use the typed status rows and internal detail pane only.
-			b.Parity = ParityAdapted
-		}
+	if classifyTopNavigation(b) {
 		return
-	}
-	implemented := map[string]CommandID{
-		"tab": CommandToggleSection, "n": CommandMoveDown, "p": CommandMoveUp,
-		"1": CommandDepth1, "2": CommandDepth2, "3": CommandDepth3,
-		"space": CommandScrollDown, "shift+space": CommandScrollUp,
-		"g": CommandRefresh, "G": CommandRefresh, "h": CommandOpenDispatcher,
-		"?": CommandOpenDispatcher, "k": CommandDiscard, "s": CommandStage,
-		"S": CommandStageAll, "u": CommandUnstage, "U": CommandUnstageAll,
-		"$": CommandShowProcesses, "q": CommandQuit,
-		"b": "transient.branch", "c": "transient.commit", "f": "transient.fetch",
-		"P": "transient.push", "M": "transient.remote",
 	}
 	if transientNames[b.UpstreamCommand] {
 		b.Command = transientCommandID(b.UpstreamCommand)
 		b.Handler, b.Availability, b.Parity, b.Primary = HandlerPrefix, AvailabilityAlways, ParityPartial, true
 		return
 	}
-	if command, ok := implemented[key]; ok {
-		b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
-		if strings.HasPrefix(string(command), "transient.") {
-			b.Handler = HandlerPrefix
-			b.Primary = true
-		}
-		switch command {
-		case CommandStage:
-			b.Availability, b.UnavailableCategory = AvailabilityUnstaged, UnavailableContext
-		case CommandUnstage:
-			b.Availability, b.UnavailableCategory = AvailabilityStaged, UnavailableContext
-		case CommandDiscard:
-			b.Availability, b.UnavailableCategory = AvailabilityChange, UnavailableContext
-		}
+	if classifyTopKey(b, strings.Join(b.Sequence, " ")) {
 		return
 	}
-	if b.UpstreamCommand == "magit-ediff-dwim" {
+	classifyTopIntegration(b)
+}
+
+func classifyTopNavigation(b *Binding) bool {
+	command, ok := topNavigationCommands[b.UpstreamCommand]
+	if !ok {
+		return false
+	}
+	b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
+	switch command {
+	case CommandCycleDiffs:
+		// A terminal has no inline diff sections. The UI safely cycles the
+		// selected row's detail pane instead.
+		b.Parity = ParityAdapted
+	case CommandEditThing, CommandBrowseThing, CommandNextReference:
+		// The terminal has neither Emacs remaps nor text properties. These
+		// commands use the typed status rows and internal detail pane only.
+		b.Parity = ParityAdapted
+	}
+	return true
+}
+
+func classifyTopKey(b *Binding, key string) bool {
+	command, ok := topKeyCommands[key]
+	if !ok {
+		return false
+	}
+	b.Command, b.Handler, b.Availability, b.Parity = command, HandlerExecute, AvailabilityAlways, ParityPartial
+	if strings.HasPrefix(string(command), "transient.") {
+		b.Handler = HandlerPrefix
+		b.Primary = true
+	}
+	switch command {
+	case CommandStage:
+		b.Availability, b.UnavailableCategory = AvailabilityUnstaged, UnavailableContext
+	case CommandUnstage:
+		b.Availability, b.UnavailableCategory = AvailabilityStaged, UnavailableContext
+	case CommandDiscard:
+		b.Availability, b.UnavailableCategory = AvailabilityChange, UnavailableContext
+	}
+	return true
+}
+
+func classifyTopIntegration(b *Binding) {
+	switch b.UpstreamCommand {
+	case "magit-ediff-dwim":
 		// Ediff is adapted by the UI to a read-only unified terminal comparison;
 		// the external split-window editor is never launched.
 		b.Command, b.Handler, b.Availability, b.Parity = CommandID("inspection.ediff-dwim"), HandlerExecute, AvailabilityAlways, ParityAdapted
-		return
-	}
-	if b.UpstreamCommand == "magit-dispatch" {
+	case "magit-dispatch":
 		b.Command, b.Handler, b.Availability, b.Parity = CommandOpenDispatcher, HandlerExecute, AvailabilityAlways, ParityPartial
-		return
-	}
-	if b.UpstreamCommand == "magit-dired-jump" || strings.Contains(b.UpstreamKey, "<left-fringe>") || strings.Contains(b.UpstreamKey, "<remap>") {
+	case "magit-dired-jump":
 		b.Parity, b.Unavailable, b.UnavailableCategory = ParityNotApplicable, "Emacs-only input or integration", UnavailableNotApplicable
+	default:
+		if strings.Contains(b.UpstreamKey, "<left-fringe>") || strings.Contains(b.UpstreamKey, "<remap>") {
+			b.Parity, b.Unavailable, b.UnavailableCategory = ParityNotApplicable, "Emacs-only input or integration", UnavailableNotApplicable
+		}
 	}
 }
 
@@ -475,71 +505,112 @@ func transientBindings(m manifest) []Binding {
 	for _, tr := range m.Transients {
 		prefix := strings.Join(routes[tr.Name], " ")
 		for occurrence, entry := range tr.Entries {
-			kind := EntryKind(entry.Kind)
-			childTransient := ""
-			// Every suffix has a stable domain behavior identity even before its UI
-			// workflow is installed. This lets a domain file make it executable by
-			// registration without modifying the central registry.
-			command := domainCommandID(tr.Name, entry.Command)
-			handler, availability, parity := HandlerUnsupported, AvailabilityNever, ParityMissing
-			category, reason := UnavailableMissing, "suffix: not implemented"
-			if kind == KindInfix {
-				handler, category, reason = HandlerInfix, UnavailableInfix, "infix: argument editing is not implemented"
-			} else if child := transientChild(tr.Name, entry.Command, names, orphans); child != "" && child != tr.Name {
-				childTransient = child
-				command, handler, availability, parity, category, reason = transientCommandID(child), HandlerPrefix, AvailabilityAlways, ParityPartial, UnavailableNone, ""
-			} else if id, ok := implemented[tr.Name+"\x00"+entry.Command]; ok {
-				command, handler, availability, parity, category, reason = id, HandlerExecute, AvailabilityAlways, ParityPartial, UnavailableNone, ""
-			} else if transientCapability[tr.Name][entry.Command] {
-				handler, availability, parity, category, reason = HandlerExecute, AvailabilityAlways, ParityPartial, UnavailableNone, ""
-				if tr.Name == "magit-git-mergetool" && entry.Command == "magit-git-mergetool" {
-					// The terminal-native workflow deliberately replaces Magit's
-					// configurable external mergetool with a reviewed, bounded
-					// ours/theirs checkout and stage operation.
-					parity = ParityAdapted
-				}
-			} else if entry.Command == "magit-branch-spinoff" || entry.Command == "magit-branch-spinout" {
-				category, reason = UnavailableUnsupported, "backend explicitly reports this branch workflow as unsupported"
-			}
-			local := canonicalSequence(entry.Key)
-			seq := append(append([]string(nil), routes[tr.Name]...), local...)
-			group := ""
-			if len(entry.Groups) > 0 {
-				group = entry.Groups[0]
-			}
-			conditions := make([]string, len(entry.Conditions))
-			directConfigure := false
-			for i, c := range entry.Conditions {
-				conditions[i] = c.Type + ": " + c.Expression
-				directConfigure = directConfigure || strings.Contains(c.Expression, "direct-configure")
-			}
-			if kind == KindInfix && (len(OptionConsumerCommands(prefix, entry.Command)) > 0 || directConfigure) {
-				parity = ParityPartial
-				if directConfigure {
-					reason = "available in the corresponding Configure dialog"
-				} else {
-					reason = "availability is resolved from installed TUI consumers"
-				}
-			}
-			b := Binding{Occurrence: fmt.Sprintf("%s:%02d", tr.Name, occurrence), Sequence: seq, LocalSequence: local, Transient: tr.Name, ChildTransient: childTransient, Display: displaySequence(seq), Command: command, Label: transientLabel(entry.Description, entry.Command), Scheme: SchemeMagit, Context: ContextTransient + prefix, Parity: parity, UpstreamCommand: entry.Command, UpstreamKey: entry.Key, Kind: kind, InfixClass: entry.Class, Domain: entry.Domain, Source: tr.Source, Handler: handler, Availability: availability, Unavailable: reason, UnavailableCategory: category, Group: group, Conditions: conditions}
-			if entry.Argument != nil {
-				b.Argument = *entry.Argument
-			}
-			b.TakesValue = kind == KindInfix && entry.Class != "transient-switch"
-			out = append(out, b)
-			b.Scheme = SchemeVim
-			if tr.Name == "magit-status-jump" && b.Handler == HandlerExecute {
-				// Vim's j is navigation, so these Magit-only descendants cannot
-				// be reached in this scheme. Give them a distinct unsupported ID:
-				// shared Magit handlers must not accidentally promote the rows.
-				b.Command = CommandID("missing/" + strings.TrimPrefix(b.UpstreamCommand, "magit-"))
-				b.Handler, b.Availability, b.Parity = HandlerUnsupported, AvailabilityNever, ParityMissing
-				b.Unavailable, b.UnavailableCategory = "status jump uses Magit keys", UnavailableContext
-			}
-			out = append(out, b)
+			b := transientBinding(tr, entry, occurrence, prefix, routes[tr.Name], names, orphans, implemented)
+			out = append(out, b, vimTransientBinding(b))
 		}
 	}
 	return out
+}
+
+type transientBehavior struct {
+	command      CommandID
+	child        string
+	handler      Handler
+	availability Availability
+	parity       Parity
+	category     UnavailableCategory
+	reason       string
+}
+
+func transientBinding(tr manifestTransient, entry manifestEntry, occurrence int, prefix string, route []string, names, orphans map[string]bool, implemented map[string]CommandID) Binding {
+	kind := EntryKind(entry.Kind)
+	behavior := transientEntryBehavior(tr, entry, names, orphans, implemented)
+	conditions, directConfigure := transientConditions(entry.Conditions)
+	behavior = configureTransientInfix(behavior, kind, prefix, entry.Command, directConfigure)
+	local := canonicalSequence(entry.Key)
+	seq := append(append([]string(nil), route...), local...)
+	return Binding{Occurrence: fmt.Sprintf("%s:%02d", tr.Name, occurrence), Sequence: seq, LocalSequence: local, Transient: tr.Name, ChildTransient: behavior.child, Display: displaySequence(seq), Command: behavior.command, Label: transientLabel(entry.Description, entry.Command), Scheme: SchemeMagit, Context: ContextTransient + prefix, Parity: behavior.parity, UpstreamCommand: entry.Command, UpstreamKey: entry.Key, Kind: kind, InfixClass: entry.Class, Argument: transientArgument(entry.Argument), TakesValue: kind == KindInfix && entry.Class != "transient-switch", Domain: entry.Domain, Source: tr.Source, Handler: behavior.handler, Availability: behavior.availability, Unavailable: behavior.reason, UnavailableCategory: behavior.category, Group: transientGroup(entry.Groups), Conditions: conditions}
+}
+
+func transientEntryBehavior(tr manifestTransient, entry manifestEntry, names, orphans map[string]bool, implemented map[string]CommandID) transientBehavior {
+	command := domainCommandID(tr.Name, entry.Command)
+	if EntryKind(entry.Kind) == KindInfix {
+		return transientBehavior{command: command, handler: HandlerInfix, availability: AvailabilityNever, parity: ParityMissing, category: UnavailableInfix, reason: "infix: argument editing is not implemented"}
+	}
+	return transientSuffixBehavior(tr.Name, entry.Command, command, names, orphans, implemented)
+}
+
+func transientSuffixBehavior(owner, command string, id CommandID, names, orphans map[string]bool, implemented map[string]CommandID) transientBehavior {
+	if child := transientChild(owner, command, names, orphans); child != "" && child != owner {
+		return transientBehavior{command: transientCommandID(child), child: child, handler: HandlerPrefix, availability: AvailabilityAlways, parity: ParityPartial}
+	}
+	if implementedID, ok := implemented[owner+"\x00"+command]; ok {
+		return transientBehavior{command: implementedID, handler: HandlerExecute, availability: AvailabilityAlways, parity: ParityPartial}
+	}
+	if transientCapability[owner][command] {
+		return capableTransientBehavior(owner, command, id)
+	}
+	if command == "magit-branch-spinoff" || command == "magit-branch-spinout" {
+		return transientBehavior{command: id, handler: HandlerUnsupported, availability: AvailabilityNever, parity: ParityMissing, category: UnavailableUnsupported, reason: "backend explicitly reports this branch workflow as unsupported"}
+	}
+	return transientBehavior{command: id, handler: HandlerUnsupported, availability: AvailabilityNever, parity: ParityMissing, category: UnavailableMissing, reason: "suffix: not implemented"}
+}
+
+func capableTransientBehavior(owner, command string, id CommandID) transientBehavior {
+	parity := ParityPartial
+	if owner == "magit-git-mergetool" && command == "magit-git-mergetool" {
+		parity = ParityAdapted
+	}
+	return transientBehavior{command: id, handler: HandlerExecute, availability: AvailabilityAlways, parity: parity}
+}
+
+func transientConditions(raw []manifestCondition) ([]string, bool) {
+	conditions := make([]string, len(raw))
+	directConfigure := false
+	for i, condition := range raw {
+		conditions[i] = condition.Type + ": " + condition.Expression
+		directConfigure = directConfigure || strings.Contains(condition.Expression, "direct-configure")
+	}
+	return conditions, directConfigure
+}
+
+func configureTransientInfix(behavior transientBehavior, kind EntryKind, prefix, command string, directConfigure bool) transientBehavior {
+	if kind != KindInfix || (len(OptionConsumerCommands(prefix, command)) == 0 && !directConfigure) {
+		return behavior
+	}
+	behavior.parity = ParityPartial
+	behavior.reason = "availability is resolved from installed TUI consumers"
+	if directConfigure {
+		behavior.reason = "available in the corresponding Configure dialog"
+	}
+	return behavior
+}
+
+func transientGroup(groups []string) string {
+	if len(groups) > 0 {
+		return groups[0]
+	}
+	return ""
+}
+
+func transientArgument(argument *string) string {
+	if argument != nil {
+		return *argument
+	}
+	return ""
+}
+
+func vimTransientBinding(b Binding) Binding {
+	b.Scheme = SchemeVim
+	if b.Transient == "magit-status-jump" && b.Handler == HandlerExecute {
+		// Vim's j is navigation, so these Magit-only descendants cannot
+		// be reached in this scheme. Give them a distinct unsupported ID:
+		// shared Magit handlers must not accidentally promote the rows.
+		b.Command = CommandID("missing/" + strings.TrimPrefix(b.UpstreamCommand, "magit-"))
+		b.Handler, b.Availability, b.Parity = HandlerUnsupported, AvailabilityNever, ParityMissing
+		b.Unavailable, b.UnavailableCategory = "status jump uses Magit keys", UnavailableContext
+	}
+	return b
 }
 
 func transientCommandID(name string) CommandID {
@@ -587,14 +658,31 @@ func orphanTransientNames(m manifest, names map[string]bool) map[string]bool {
 // not depend on this canonical choice and therefore supports every parent and
 // recursive/self edge without expanding manifest occurrences.
 func transientRoutes(m manifest) map[string][]string {
-	names := make(map[string]bool, len(m.Transients))
-	for _, tr := range m.Transients {
+	names := transientNames(m.Transients)
+	orphans := orphanTransientNames(m, names)
+	routes, queue := seedTransientRoutes(m.Top, names)
+	edges := transientRouteEdges(m.Transients, names, orphans)
+	expandTransientRoutes(routes, queue, edges)
+	requireReachableTransients(routes, names)
+	return routes
+}
+
+type transientRouteEdge struct {
+	key, child string
+}
+
+func transientNames(transients []manifestTransient) map[string]bool {
+	names := make(map[string]bool, len(transients))
+	for _, tr := range transients {
 		names[tr.Name] = true
 	}
-	orphans := orphanTransientNames(m, names)
+	return names
+}
+
+func seedTransientRoutes(topBindings []manifestTop, names map[string]bool) (map[string][]string, []string) {
 	routes := map[string][]string{}
-	queue := []string{}
-	for _, top := range m.Top {
+	var queue []string
+	for _, top := range topBindings {
 		if !top.Effective || !names[top.Command] {
 			continue
 		}
@@ -604,14 +692,22 @@ func transientRoutes(m manifest) map[string][]string {
 			queue = append(queue, top.Command)
 		}
 	}
-	byName := map[string][]struct{ key, child string }{}
-	for _, tr := range m.Transients {
+	return routes, queue
+}
+
+func transientRouteEdges(transients []manifestTransient, names, orphans map[string]bool) map[string][]transientRouteEdge {
+	byName := map[string][]transientRouteEdge{}
+	for _, tr := range transients {
 		for _, entry := range tr.Entries {
 			if child := transientChild(tr.Name, entry.Command, names, orphans); child != "" && child != tr.Name {
-				byName[tr.Name] = append(byName[tr.Name], struct{ key, child string }{entry.Key, child})
+				byName[tr.Name] = append(byName[tr.Name], transientRouteEdge{entry.Key, child})
 			}
 		}
 	}
+	return byName
+}
+
+func expandTransientRoutes(routes map[string][]string, queue []string, byName map[string][]transientRouteEdge) {
 	for len(queue) > 0 {
 		parent := queue[0]
 		queue = queue[1:]
@@ -623,12 +719,14 @@ func transientRoutes(m manifest) map[string][]string {
 			}
 		}
 	}
+}
+
+func requireReachableTransients(routes map[string][]string, names map[string]bool) {
 	for name := range names {
 		if len(routes[name]) == 0 {
 			panic("embedded Magit manifest: unreachable transient " + name)
 		}
 	}
-	return routes
 }
 
 // Transients returns all exact recursively reachable manifest transients.
@@ -706,83 +804,77 @@ func setOf(values ...string) map[string]bool {
 	return out
 }
 
+func allTransientCommands(transient string, excluded ...string) []string {
+	skip := setOf(excluded...)
+	var out []string
+	for command := range transientCapability[transient] {
+		if !skip[command] {
+			out = append(out, command)
+		}
+	}
+	return out
+}
+
 // OptionConsumerCommands returns upstream suffix identities that consume an
 // infix value. An empty result means the option must not be editable in the
 // status transient. Direct-configure arguments live in their typed dialogs.
 func OptionConsumerCommands(prefix, option string) []string {
-	all := func(transient string, excluded ...string) []string {
-		skip := setOf(excluded...)
-		var out []string
-		for command := range transientCapability[transient] {
-			if !skip[command] {
-				out = append(out, command)
-			}
-		}
-		return out
-	}
-	switch prefix {
-	case "C":
-		switch option {
-		case "transient:magit-clone:--single-branch", "transient:magit-clone:--no-tags", "transient:magit-clone:--recurse-submodules", "transient:magit-clone:--origin=", "transient:magit-clone:--branch=":
-			return all("magit-clone")
-		}
-	case "A":
-		switch option {
-		case "magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff":
-			return []string{"magit-cherry-copy", "magit-cherry-apply"}
-		}
-	case "b":
-		if option == "transient:magit-branch:--recurse-submodules" {
-			return []string{"magit-checkout", "magit-checkout-remote-ref", "magit-branch-checkout"}
-		}
-	case "m":
-		switch option {
-		case "transient:magit-merge:--ff-only", "transient:magit-merge:--no-ff", "magit-merge:--strategy", "magit-merge:--strategy-option", "transient:magit-merge:-Xignore-space-change", "transient:magit-merge:-Xignore-all-space", "magit:--signoff":
-			return []string{"magit-merge-plain", "magit-merge-nocommit", "magit-merge-preview", "magit-merge-squash"}
-		}
-	case "F":
-		switch option {
-		case "transient:magit-pull:--ff-only", "magit-pull:--rebase", "transient:magit-pull:--autostash", "transient:magit-pull:--force":
-			return []string{"magit-pull-from-pushremote", "magit-pull-from-upstream", "magit-pull-branch"}
-		}
-	case "c":
-		if option == "transient:magit-commit:--verbose" {
-			return nil
-		}
-		return all("magit-commit")
-	case "f":
-		return all("magit-fetch", "magit-branch-configure")
-	case "P":
-		return all("magit-push", "magit-branch-configure")
-	case "M":
-		if option == "transient:magit-remote:-f" {
-			return []string{"magit-remote-add"}
-		}
-	case "t":
-		switch option {
-		case "transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign", "magit-tag:--local-user":
-			return all("magit-tag")
-		}
-	case "T":
-		switch option {
-		case "magit-notes:--ref":
-			return all("magit-notes")
-		case "transient:magit-notes:--dry-run":
-			return []string{"magit-notes-prune"}
-		case "magit-notes:--strategy":
-			return []string{"magit-notes-merge"}
-		}
-	case "W c":
-		switch option {
-		case "magit-format-patch:--in-reply-to", "magit-format-patch:--thread", "magit-format-patch:--from", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--base", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--rfc", "transient:magit-patch-create:--cover-letter", "magit-format-patch:--output-directory":
-			return all("magit-patch-create")
-		}
-	case "z":
-		return []string{"magit-stash-both", "magit-stash-keep-index"}
-	case "z P":
-		return []string{"magit-stash-push"}
+	if consumer := optionConsumerByPrefix[prefix]; consumer != nil {
+		return consumer(option)
 	}
 	return nil
+}
+
+var optionConsumerByPrefix = map[string]func(string) []string{
+	"C":   matchedConsumers("magit-clone", nil, "transient:magit-clone:--single-branch", "transient:magit-clone:--no-tags", "transient:magit-clone:--recurse-submodules", "transient:magit-clone:--origin=", "transient:magit-clone:--branch="),
+	"A":   fixedConsumers([]string{"magit-cherry-copy", "magit-cherry-apply"}, "magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff"),
+	"b":   fixedConsumers([]string{"magit-checkout", "magit-checkout-remote-ref", "magit-branch-checkout"}, "transient:magit-branch:--recurse-submodules"),
+	"m":   fixedConsumers([]string{"magit-merge-plain", "magit-merge-nocommit", "magit-merge-preview", "magit-merge-squash"}, "transient:magit-merge:--ff-only", "transient:magit-merge:--no-ff", "magit-merge:--strategy", "magit-merge:--strategy-option", "transient:magit-merge:-Xignore-space-change", "transient:magit-merge:-Xignore-all-space", "magit:--signoff"),
+	"F":   fixedConsumers([]string{"magit-pull-from-pushremote", "magit-pull-from-upstream", "magit-pull-branch"}, "transient:magit-pull:--ff-only", "magit-pull:--rebase", "transient:magit-pull:--autostash", "transient:magit-pull:--force"),
+	"c":   matchedConsumers("magit-commit", []string{"transient:magit-commit:--verbose"}),
+	"f":   func(string) []string { return allTransientCommands("magit-fetch", "magit-branch-configure") },
+	"P":   func(string) []string { return allTransientCommands("magit-push", "magit-branch-configure") },
+	"M":   fixedConsumers([]string{"magit-remote-add"}, "transient:magit-remote:-f"),
+	"t":   matchedConsumers("magit-tag", nil, "transient:magit-tag:--force", "transient:magit-tag:--annotate", "transient:magit-tag:--sign", "magit-tag:--local-user"),
+	"T":   notesOptionConsumers,
+	"W c": matchedConsumers("magit-patch-create", nil, "magit-format-patch:--in-reply-to", "magit-format-patch:--thread", "magit-format-patch:--from", "magit-format-patch:--to", "magit-format-patch:--cc", "magit-format-patch:--base", "magit-format-patch:--reroll-count", "magit-format-patch:--subject-prefix", "transient:magit-patch-create:--rfc", "transient:magit-patch-create:--cover-letter", "magit-format-patch:--output-directory"),
+	"z":   func(string) []string { return []string{"magit-stash-both", "magit-stash-keep-index"} },
+	"z P": func(string) []string { return []string{"magit-stash-push"} },
+}
+
+func fixedConsumers(consumers []string, options ...string) func(string) []string {
+	return func(option string) []string {
+		if optionMatches(option, options...) {
+			return consumers
+		}
+		return nil
+	}
+}
+
+func matchedConsumers(transient string, excluded []string, options ...string) func(string) []string {
+	return func(option string) []string {
+		if len(options) == 0 || optionMatches(option, options...) {
+			if !optionMatches(option, excluded...) {
+				return allTransientCommands(transient)
+			}
+		}
+		return nil
+	}
+}
+
+func notesOptionConsumers(option string) []string {
+	consumers := map[string][]string{
+		"transient:magit-notes:--dry-run": {"magit-notes-prune"},
+		"magit-notes:--strategy":          {"magit-notes-merge"},
+	}
+	if option == "magit-notes:--ref" {
+		return allTransientCommands("magit-notes")
+	}
+	return consumers[option]
+}
+
+func optionMatches(option string, candidates ...string) bool {
+	return setOf(candidates...)[option]
 }
 
 func domainCommandID(transient, command string) CommandID {
@@ -922,40 +1014,69 @@ func ValidateRegistry(bindings []Binding) error {
 	seen := map[string]CommandID{}
 	occurrences := map[string]bool{}
 	for _, b := range bindings {
-		if len(b.Sequence) == 0 || b.Command == CommandNone {
-			return fmt.Errorf("incomplete binding for %q", b.Display)
+		if err := validateBinding(b); err != nil {
+			return err
 		}
-		for _, token := range b.Sequence {
-			if token == "Tab" || token == "Enter" || token == "TAB" || token == "RET" || strings.Contains(token, "+TAB") || strings.Contains(token, "+RET") {
-				return fmt.Errorf("noncanonical token %q", token)
-			}
+		if err := recordOccurrence(b, occurrences); err != nil {
+			return err
 		}
-		if b.Handler == "" {
-			return fmt.Errorf("%s has no handler classification", b.Command)
+		if err := recordSequence(b, seen); err != nil {
+			return err
 		}
-		if b.Availability == AvailabilityNever && (b.UnavailableCategory == UnavailableNone || b.Unavailable == "") {
-			return fmt.Errorf("%s has untyped unavailability", b.Command)
+	}
+	return nil
+}
+
+func validateBinding(b Binding) error {
+	if len(b.Sequence) == 0 || b.Command == CommandNone {
+		return fmt.Errorf("incomplete binding for %q", b.Display)
+	}
+	if err := validateTokens(b.Sequence); err != nil {
+		return err
+	}
+	if b.Handler == "" {
+		return fmt.Errorf("%s has no handler classification", b.Command)
+	}
+	if b.Availability == AvailabilityNever && (b.UnavailableCategory == UnavailableNone || b.Unavailable == "") {
+		return fmt.Errorf("%s has untyped unavailability", b.Command)
+	}
+	if b.UpstreamCommand != "" && b.Source.File == "" {
+		return fmt.Errorf("%s has no upstream source identity", b.Command)
+	}
+	return nil
+}
+
+func validateTokens(tokens []string) error {
+	for _, token := range tokens {
+		if token == "Tab" || token == "Enter" || token == "TAB" || token == "RET" || strings.Contains(token, "+TAB") || strings.Contains(token, "+RET") {
+			return fmt.Errorf("noncanonical token %q", token)
 		}
-		if b.UpstreamCommand != "" && b.Source.File == "" {
-			return fmt.Errorf("%s has no upstream source identity", b.Command)
-		}
-		if strings.HasPrefix(b.Context, ContextTransient) {
-			if b.Occurrence == "" {
-				return fmt.Errorf("%s has no occurrence identity", b.Command)
-			}
-			occurrenceKey := string(b.Scheme) + "\x00" + b.Occurrence
-			if occurrences[occurrenceKey] {
-				return fmt.Errorf("duplicate occurrence identity %s", b.Occurrence)
-			}
-			occurrences[occurrenceKey] = true
-		}
-		key := string(b.Scheme) + "\x00" + b.Context + "\x00" + strings.Join(b.Sequence, "\x00")
-		if prior, ok := seen[key]; ok && b.Handler != HandlerInfix && !strings.HasPrefix(b.Context, ContextTransient) {
-			return fmt.Errorf("duplicate sequence %q in %s/%s (%s, %s)", b.Display, b.Context, b.Scheme, prior, b.Command)
-		}
-		if b.Handler != HandlerInfix {
-			seen[key] = b.Command
-		}
+	}
+	return nil
+}
+
+func recordOccurrence(b Binding, occurrences map[string]bool) error {
+	if !strings.HasPrefix(b.Context, ContextTransient) {
+		return nil
+	}
+	if b.Occurrence == "" {
+		return fmt.Errorf("%s has no occurrence identity", b.Command)
+	}
+	key := string(b.Scheme) + "\x00" + b.Occurrence
+	if occurrences[key] {
+		return fmt.Errorf("duplicate occurrence identity %s", b.Occurrence)
+	}
+	occurrences[key] = true
+	return nil
+}
+
+func recordSequence(b Binding, seen map[string]CommandID) error {
+	key := string(b.Scheme) + "\x00" + b.Context + "\x00" + strings.Join(b.Sequence, "\x00")
+	if prior, ok := seen[key]; ok && b.Handler != HandlerInfix && !strings.HasPrefix(b.Context, ContextTransient) {
+		return fmt.Errorf("duplicate sequence %q in %s/%s (%s, %s)", b.Display, b.Context, b.Scheme, prior, b.Command)
+	}
+	if b.Handler != HandlerInfix {
+		seen[key] = b.Command
 	}
 	return nil
 }

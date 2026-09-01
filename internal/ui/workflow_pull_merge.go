@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 const pullMergeChoiceLimit = 512
@@ -167,45 +167,62 @@ func mergeSquashWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 }
 
 func mergeArgs(options map[keymap.CommandID]OptionValue) (gitbackend.MergeArgs, error) {
-	has := func(suffix string) bool {
-		for id, value := range options {
-			if strings.HasSuffix(string(id), suffix) && (value.Enabled || value.Value != "") {
-				return true
-			}
-		}
-		return false
+	mode, err := mergeMode(options)
+	if err != nil {
+		return gitbackend.MergeArgs{}, err
 	}
-	ff, noFF := has("--ff-only"), has("--no-ff")
-	if ff && noFF {
-		return gitbackend.MergeArgs{}, errors.New("fast-forward-only and no-fast-forward are mutually exclusive")
-	}
-	args := gitbackend.MergeArgs{Mode: gitbackend.MergePlain}
+	args := gitbackend.MergeArgs{Mode: mode}
 	for id, value := range options {
 		if !value.Enabled && value.Value == "" {
 			continue
 		}
-		switch {
-		case strings.HasSuffix(string(id), "--strategy"):
-			args.Strategy = value.Value
-		case strings.HasSuffix(string(id), "--strategy-option"):
-			args.StrategyOptions = append(args.StrategyOptions, value.Value)
-		case strings.HasSuffix(string(id), "-Xignore-space-change"):
-			args.StrategyOptions = append(args.StrategyOptions, "ignore-space-change")
-		case strings.HasSuffix(string(id), "-Xignore-all-space"):
-			args.StrategyOptions = append(args.StrategyOptions, "ignore-all-space")
-		case strings.HasSuffix(string(id), "--signoff"):
-			args.Signoff = true
-		case strings.Contains(string(id), "diff-algorithm") || strings.Contains(string(id), "gpg-sign"):
-			return gitbackend.MergeArgs{}, fmt.Errorf("%s is unsupported by the typed merge backend", id)
+		if err := applyMergeOption(&args, id, value); err != nil {
+			return gitbackend.MergeArgs{}, err
 		}
 	}
-	args.Mode = gitbackend.MergePlain
-	if ff {
-		args.Mode = gitbackend.MergeFFOnly
-	} else if noFF {
-		args.Mode = gitbackend.MergeNoFF
-	}
 	return args, nil
+}
+
+func mergeOptionSelected(options map[keymap.CommandID]OptionValue, suffix string) bool {
+	for id, value := range options {
+		if strings.HasSuffix(string(id), suffix) && (value.Enabled || value.Value != "") {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeMode(options map[keymap.CommandID]OptionValue) (gitbackend.MergeMode, error) {
+	ff := mergeOptionSelected(options, "--ff-only")
+	noFF := mergeOptionSelected(options, "--no-ff")
+	switch {
+	case ff && noFF:
+		return gitbackend.MergePlain, errors.New("fast-forward-only and no-fast-forward are mutually exclusive")
+	case ff:
+		return gitbackend.MergeFFOnly, nil
+	case noFF:
+		return gitbackend.MergeNoFF, nil
+	default:
+		return gitbackend.MergePlain, nil
+	}
+}
+
+func applyMergeOption(args *gitbackend.MergeArgs, id keymap.CommandID, value OptionValue) error {
+	switch name := string(id); {
+	case strings.HasSuffix(name, "--strategy"):
+		args.Strategy = value.Value
+	case strings.HasSuffix(name, "--strategy-option"):
+		args.StrategyOptions = append(args.StrategyOptions, value.Value)
+	case strings.HasSuffix(name, "-Xignore-space-change"):
+		args.StrategyOptions = append(args.StrategyOptions, "ignore-space-change")
+	case strings.HasSuffix(name, "-Xignore-all-space"):
+		args.StrategyOptions = append(args.StrategyOptions, "ignore-all-space")
+	case strings.HasSuffix(name, "--signoff"):
+		args.Signoff = true
+	case strings.Contains(name, "diff-algorithm") || strings.Contains(name, "gpg-sign"):
+		return fmt.Errorf("%s is unsupported by the typed merge backend", id)
+	}
+	return nil
 }
 
 func loadMergeTargetDialog(ctx context.Context, repo *gitbackend.Repository, args gitbackend.MergeArgs, preview bool) (WorkflowDialog, error) {
@@ -262,12 +279,27 @@ func loadMergeTargetDialog(ctx context.Context, repo *gitbackend.Repository, arg
 
 func mergePlan(p gitbackend.MergePreflight, args gitbackend.MergeArgs) []string {
 	plan := []string{"target: " + p.Target, "resolved target: " + p.TargetOID}
+	plan = append(plan, mergePreflightPlan(p)...)
+	plan = append(plan, mergeArgumentPlan(args)...)
+	if p.State.Dirty {
+		plan = append(plan, "WARNING: merge into a dirty worktree")
+	}
+	return plan
+}
+
+func mergePreflightPlan(p gitbackend.MergePreflight) []string {
+	var plan []string
 	if p.AlreadyUpToDate {
 		plan = append(plan, "Already up to date")
 	}
 	if p.FastForwardPossible {
 		plan = append(plan, "Fast-forward is possible")
 	}
+	return plan
+}
+
+func mergeArgumentPlan(args gitbackend.MergeArgs) []string {
+	var plan []string
 	if args.Mode == gitbackend.MergeNoFF {
 		plan = append(plan, "Create a merge commit even when fast-forward is possible")
 	}
@@ -288,9 +320,6 @@ func mergePlan(p gitbackend.MergePreflight, args gitbackend.MergeArgs) []string 
 	}
 	if args.Signoff {
 		plan = append(plan, "Add Signed-off-by trailer")
-	}
-	if p.State.Dirty {
-		plan = append(plan, "WARNING: merge into a dirty worktree")
 	}
 	return plan
 }

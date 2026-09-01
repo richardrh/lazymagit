@@ -126,6 +126,188 @@ func TestTransferWorkflowPullAndRemoteConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigureRemoteExtractedHelpersPreserveNilEmptyAndTagOptions(t *testing.T) {
+	ctx := context.Background()
+	local := newTestRepo(t)
+	local.write("base", "base\n")
+	local.commitAll("base")
+	local.git("remote", "add", "origin", newBareTestRepo(t).dir)
+	local.git("config", "--add", "remote.origin.fetch", "old-fetch")
+	local.git("config", "--add", "remote.origin.push", "old-push")
+	repo, _ := Discover(local.dir)
+
+	if err := repo.replaceRemoteConfigValues(ctx, "remote.origin.fetch", nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := local.git("config", "--get-all", "remote.origin.fetch"); !strings.Contains(got, "old-fetch") {
+		t.Fatalf("nil replacement changed fetch values: %q", got)
+	}
+	if err := repo.replaceRemoteConfigValues(ctx, "remote.origin.push", []string{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := repo.configValue(ctx, "remote.origin.push"); err != nil || ok {
+		t.Fatalf("empty replacement did not clear push values: set=%v err=%v", ok, err)
+	}
+
+	all := RemoteTagsAll
+	if err := repo.configureRemoteTagOpt(ctx, "origin", &all); err != nil {
+		t.Fatal(err)
+	}
+	if got := local.git("config", "--get", "remote.origin.tagOpt"); got != "--tags" {
+		t.Fatalf("tag option = %q", got)
+	}
+	defaultTags := RemoteTagsDefault
+	if err := repo.configureRemoteTagOpt(ctx, "origin", &defaultTags); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := repo.configValue(ctx, "remote.origin.tagOpt"); err != nil || ok {
+		t.Fatalf("default tag option remained set: set=%v err=%v", ok, err)
+	}
+}
+
+func TestResolvePullTargetSelectsUpstreamPushRemoteAndExplicitBranch(t *testing.T) {
+	ctx := context.Background()
+	remote := newBareTestRepo(t)
+	seed := newTestRepo(t)
+	seed.write("base", "base\n")
+	seed.commitAll("base")
+	seed.git("remote", "add", "origin", remote.dir)
+	seed.git("push", "origin", "main")
+	remote.git("symbolic-ref", "HEAD", "refs/heads/main")
+	local := cloneTestRepo(t, remote.dir)
+	repo, err := Discover(local.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name string
+		args PullArgs
+	}{
+		{"upstream", PullArgs{Target: PullUpstream}},
+		{"explicit", PullArgs{Target: PullRemoteBranch, Remote: "origin", Branch: "main"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			remote, branch, err := repo.resolvePullTarget(ctx, test.args)
+			if err != nil || remote != "origin" || branch != "main" {
+				t.Fatalf("resolve %s = (%q, %q, %v)", test.name, remote, branch, err)
+			}
+		})
+	}
+
+	local.git("config", "remote.pushDefault", "origin")
+	remoteName, branch, err := repo.resolvePullTarget(ctx, PullArgs{Target: PullPushRemote})
+	if err != nil || remoteName != "origin" || branch != "main" {
+		t.Fatalf("resolve push remote = (%q, %q, %v)", remoteName, branch, err)
+	}
+	if _, _, err := repo.resolvePullTarget(ctx, PullArgs{Target: PullRemoteBranch, Remote: "origin"}); err == nil {
+		t.Fatal("explicit pull without a branch was accepted")
+	}
+	if _, _, err := repo.resolvePullTarget(ctx, PullArgs{Target: PullTarget(99)}); err == nil {
+		t.Fatal("unknown pull target was accepted")
+	}
+	local.git("checkout", "--detach")
+	if _, _, err := repo.resolvePullTarget(ctx, PullArgs{Target: PullPushRemote}); err == nil {
+		t.Fatal("pulling a detached HEAD from the push remote was accepted")
+	}
+
+	missing := newTestRepo(t)
+	missing.write("base", "base\n")
+	missing.commitAll("base")
+	missingRepo, err := Discover(missing.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := missingRepo.resolvePullTarget(ctx, PullArgs{Target: PullUpstream}); !errors.Is(err, ErrNoUpstream) {
+		t.Fatalf("missing upstream error = %v", err)
+	}
+}
+
+func TestResolvePushTargetSelectsUpstreamPushRemoteAndExplicitRemote(t *testing.T) {
+	ctx := context.Background()
+	remote := newBareTestRepo(t)
+	seed := newTestRepo(t)
+	seed.write("base", "base\n")
+	seed.commitAll("base")
+	seed.git("remote", "add", "origin", remote.dir)
+	seed.git("push", "origin", "main")
+	remote.git("symbolic-ref", "HEAD", "refs/heads/main")
+	local := cloneTestRepo(t, remote.dir)
+	repo, err := Discover(local.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		target PushTarget
+		remote string
+	}{
+		{"upstream", PushToUpstream, "origin"},
+		{"elsewhere", PushElsewhere, "origin"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := repo.resolvePushTarget(ctx, test.target, test.remote)
+			if err != nil || got != "origin" {
+				t.Fatalf("resolve %s = (%q, %v)", test.name, got, err)
+			}
+		})
+	}
+
+	local.git("config", "remote.pushDefault", "origin")
+	if got, err := repo.resolvePushTarget(ctx, PushToPushRemote, ""); err != nil || got != "origin" {
+		t.Fatalf("resolve push remote = (%q, %v)", got, err)
+	}
+	if _, err := repo.resolvePushTarget(ctx, PushElsewhere, ""); err == nil {
+		t.Fatal("empty explicit push remote was accepted")
+	}
+	if _, err := repo.resolvePushTarget(ctx, PushTarget(99), "origin"); err == nil {
+		t.Fatal("unknown push target was accepted")
+	}
+}
+
+func TestPushSpecCompilesEverySupportedSelector(t *testing.T) {
+	ctx := context.Background()
+	remote := newBareTestRepo(t)
+	local := newTestRepo(t)
+	local.write("base", "base\n")
+	local.commitAll("base")
+	local.git("tag", "v1")
+	local.git("remote", "add", "origin", remote.dir)
+	local.git("push", "-u", "origin", "main")
+	repo, err := Discover(local.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, test := range []struct {
+		name     string
+		args     PushArgs
+		wantSpec string
+		allTags  bool
+	}{
+		{"refspec", PushArgs{Refspec: "main:copy"}, "main:copy", false},
+		{"source destination", PushArgs{Source: "main", Destination: "copy"}, "main:copy", false},
+		{"source", PushArgs{Source: "main"}, "main", false},
+		{"matching", PushArgs{Matching: true}, ":", false},
+		{"tag", PushArgs{Tag: "v1"}, "refs/tags/v1", false},
+		{"all tags", PushArgs{AllTags: true}, "", true},
+		{"notes", PushArgs{Notes: true}, "refs/notes/*:refs/notes/*", false},
+		{"current branch", PushArgs{Target: PushElsewhere}, "main", false},
+		{"upstream branch", PushArgs{Target: PushToUpstream}, "main:main", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec, allTags, err := repo.pushSpec(ctx, test.args)
+			if err != nil || spec != test.wantSpec || allTags != test.allTags {
+				t.Fatalf("push spec = (%q, %t, %v), want (%q, %t)", spec, allTags, err, test.wantSpec, test.allTags)
+			}
+		})
+	}
+	if _, _, err := repo.pushSpec(ctx, PushArgs{Destination: "copy"}); err == nil {
+		t.Fatal("destination without a source was accepted")
+	}
+}
+
 func TestTransferWorkflowTagsAndMergeSafety(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)

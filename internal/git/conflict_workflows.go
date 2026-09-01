@@ -181,37 +181,44 @@ func (r *Repository) conflictEntries(ctx context.Context) (map[string]map[Confli
 	if truncated {
 		return nil, &TooLargeError{Resource: "unmerged index entries"}
 	}
+	return parseConflictEntries(out)
+}
+
+func parseConflictEntries(out []byte) (map[string]map[ConflictStage]conflictIndexEntry, error) {
 	entries := make(map[string]map[ConflictStage]conflictIndexEntry)
 	for _, record := range bytes.Split(out, []byte{0}) {
 		if len(record) == 0 {
 			continue
 		}
-		tab := bytes.IndexByte(record, '\t')
-		if tab < 0 || tab == len(record)-1 {
-			return nil, fmt.Errorf("malformed unmerged index entry %q", record)
+		path, stage, entry, err := parseConflictEntry(record)
+		if err != nil {
+			return nil, err
 		}
-		fields := strings.Fields(string(record[:tab]))
-		if len(fields) != 3 || !isHexOID(fields[1]) {
-			return nil, fmt.Errorf("malformed unmerged index entry %q", record)
-		}
-		stageNumber, parseErr := strconv.Atoi(fields[2])
-		if parseErr != nil || stageNumber < int(ConflictBase) || stageNumber > int(ConflictTheirs) {
-			return nil, fmt.Errorf("malformed unmerged index stage %q", fields[2])
-		}
-		path := string(record[tab+1:])
-		if path == "" {
-			return nil, errors.New("unmerged index entry has an empty path")
-		}
-		stage := ConflictStage(stageNumber)
 		if entries[path] == nil {
 			entries[path] = make(map[ConflictStage]conflictIndexEntry)
 		}
 		if _, duplicate := entries[path][stage]; duplicate {
 			return nil, fmt.Errorf("duplicate unmerged index stage for %q", path)
 		}
-		entries[path][stage] = conflictIndexEntry{mode: fields[0], oid: fields[1]}
+		entries[path][stage] = entry
 	}
 	return entries, nil
+}
+
+func parseConflictEntry(record []byte) (string, ConflictStage, conflictIndexEntry, error) {
+	tab := bytes.IndexByte(record, '\t')
+	if tab < 0 || tab == len(record)-1 {
+		return "", 0, conflictIndexEntry{}, fmt.Errorf("malformed unmerged index entry %q", record)
+	}
+	fields := strings.Fields(string(record[:tab]))
+	if len(fields) != 3 || !isHexOID(fields[1]) {
+		return "", 0, conflictIndexEntry{}, fmt.Errorf("malformed unmerged index entry %q", record)
+	}
+	stageNumber, err := strconv.Atoi(fields[2])
+	if err != nil || stageNumber < int(ConflictBase) || stageNumber > int(ConflictTheirs) {
+		return "", 0, conflictIndexEntry{}, fmt.Errorf("malformed unmerged index stage %q", fields[2])
+	}
+	return string(record[tab+1:]), ConflictStage(stageNumber), conflictIndexEntry{mode: fields[0], oid: fields[1]}, nil
 }
 
 func resolutionStage(resolution ConflictResolution) (ConflictStage, error) {

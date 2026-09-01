@@ -9,10 +9,54 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
+
+func TestDiscardConfirmationHelpers(t *testing.T) {
+	for key, want := range map[string]discardConfirmationAction{
+		"y": discardConfirmationAccepted, "Y": discardConfirmationAccepted,
+		"n": discardConfirmationCancelled, "N": discardConfirmationCancelled,
+		"q": discardConfirmationCancelled, "esc": discardConfirmationCancelled,
+		"other": discardConfirmationIgnored,
+	} {
+		if got := discardConfirmationActionForKey(key); got != want {
+			t.Errorf("discardConfirmationActionForKey(%q) = %v, want %v", key, got, want)
+		}
+	}
+
+	original := []string{"one", "two"}
+	confirmed := confirmedDiscardPaths(original, "fallback")
+	original[0] = "changed"
+	if !reflect.DeepEqual(confirmed, []string{"one", "two"}) {
+		t.Fatalf("confirmed paths were not copied: %v", confirmed)
+	}
+	if got := confirmedDiscardPaths(nil, "fallback"); !reflect.DeepEqual(got, []string{"fallback"}) {
+		t.Fatalf("fallback confirmed paths = %v", got)
+	}
+	if got := confirmedDiscardPaths(nil, ""); got != nil {
+		t.Fatalf("empty confirmed paths = %#v", got)
+	}
+}
+
+func TestHandleConfirmKeyRoutesEveryAction(t *testing.T) {
+	m := New(nil)
+	m.setMode(modeConfirm)
+	m.confirmPath = "one"
+	if cmd := m.handleConfirmKey("other"); cmd != nil || m.mode != modeConfirm || m.confirmPath != "one" {
+		t.Fatalf("ignored confirmation changed state: mode=%v path=%q cmd=%v", m.mode, m.confirmPath, cmd)
+	}
+	if cmd := m.handleConfirmKey("n"); cmd != nil || m.mode != modeStatus || m.confirmPath != "" || m.message != "Discard cancelled" {
+		t.Fatalf("cancel confirmation state: mode=%v path=%q message=%q cmd=%v", m.mode, m.confirmPath, m.message, cmd)
+	}
+
+	m.setMode(modeConfirm)
+	m.confirmPaths = []string{"one", "two"}
+	if cmd := m.handleConfirmKey("y"); cmd == nil || m.mode != modeStatus || len(m.confirmPaths) != 0 || !m.busy {
+		t.Fatalf("accepted confirmation state: mode=%v paths=%v busy=%v cmd=%v", m.mode, m.confirmPaths, m.busy, cmd)
+	}
+}
 
 func TestVimGTimeoutRefreshesAndGGStillNavigatesFirst(t *testing.T) {
 	m := New(nil)
@@ -727,6 +771,141 @@ func TestQuitCancelsApplicationLifecycle(t *testing.T) {
 			t.Fatalf("%s did not cancel application context", key.String())
 		}
 	}
+}
+
+func TestGraphMessagesValidateRequestsAndRenderErrors(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.detailRequest = 4
+	id := m.tree.Cursor()
+
+	_, _ = m.Update(graphMsg{id: id, request: 3, text: "stale"})
+	if m.detail == "stale" || m.graphActive {
+		t.Fatalf("stale graph result changed detail=%q active=%t", m.detail, m.graphActive)
+	}
+
+	_, _ = m.Update(graphMsg{id: id, request: 4, err: errors.New("query failed")})
+	if !strings.Contains(m.detail, "Unable to load graph") || !strings.Contains(m.detail, "query failed") || m.graphEntries != nil || m.graphActive {
+		t.Fatalf("graph error detail=%q entries=%v active=%t", m.detail, m.graphEntries, m.graphActive)
+	}
+
+	entries := map[int]gitbackend.LogEntry{8: {ID: "later"}, 3: {ID: "first"}}
+	_, _ = m.Update(graphMsg{id: id, request: 4, text: "* first\n* later", entries: entries})
+	if !m.graphActive || m.graphCursor != 3 || len(m.graphEntries) != 2 {
+		t.Fatalf("graph success active=%t cursor=%d entries=%v", m.graphActive, m.graphCursor, m.graphEntries)
+	}
+}
+
+func TestEscapeClosesInspectionAndCancelsWorkflowLoad(t *testing.T) {
+	inspection := New(nil)
+	inspection.loading = false
+	inspection.inspectionActive = true
+	inspection.graphActive = true
+	inspection.graphEntries = map[int]gitbackend.LogEntry{1: {ID: "one"}}
+	inspection.graphCursor = 1
+	_, cmd := inspection.Update(keyMsg("esc"))
+	if inspection.inspectionActive || inspection.graphActive || inspection.graphEntries != nil || inspection.graphCursor != -1 || inspection.message != "Inspection closed" {
+		t.Fatalf("inspection escape cmd=%v active=%t graph=%t entries=%v cursor=%d message=%q", cmd != nil, inspection.inspectionActive, inspection.graphActive, inspection.graphEntries, inspection.graphCursor, inspection.message)
+	}
+
+	workflow := New(nil)
+	ctx, cancel := context.WithCancel(workflow.appCtx)
+	workflow.workflowLoading, workflow.workflowLoadCancel = true, cancel
+	_, cmd = workflow.Update(keyMsg("esc"))
+	if cmd != nil || workflow.workflowLoading || workflow.workflowLoadCancel != nil || workflow.message != "Workflow loading cancelled" {
+		t.Fatalf("workflow escape cmd=%v loading=%t cancel=%v message=%q", cmd != nil, workflow.workflowLoading, workflow.workflowLoadCancel != nil, workflow.message)
+	}
+	select {
+	case <-ctx.Done():
+	default:
+		t.Fatal("workflow escape did not cancel the workflow load context")
+	}
+}
+
+func TestPerformRepositoryAndTransferCommands(t *testing.T) {
+	newModel := func() *Model {
+		m := New(nil)
+		m.loading = false
+		return m
+	}
+
+	t.Run("repository commands", func(t *testing.T) {
+		branches := newModel()
+		if cmd, handled := branches.performRepositoryCommand(keymap.CommandSwitchBranch); !handled || cmd == nil || !branches.busy {
+			t.Fatalf("switch branch handled=%t cmd=%v busy=%t", handled, cmd != nil, branches.busy)
+		}
+
+		remote := newModel()
+		if cmd, handled := remote.performRepositoryCommand(keymap.CommandAddRemote); !handled || cmd != nil || remote.mode != modeAddRemote {
+			t.Fatalf("add remote handled=%t cmd=%v mode=%d", handled, cmd != nil, remote.mode)
+		}
+
+		quit := newModel()
+		if cmd, handled := quit.performRepositoryCommand(keymap.CommandQuit); !handled || cmd == nil {
+			t.Fatalf("quit handled=%t cmd=%v", handled, cmd != nil)
+		}
+		select {
+		case <-quit.appCtx.Done():
+		default:
+			t.Fatal("quit command did not cancel the application context")
+		}
+	})
+
+	t.Run("transfer commands", func(t *testing.T) {
+		upstream := newModel()
+		upstream.fetchUpstream = func(context.Context) error { return nil }
+		if cmd, handled := upstream.performTransferCommand(keymap.CommandFetchUpstream); !handled || cmd == nil || !upstream.busy {
+			t.Fatalf("fetch upstream handled=%t cmd=%v busy=%t", handled, cmd != nil, upstream.busy)
+		}
+
+		pushRemote := newModel()
+		pushRemote.snapshot.pushRemote = "origin"
+		pushRemote.fetchPush = func(context.Context) error { return nil }
+		if cmd, handled := pushRemote.performTransferCommand(keymap.CommandFetchPush); !handled || cmd == nil || !pushRemote.busy {
+			t.Fatalf("fetch push handled=%t cmd=%v busy=%t", handled, cmd != nil, pushRemote.busy)
+		}
+
+		configurePush := newModel()
+		configurePush.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
+		if cmd, handled := configurePush.performTransferCommand(keymap.CommandFetchPush); !handled || cmd != nil || configurePush.mode != modeRemotes || configurePush.remotePurpose != remoteConfigurePush {
+			t.Fatalf("configure push handled=%t cmd=%v mode=%d purpose=%d", handled, cmd != nil, configurePush.mode, configurePush.remotePurpose)
+		}
+
+		elsewhere := newModel()
+		if cmd, handled := elsewhere.performTransferCommand(keymap.CommandFetchElsewhere); !handled || cmd != nil || !elsewhere.isError {
+			t.Fatalf("fetch elsewhere without remotes handled=%t cmd=%v error=%t", handled, cmd != nil, elsewhere.isError)
+		}
+		elsewhere = newModel()
+		elsewhere.snapshot.remotes = []gitbackend.Remote{{Name: "origin"}}
+		if cmd, handled := elsewhere.performTransferCommand(keymap.CommandFetchElsewhere); !handled || cmd != nil || elsewhere.mode != modeRemotes || elsewhere.remotePurpose != remoteFetchElsewhere {
+			t.Fatalf("fetch elsewhere handled=%t cmd=%v mode=%d purpose=%d", handled, cmd != nil, elsewhere.mode, elsewhere.remotePurpose)
+		}
+
+		all := newModel()
+		all.fetchAll = func(context.Context) error { return nil }
+		if cmd, handled := all.performTransferCommand(keymap.CommandFetchAll); !handled || cmd == nil || !all.busy {
+			t.Fatalf("fetch all handled=%t cmd=%v busy=%t", handled, cmd != nil, all.busy)
+		}
+
+		push := newModel()
+		push.snapshot.summary.Upstream = "origin/main"
+		push.push = func(context.Context) error { return nil }
+		if cmd, handled := push.performTransferCommand(keymap.CommandPush); !handled || cmd == nil || !push.busy {
+			t.Fatalf("push upstream handled=%t cmd=%v busy=%t", handled, cmd != nil, push.busy)
+		}
+
+		setupPush := newModel()
+		setupPush.snapshot.pushRemote = "origin"
+		setupPush.pushSetUpstream = func(context.Context, string) error { return nil }
+		if cmd, handled := setupPush.performTransferCommand(keymap.CommandPush); !handled || cmd == nil || !setupPush.busy {
+			t.Fatalf("setup push handled=%t cmd=%v busy=%t", handled, cmd != nil, setupPush.busy)
+		}
+
+		noPushRemote := newModel()
+		if cmd, handled := noPushRemote.performTransferCommand(keymap.CommandPush); !handled || cmd != nil || !noPushRemote.isError {
+			t.Fatalf("push without remotes handled=%t cmd=%v error=%t", handled, cmd != nil, noPushRemote.isError)
+		}
+	})
 }
 
 func keyMsg(text string) tea.KeyPressMsg {

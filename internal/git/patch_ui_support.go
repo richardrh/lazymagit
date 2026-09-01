@@ -234,30 +234,10 @@ func (r *Repository) ReviewFormatPatchUI(ctx context.Context, revisionRange stri
 		_ = os.RemoveAll(stage)
 		return ReviewedFormatPatch{}, err
 	}
-	for _, path := range created {
-		info, statErr := os.Lstat(path)
-		if statErr != nil || !info.Mode().IsRegular() {
-			_ = os.RemoveAll(stage)
-			if statErr != nil {
-				return ReviewedFormatPatch{}, fmt.Errorf("inspect staged format-patch output: %w", statErr)
-			}
-			return ReviewedFormatPatch{}, errors.New("format-patch created a non-regular output")
-		}
-		size, digest, hashErr := reviewedRegularFile(path, "staged format-patch output")
-		if hashErr != nil {
-			_ = os.RemoveAll(stage)
-			return ReviewedFormatPatch{}, hashErr
-		}
-		name := filepath.Base(path)
-		if name != filepath.Base(filepath.Clean(name)) || name == "." || name == "" {
-			_ = os.RemoveAll(stage)
-			return ReviewedFormatPatch{}, errors.New("format-patch created an unsafe output name")
-		}
-		if containsPatchName(before, name) {
-			_ = os.RemoveAll(stage)
-			return ReviewedFormatPatch{}, fmt.Errorf("format-patch output %q already exists; choose an empty directory or rename the existing file", name)
-		}
-		review.Files = append(review.Files, ReviewedPatchFile{Name: name, Size: size, Digest: digest})
+	review.Files, err = reviewStagedFormatPatchFiles(created, before)
+	if err != nil {
+		_ = os.RemoveAll(stage)
+		return ReviewedFormatPatch{}, err
 	}
 	if len(review.Files) == 0 {
 		_ = os.RemoveAll(stage)
@@ -266,6 +246,40 @@ func (r *Repository) ReviewFormatPatchUI(ctx context.Context, revisionRange stri
 	sort.Slice(review.Files, func(i, j int) bool { return review.Files[i].Name < review.Files[j].Name })
 	review.Token = NewConfirmationToken(formatPatchReviewIdentity(review))
 	return review, nil
+}
+
+func reviewStagedFormatPatchFiles(created []string, before []string) ([]ReviewedPatchFile, error) {
+	files := make([]ReviewedPatchFile, 0, len(created))
+	for _, path := range created {
+		file, err := reviewStagedFormatPatchFile(path, before)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, file)
+	}
+	return files, nil
+}
+
+func reviewStagedFormatPatchFile(path string, before []string) (ReviewedPatchFile, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return ReviewedPatchFile{}, fmt.Errorf("inspect staged format-patch output: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return ReviewedPatchFile{}, errors.New("format-patch created a non-regular output")
+	}
+	size, digest, err := reviewedRegularFile(path, "staged format-patch output")
+	if err != nil {
+		return ReviewedPatchFile{}, err
+	}
+	name := filepath.Base(path)
+	if name != filepath.Base(filepath.Clean(name)) || name == "." || name == "" {
+		return ReviewedPatchFile{}, errors.New("format-patch created an unsafe output name")
+	}
+	if containsPatchName(before, name) {
+		return ReviewedPatchFile{}, fmt.Errorf("format-patch output %q already exists; choose an empty directory or rename the existing file", name)
+	}
+	return ReviewedPatchFile{Name: name, Size: size, Digest: digest}, nil
 }
 
 // ExecuteReviewedFormatPatch publishes only the reviewed staged files. A

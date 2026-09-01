@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestBundledThemesApplyAndRender(t *testing.T) {

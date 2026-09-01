@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func TestProjectionOrderingAndMixedFileIdentity(t *testing.T) {

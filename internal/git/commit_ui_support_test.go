@@ -101,3 +101,49 @@ func TestExecuteCommitUIHooksNoVerifyAndMessageRedaction(t *testing.T) {
 		}
 	}
 }
+
+func TestPrepareCommitUIOptions(t *testing.T) {
+	options := CommitOptions{Sign: true}
+	requested, err := prepareCommitUIOptions(CommitUICreate, &options, true)
+	if err != nil || !requested || !options.AllowInteractiveSigning {
+		t.Fatalf("consented signing = %v, %#v, %v", requested, options, err)
+	}
+
+	options = CommitOptions{SigningKey: "key"}
+	if _, err := prepareCommitUIOptions(CommitUICreate, &options, false); !errors.Is(err, ErrCommitSigningConsentRequired) {
+		t.Fatalf("unconsented signing = %v", err)
+	}
+
+	options = CommitOptions{ReeditMessage: "HEAD"}
+	if _, err := prepareCommitUIOptions(CommitUIFixup, &options, false); err == nil {
+		t.Fatal("fixup reedit was accepted")
+	}
+}
+
+func TestAllowsCommitUIReedit(t *testing.T) {
+	for _, variant := range []CommitUIVariant{CommitUICreate, CommitUIExtend, CommitUIAmend, CommitUIReword} {
+		if !allowsCommitUIReedit(variant) {
+			t.Errorf("allowsCommitUIReedit(%q) = false", variant)
+		}
+	}
+	for _, variant := range []CommitUIVariant{CommitUIFixup, CommitUISquash, CommitUIAlter, CommitUIAugment, CommitUIRevise, "unknown"} {
+		if allowsCommitUIReedit(variant) {
+			t.Errorf("allowsCommitUIReedit(%q) = true", variant)
+		}
+	}
+}
+
+func TestValidateStructuredFixupInvocationHelper(t *testing.T) {
+	if err := validateStructuredFixupInvocation(CommitUIAlter, "message", CommitOptions{}); err != nil {
+		t.Fatalf("valid alter invocation: %v", err)
+	}
+	if err := validateStructuredFixupInvocation(CommitUIRevise, "message", CommitOptions{All: true}); err == nil {
+		t.Fatal("revise --all was accepted")
+	}
+	if err := validateStructuredFixupInvocation(CommitUIAlter, "", CommitOptions{}); err == nil {
+		t.Fatal("empty structured message was accepted")
+	}
+	if err := validateStructuredFixupInvocation(CommitUIAlter, "message", CommitOptions{ReuseMessage: "HEAD"}); err == nil {
+		t.Fatal("reuse-message was accepted")
+	}
+}

@@ -82,8 +82,28 @@ type RefResult struct {
 }
 
 func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, error) {
+	args, limit, byteLimit, truncated, err := r.compileRefQuery(ctx, q)
+	if err != nil {
+		return RefResult{}, err
+	}
+	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
+	if err != nil {
+		return RefResult{}, err
+	}
+	refs, incomplete, err := parseInspectionRefs(out)
+	if err != nil {
+		return RefResult{}, err
+	}
+	truncated = truncated || byteTruncated || incomplete
+	if len(refs) > limit {
+		refs, truncated = refs[:limit], true
+	}
+	return r.buildRefResult(ctx, q, refs, truncated)
+}
+
+func (r *Repository) compileRefQuery(ctx context.Context, q RefQuery) ([]string, int, int, bool, error) {
 	if q.Limit < 0 {
-		return RefResult{}, errors.New("ref limit cannot be negative")
+		return nil, 0, 0, false, errors.New("ref limit cannot be negative")
 	}
 	limit := q.Limit
 	if limit == 0 {
@@ -98,48 +118,56 @@ func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, erro
 		byteLimit = inspectionOutputLimit
 	}
 	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return RefResult{}, fmt.Errorf("ref output limit must be between 0 and %d", inspectionOutputLimit)
+		return nil, 0, 0, false, fmt.Errorf("ref output limit must be between 0 and %d", inspectionOutputLimit)
 	}
 	sort, err := q.Sort.gitOption()
 	if err != nil {
-		return RefResult{}, err
+		return nil, 0, 0, false, err
 	}
 	format := "%00%(HEAD)%00%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(push:short)%00%(symref)%00%(subject)%00"
 	args := []string{"for-each-ref", "--count=" + strconv.Itoa(limit+1), "--sort=" + sort, "--format=" + format}
 	if q.Contains != "" {
 		oid, resolveErr := r.resolveCommitOID(ctx, q.Contains)
 		if resolveErr != nil {
-			return RefResult{}, resolveErr
+			return nil, 0, 0, false, resolveErr
 		}
 		args = append(args, "--contains="+oid)
 	}
 	if q.MergedTo != "" {
 		oid, resolveErr := r.resolveCommitOID(ctx, q.MergedTo)
 		if resolveErr != nil {
-			return RefResult{}, resolveErr
+			return nil, 0, 0, false, resolveErr
 		}
 		args = append(args, "--merged="+oid)
 	}
 	if q.NoMergedTo != "" {
 		oid, resolveErr := r.resolveCommitOID(ctx, q.NoMergedTo)
 		if resolveErr != nil {
-			return RefResult{}, resolveErr
+			return nil, 0, 0, false, resolveErr
 		}
 		args = append(args, "--no-merged="+oid)
 	}
 	args = append(args, "refs/heads", "refs/remotes", "refs/tags")
-	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
+	return args, limit, byteLimit, truncated, nil
+}
+
+func (r *Repository) buildRefResult(ctx context.Context, q RefQuery, refs []Ref, truncated bool) (RefResult, error) {
+	result := categorizedRefResult(refs, truncated)
+	focusOID, noHead, err := r.resolveRefFocusOID(ctx, q.Focus)
 	if err != nil {
 		return RefResult{}, err
 	}
-	refs, incomplete, err := parseInspectionRefs(out)
-	if err != nil {
+	if noHead {
+		return result, nil
+	}
+	result.Focus = selectRefFocus(refs, q.Focus, focusOID)
+	if err := r.populateAheadBehind(ctx, &result, focusOID); err != nil {
 		return RefResult{}, err
 	}
-	truncated = truncated || byteTruncated || incomplete
-	if len(refs) > limit {
-		refs, truncated = refs[:limit], true
-	}
+	return result, nil
+}
+
+func categorizedRefResult(refs []Ref, truncated bool) RefResult {
 	result := RefResult{Truncated: truncated}
 	for _, ref := range refs {
 		switch ref.Kind {
@@ -151,50 +179,62 @@ func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, erro
 			result.Tags = append(result.Tags, ref)
 		}
 	}
-	focusOID := ""
-	if q.Focus != "" {
-		focusOID, err = r.resolveCommitOID(ctx, q.Focus)
+	return result
+}
+
+func (r *Repository) resolveRefFocusOID(ctx context.Context, focus string) (string, bool, error) {
+	if focus != "" {
+		oid, err := r.resolveCommitOID(ctx, focus)
 		if err != nil {
-			return RefResult{}, err
+			return "", false, err
 		}
-	} else {
-		focusOID, err = r.resolveCommitOID(ctx, "HEAD")
-		if err != nil {
-			if isExitError(err) {
-				return result, nil
-			}
-			return RefResult{}, err
-		}
+		return oid, false, nil
 	}
+	oid, err := r.resolveCommitOID(ctx, "HEAD")
+	if err != nil {
+		if isExitError(err) {
+			return "", true, nil
+		}
+		return "", false, err
+	}
+	return oid, false, nil
+}
+
+func selectRefFocus(refs []Ref, requested, focusOID string) *Ref {
+	var focus *Ref
 	for i := range refs {
-		exactName := q.Focus != "" && (refs[i].Name == q.Focus || refs[i].FullName == q.Focus)
+		exactName := requested != "" && (refs[i].Name == requested || refs[i].FullName == requested)
 		matchingOID := refs[i].ID == focusOID || refs[i].PeeledID == focusOID
 		if exactName || matchingOID {
 			candidate := refs[i]
 			// An explicitly named ref wins; otherwise prefer the current branch
 			// when several names point at HEAD.
-			if result.Focus == nil || exactName || q.Focus == "" && candidate.Current {
-				result.Focus = &candidate
+			if focus == nil || exactName || requested == "" && candidate.Current {
+				focus = &candidate
 			}
 			if exactName {
 				break
 			}
 		}
 	}
+	return focus
+}
+
+func (r *Repository) populateAheadBehind(ctx context.Context, result *RefResult, focusOID string) error {
 	if result.Focus != nil && result.Focus.Kind == RefLocal && result.Focus.Upstream != "" {
 		upstreamOID, resolveErr := r.resolveCommitOID(ctx, result.Focus.Upstream)
 		if resolveErr != nil {
-			return RefResult{}, resolveErr
+			return resolveErr
 		}
 		counts, countErr := r.output(ctx, "rev-list", "--left-right", "--count", focusOID+"..."+upstreamOID)
 		if countErr != nil {
-			return RefResult{}, countErr
+			return countErr
 		}
 		if _, scanErr := fmt.Sscanf(trimLine(counts), "%d\t%d", &result.Ahead, &result.Behind); scanErr != nil {
-			return RefResult{}, errors.New("malformed ahead/behind counts")
+			return errors.New("malformed ahead/behind counts")
 		}
 	}
-	return result, nil
+	return nil
 }
 
 func parseInspectionRefs(out []byte) ([]Ref, bool, error) {
@@ -257,63 +297,89 @@ type CherryResult struct {
 }
 
 func (r *Repository) QueryCherry(ctx context.Context, q CherryQuery) (CherryResult, error) {
-	if q.Limit < 0 {
-		return CherryResult{}, errors.New("cherry limit cannot be negative")
-	}
-	limit := q.Limit
-	if limit == 0 {
-		limit = 1000
-	}
-	truncated := false
-	if limit > inspectionItemLimit {
-		limit, truncated = inspectionItemLimit, true
+	limit, truncated, err := cherryLimit(q.Limit)
+	if err != nil {
+		return CherryResult{}, err
 	}
 	upstream, err := r.resolveCommitOID(ctx, q.Upstream)
 	if err != nil {
 		return CherryResult{}, fmt.Errorf("resolve cherry upstream: %w", err)
 	}
-	head := q.Head
-	if head == "" {
-		head = "HEAD"
-	}
+	head := defaultCherryHead(q.Head)
 	headOID, err := r.resolveCommitOID(ctx, head)
 	if err != nil {
 		return CherryResult{}, fmt.Errorf("resolve cherry head: %w", err)
 	}
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
-	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return CherryResult{}, fmt.Errorf("cherry output limit must be between 0 and %d", inspectionOutputLimit)
+	byteLimit, err := cherryOutputLimit(q.OutputLimit)
+	if err != nil {
+		return CherryResult{}, err
 	}
 	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, "cherry", "-v", upstream, headOID)
 	if err != nil {
 		return CherryResult{}, err
 	}
-	result := CherryResult{Truncated: truncated || byteTruncated}
+	items, err := parseCherryOutput(out, byteTruncated)
+	if err != nil {
+		return CherryResult{}, err
+	}
+	result := CherryResult{Items: items, Truncated: truncated || byteTruncated}
+	if len(result.Items) > limit {
+		result.Items, result.Truncated = result.Items[:limit], true
+	}
+	return result, nil
+}
+
+func cherryLimit(value int) (int, bool, error) {
+	if value < 0 {
+		return 0, false, errors.New("cherry limit cannot be negative")
+	}
+	if value == 0 {
+		value = 1000
+	}
+	if value > inspectionItemLimit {
+		return inspectionItemLimit, true, nil
+	}
+	return value, false, nil
+}
+
+func defaultCherryHead(head string) string {
+	if head == "" {
+		return "HEAD"
+	}
+	return head
+}
+
+func cherryOutputLimit(value int) (int, error) {
+	if value == 0 {
+		return inspectionOutputLimit, nil
+	}
+	if value < 0 || value > inspectionOutputLimit {
+		return 0, fmt.Errorf("cherry output limit must be between 0 and %d", inspectionOutputLimit)
+	}
+	return value, nil
+}
+
+func parseCherryOutput(out []byte, truncated bool) ([]CherryPatch, error) {
 	lines := bytes.Split(out, []byte{'\n'})
-	if byteTruncated && len(lines) != 0 {
+	if truncated && len(lines) != 0 {
 		lines = lines[:len(lines)-1]
 	}
+	var items []CherryPatch
 	for _, line := range lines {
 		if len(line) == 0 {
 			continue
 		}
 		parts := bytes.SplitN(line, []byte{' '}, 3)
 		if len(parts) < 2 || len(parts[0]) != 1 || (parts[0][0] != '+' && parts[0][0] != '-') || !isHexOID(string(parts[1])) {
-			return CherryResult{}, fmt.Errorf("malformed git cherry record %q", line)
+			return nil, fmt.Errorf("malformed git cherry record %q", line)
 		}
 		subject := ""
 		if len(parts) == 3 {
 			subject = string(parts[2])
 		}
-		result.Items = append(result.Items, CherryPatch{Equivalent: parts[0][0] == '-', ID: string(parts[1]), Subject: subject})
+		items = append(items, CherryPatch{Equivalent: parts[0][0] == '-', ID: string(parts[1]), Subject: subject})
 	}
-	if len(result.Items) > limit {
-		result.Items, result.Truncated = result.Items[:limit], true
-	}
-	return result, nil
+	return items, nil
 }
 
 type Revision struct {

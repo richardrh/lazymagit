@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 const (
@@ -84,10 +84,7 @@ func (s selectedFileContext) verify(ctx context.Context, repo *gitbackend.Reposi
 		if file.Path != s.path {
 			continue
 		}
-		present := s.kind == rowUntracked && file.Unstaged == gitbackend.ChangeUntracked ||
-			s.kind == rowUnstaged && file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked ||
-			s.kind == rowStaged && file.Staged != gitbackend.ChangeNone
-		if !present {
+		if !selectedFileStatusPresent(s.kind, file) {
 			break
 		}
 		if trackedOnly && file.Unstaged == gitbackend.ChangeUntracked {
@@ -96,6 +93,19 @@ func (s selectedFileContext) verify(ctx context.Context, repo *gitbackend.Reposi
 		return nil
 	}
 	return fmt.Errorf("selected status row for %q is stale; refresh and select it again", sanitizeSingleLine(s.path))
+}
+
+func selectedFileStatusPresent(kind rowKind, file gitbackend.FileStatus) bool {
+	switch kind {
+	case rowUntracked:
+		return file.Unstaged == gitbackend.ChangeUntracked
+	case rowUnstaged:
+		return file.Unstaged != gitbackend.ChangeNone && file.Unstaged != gitbackend.ChangeUntracked
+	case rowStaged:
+		return file.Staged != gitbackend.ChangeNone
+	default:
+		return false
+	}
 }
 
 func fileUntrackWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

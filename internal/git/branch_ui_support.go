@@ -48,22 +48,8 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 		return BranchConfigUpdate{}, err
 	}
 	request.Before = before
-	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault, "branch.autoSetupMerge": request.AutoSetupMerge, "branch.autoSetupRebase": request.AutoSetupRebase} {
-		if update.Action != ConfigKeep && update.Action != ConfigSet && update.Action != ConfigUnset {
-			return BranchConfigUpdate{}, fmt.Errorf("invalid %s action", name)
-		}
-	}
-	if request.Rebase.Action == ConfigSet && !validRebaseMode(RebaseMode(request.Rebase.Value)) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch rebase mode %q", request.Rebase.Value)
-	}
-	if request.PullRebase.Action == ConfigSet && !validRebaseMode(RebaseMode(request.PullRebase.Value)) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid pull rebase mode %q", request.PullRebase.Value)
-	}
-	if request.AutoSetupMerge.Action == ConfigSet && !validAutoSetupMerge(request.AutoSetupMerge.Value) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupMerge mode %q", request.AutoSetupMerge.Value)
-	}
-	if request.AutoSetupRebase.Action == ConfigSet && !validAutoSetupRebase(request.AutoSetupRebase.Value) {
-		return BranchConfigUpdate{}, fmt.Errorf("invalid branch.autoSetupRebase mode %q", request.AutoSetupRebase.Value)
+	if err := validateBranchConfigUpdate(request); err != nil {
+		return BranchConfigUpdate{}, err
 	}
 	if request.PushRemote.Action == ConfigSet {
 		if err := r.validateRemote(ctx, request.PushRemote.Value); err != nil {
@@ -87,6 +73,30 @@ func (r *Repository) ReviewBranchConfigUpdate(ctx context.Context, request Branc
 	return request, nil
 }
 
+func validateBranchConfigUpdate(request BranchConfigUpdate) error {
+	for name, update := range map[string]ConfigUpdate{"description": request.Description, "upstream": request.Upstream, "rebase": request.Rebase, "pushRemote": request.PushRemote, "pull.rebase": request.PullRebase, "remote.pushDefault": request.RemotePushDefault, "branch.autoSetupMerge": request.AutoSetupMerge, "branch.autoSetupRebase": request.AutoSetupRebase} {
+		if update.Action != ConfigKeep && update.Action != ConfigSet && update.Action != ConfigUnset {
+			return fmt.Errorf("invalid %s action", name)
+		}
+	}
+	validations := []struct {
+		update ConfigUpdate
+		valid  func(string) bool
+		label  string
+	}{
+		{request.Rebase, func(value string) bool { return validRebaseMode(RebaseMode(value)) }, "branch rebase"},
+		{request.PullRebase, func(value string) bool { return validRebaseMode(RebaseMode(value)) }, "pull rebase"},
+		{request.AutoSetupMerge, validAutoSetupMerge, "branch.autoSetupMerge"},
+		{request.AutoSetupRebase, validAutoSetupRebase, "branch.autoSetupRebase"},
+	}
+	for _, validation := range validations {
+		if validation.update.Action == ConfigSet && !validation.valid(validation.update.Value) {
+			return fmt.Errorf("invalid %s mode %q", validation.label, validation.update.Value)
+		}
+	}
+	return nil
+}
+
 func (r *Repository) ExecuteBranchConfigUpdate(ctx context.Context, reviewed BranchConfigUpdate) error {
 	current, err := r.branchConfigSnapshot(ctx, reviewed.Branch)
 	if err != nil {
@@ -102,49 +112,56 @@ func (r *Repository) ExecuteBranchConfigUpdate(ctx context.Context, reviewed Bra
 	if err != nil {
 		return err
 	}
-	rollback := func(cause error) error {
-		if err := restoreConfigFile(configPath, before, existed); err != nil {
-			return &PartialMutationError{Operation: "configure branch", Cause: cause, Rollback: err, State: []string{"repository config may contain a subset of reviewed changes"}}
-		}
-		return cause
-	}
-	apply := func(update ConfigUpdate, set func(string) error, unset func() error) error {
-		switch update.Action {
-		case ConfigKeep:
-			return nil
-		case ConfigSet:
-			return set(update.Value)
-		case ConfigUnset:
-			return unset()
-		default:
-			return errors.New("invalid config update")
-		}
-	}
-	if err = apply(reviewed.Description, func(v string) error { return r.SetBranchDescription(ctx, reviewed.Branch, v) }, func() error { return r.UnsetBranchDescription(ctx, reviewed.Branch) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.Upstream, func(v string) error { return r.SetBranchUpstream(ctx, reviewed.Branch, v) }, func() error { return r.UnsetBranchUpstream(ctx, reviewed.Branch) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.Rebase, func(v string) error { return r.SetBranchRebase(ctx, reviewed.Branch, RebaseMode(v)) }, func() error { return r.UnsetBranchRebase(ctx, reviewed.Branch) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.PushRemote, func(v string) error { return r.SetBranchPushRemote(ctx, reviewed.Branch, v) }, func() error { return r.UnsetBranchPushRemote(ctx, reviewed.Branch) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.PullRebase, func(v string) error { return r.SetPullRebase(ctx, RebaseMode(v)) }, func() error { return r.UnsetPullRebase(ctx) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.RemotePushDefault, func(v string) error { return r.SetRemotePushDefault(ctx, v) }, func() error { return r.UnsetRemotePushDefault(ctx) }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.AutoSetupMerge, func(v string) error { return r.run(ctx, "config", "branch.autoSetupMerge", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupMerge") }); err != nil {
-		return rollback(err)
-	}
-	if err = apply(reviewed.AutoSetupRebase, func(v string) error { return r.run(ctx, "config", "branch.autoSetupRebase", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupRebase") }); err != nil {
-		return rollback(err)
+	if err := r.applyBranchConfigUpdates(ctx, reviewed); err != nil {
+		return rollbackBranchConfig(configPath, before, existed, err)
 	}
 	return nil
+}
+
+type configMutation struct {
+	update ConfigUpdate
+	set    func(string) error
+	unset  func() error
+}
+
+func applyConfigUpdate(mutation configMutation) error {
+	switch mutation.update.Action {
+	case ConfigKeep:
+		return nil
+	case ConfigSet:
+		return mutation.set(mutation.update.Value)
+	case ConfigUnset:
+		return mutation.unset()
+	default:
+		return errors.New("invalid config update")
+	}
+}
+
+func (r *Repository) applyBranchConfigUpdates(ctx context.Context, reviewed BranchConfigUpdate) error {
+	branch := reviewed.Branch
+	mutations := []configMutation{
+		{reviewed.Description, func(v string) error { return r.SetBranchDescription(ctx, branch, v) }, func() error { return r.UnsetBranchDescription(ctx, branch) }},
+		{reviewed.Upstream, func(v string) error { return r.SetBranchUpstream(ctx, branch, v) }, func() error { return r.UnsetBranchUpstream(ctx, branch) }},
+		{reviewed.Rebase, func(v string) error { return r.SetBranchRebase(ctx, branch, RebaseMode(v)) }, func() error { return r.UnsetBranchRebase(ctx, branch) }},
+		{reviewed.PushRemote, func(v string) error { return r.SetBranchPushRemote(ctx, branch, v) }, func() error { return r.UnsetBranchPushRemote(ctx, branch) }},
+		{reviewed.PullRebase, func(v string) error { return r.SetPullRebase(ctx, RebaseMode(v)) }, func() error { return r.UnsetPullRebase(ctx) }},
+		{reviewed.RemotePushDefault, func(v string) error { return r.SetRemotePushDefault(ctx, v) }, func() error { return r.UnsetRemotePushDefault(ctx) }},
+		{reviewed.AutoSetupMerge, func(v string) error { return r.run(ctx, "config", "branch.autoSetupMerge", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupMerge") }},
+		{reviewed.AutoSetupRebase, func(v string) error { return r.run(ctx, "config", "branch.autoSetupRebase", v) }, func() error { return r.unsetConfig(ctx, "branch.autoSetupRebase") }},
+	}
+	for _, mutation := range mutations {
+		if err := applyConfigUpdate(mutation); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func rollbackBranchConfig(path string, before []byte, existed bool, cause error) error {
+	if err := restoreConfigFile(path, before, existed); err != nil {
+		return &PartialMutationError{Operation: "configure branch", Cause: cause, Rollback: err, State: []string{"repository config may contain a subset of reviewed changes"}}
+	}
+	return cause
 }
 
 func (r *Repository) branchConfigSnapshot(ctx context.Context, branch string) (BranchConfigSnapshot, error) {

@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 func main() {

@@ -5,39 +5,46 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func (m *Model) handleStatusSearchKey(key, text string) bool {
 	if m.detailRangeStart >= 0 && m.detailRangeEnd >= 0 && (key == "n" || key == "N") {
 		return false
 	}
-	if !m.searching {
-		if key == "/" {
-			m.searching = true
-			m.searchQuery = ""
-			m.searchMatches = nil
-			m.searchIndex = 0
-			m.setMessage("Search status rows; type a query, Enter applies, Esc clears")
-			return true
-		}
-		if m.searchQuery == "" {
-			return false
-		}
-		switch key {
-		case "n":
-			m.moveStatusSearch(1)
-			return true
-		case "N":
-			m.moveStatusSearch(-1)
-			return true
-		case "esc":
-			m.clearStatusSearch()
-			m.setMessage("Search cleared")
-			return true
-		}
+	if m.searching {
+		return m.handleActiveStatusSearchKey(key, text)
+	}
+	return m.handleInactiveStatusSearchKey(key)
+}
+
+func (m *Model) handleInactiveStatusSearchKey(key string) bool {
+	if key == "/" {
+		m.searching = true
+		m.searchQuery = ""
+		m.searchMatches = nil
+		m.searchIndex = 0
+		m.setMessage("Search status rows; type a query, Enter applies, Esc clears")
+		return true
+	}
+	if m.searchQuery == "" {
 		return false
 	}
+	switch key {
+	case "n":
+		m.moveStatusSearch(1)
+	case "N":
+		m.moveStatusSearch(-1)
+	case "esc":
+		m.clearStatusSearch()
+		m.setMessage("Search cleared")
+	default:
+		return false
+	}
+	return true
+}
+
+func (m *Model) handleActiveStatusSearchKey(key, text string) bool {
 	switch key {
 	case "esc":
 		m.clearStatusSearch()

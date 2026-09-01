@@ -8,6 +8,112 @@ import (
 	"testing"
 )
 
+func TestCloneHistoryUIRequestCopiesSlices(t *testing.T) {
+	original := HistoryUIRequest{
+		Reset:     ResetOptions{Paths: []string{"reset"}},
+		Revisions: []string{"revision"},
+		Bisect:    BisectStartOptions{Paths: []string{"bisect"}},
+	}
+	cloned := cloneHistoryUIRequest(original)
+	cloned.Reset.Paths[0] = "changed reset"
+	cloned.Revisions[0] = "changed revision"
+	cloned.Bisect.Paths[0] = "changed bisect"
+	if original.Reset.Paths[0] != "reset" || original.Revisions[0] != "revision" || original.Bisect.Paths[0] != "bisect" {
+		t.Fatalf("clone mutated original: %#v", original)
+	}
+}
+
+func TestHistoryUIActionClassifiers(t *testing.T) {
+	if !isRebaseHistoryUIAction(HistoryUIRebaseStart) {
+		t.Fatal("rebase start must be classified as a rebase action")
+	}
+	if !isSequencerHistoryUIAction(HistoryUIRevertAbort) {
+		t.Fatal("revert abort must be classified as a sequencer action")
+	}
+	if !isBisectHistoryUIAction(HistoryUIBisectGood) {
+		t.Fatal("bisect good must be classified as a bisect action")
+	}
+	if isRebaseHistoryUIAction("unknown") || isSequencerHistoryUIAction("unknown") || isBisectHistoryUIAction("unknown") {
+		t.Fatal("unknown action was classified")
+	}
+}
+
+func TestReviewedHistoryUIActionIsCurrent(t *testing.T) {
+	request := HistoryUIRequest{Action: HistoryUIBisectReset}
+	state := HistoryUIState{HEAD: "head", Operation: "bisect"}
+	reviewed := ReviewedHistoryUIAction{Request: request, State: state}
+	reviewed.Token = NewConfirmationToken(historyUIIdentity(reviewed))
+	if !reviewedHistoryUIActionIsCurrent(reviewed, reviewed) {
+		t.Fatal("identical reviewed actions were stale")
+	}
+	current := reviewed
+	current.State.HEAD = "moved"
+	if reviewedHistoryUIActionIsCurrent(reviewed, current) {
+		t.Fatal("state change was accepted")
+	}
+}
+
+func TestExecuteReviewedRebaseUIAction(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("file.txt", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		request   HistoryUIRequest
+		handled   bool
+		wantError error
+		wantText  string
+	}{
+		{name: "start", request: HistoryUIRequest{Action: HistoryUIRebaseStart}, handled: true, wantText: "rebase upstream is empty"},
+		{name: "continue", request: HistoryUIRequest{Action: HistoryUIRebaseContinue}, handled: true, wantError: ErrWorkflowNotActive},
+		{name: "skip", request: HistoryUIRequest{Action: HistoryUIRebaseSkip}, handled: true, wantError: ErrWorkflowNotActive},
+		{name: "abort", request: HistoryUIRequest{Action: HistoryUIRebaseAbort}, handled: true, wantError: ErrWorkflowNotActive},
+		{name: "interactive", request: HistoryUIRequest{Action: HistoryUIRebaseInteractive}, handled: true, wantText: "rebase upstream is empty"},
+		{name: "todo", request: HistoryUIRequest{Action: HistoryUIRebaseTodo}, handled: true, wantError: ErrWorkflowNotActive},
+		{name: "unknown", request: HistoryUIRequest{Action: "unknown"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handled, err := repo.executeReviewedRebaseUIAction(context.Background(), tt.request)
+			if handled != tt.handled {
+				t.Fatalf("handled = %v, want %v", handled, tt.handled)
+			}
+			if tt.wantError != nil && !errors.Is(err, tt.wantError) {
+				t.Fatalf("error = %v, want %v", err, tt.wantError)
+			}
+			if tt.wantText != "" && (err == nil || err.Error() != tt.wantText) {
+				t.Fatalf("error = %v, want %q", err, tt.wantText)
+			}
+			if tt.wantError == nil && tt.wantText == "" && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+
+	t.Run("reset confirms reviewed request", func(t *testing.T) {
+		request := HistoryUIRequest{Action: HistoryUIReset, Reset: ResetOptions{Mode: ResetSoft, Target: "HEAD"}}
+		if err := repo.Reset(context.Background(), request.Reset); !errors.Is(err, ErrConfirmationRequired) {
+			t.Fatalf("unreviewed reset error = %v, want ErrConfirmationRequired", err)
+		}
+		var records []ProcessRecord
+		ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) {
+			records = append(records, record)
+		})
+		handled, err := repo.executeReviewedRebaseUIAction(ctx, request)
+		if !handled || err != nil {
+			t.Fatalf("execute reset = (%v, %v), want (true, nil)", handled, err)
+		}
+		if len(records) != 1 || len(records[0].Args) < 2 || records[0].Args[0] != "reset" || records[0].Args[1] != "--soft" {
+			t.Fatalf("reset records = %#v", records)
+		}
+	})
+}
+
 func TestReviewedHistoryResetBindsHEADIndexAndWorktree(t *testing.T) {
 	ctx := context.Background()
 	for _, mutate := range []struct {

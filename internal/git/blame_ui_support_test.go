@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestQueryBlameUsesLiteralPathAndReturnsLineProvenance(t *testing.T) {
@@ -45,5 +46,41 @@ func TestParseBlamePorcelainRejectsMalformedAndReportsPartialRecord(t *testing.T
 	}
 	if _, _, err := parseBlamePorcelain([]byte("not porcelain\n")); err == nil {
 		t.Fatal("malformed blame porcelain was accepted")
+	}
+}
+
+func TestParseBlamePorcelainDirectlyParsesMetadataAndBoundaryCases(t *testing.T) {
+	oid := strings.Repeat("b", 40)
+	out := []byte(oid + " 3 9 1\n" +
+		"author Ada Lovelace\n" +
+		"author-mail <ada@example.invalid>\n" +
+		"author-time 123\n" +
+		"summary Analytical engine\n" +
+		"future-boolean-field\n" +
+		"\tcontent\n")
+	lines, incomplete, err := parseBlamePorcelain(out)
+	if err != nil || incomplete || len(lines) != 1 {
+		t.Fatalf("parsed porcelain = %#v, incomplete %v, err %v", lines, incomplete, err)
+	}
+	wantTime := time.Unix(123, 0).UTC()
+	if got := lines[0]; got.Line != 9 || got.CommitID != oid || got.Author != "Ada Lovelace" || got.AuthorMail != "ada@example.invalid" || !got.AuthorTime.Equal(wantTime) || got.Summary != "Analytical engine" || got.Content != "content" {
+		t.Fatalf("line = %#v", got)
+	}
+
+	bad := [][]byte{
+		[]byte("\tcontent\n"),
+		[]byte(oid + " 1 0 1\n"),
+		[]byte(oid + " 1 1 1\nauthor-time nope\n"),
+	}
+	for _, input := range bad {
+		if _, _, err := parseBlamePorcelain(input); err == nil {
+			t.Errorf("parseBlamePorcelain(%q) succeeded", input)
+		}
+	}
+
+	doubleHeader := []byte(oid + " 1 1 1\n" + oid + " 2 2 1\n")
+	lines, incomplete, err = parseBlamePorcelain(doubleHeader)
+	if err != nil || !incomplete || len(lines) != 0 {
+		t.Fatalf("double header = %#v, incomplete %v, err %v", lines, incomplete, err)
 	}
 }

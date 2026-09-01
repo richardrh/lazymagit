@@ -72,6 +72,17 @@ func (r *Repository) RevertStart(ctx context.Context, commits []string, opts Pic
 }
 
 func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisions []string, opts PickOptions) error {
+	if err := validateHistoryApply(verb, revisions, opts); err != nil {
+		return err
+	}
+	oids, err := r.resolveHistoryApplyRevisions(ctx, verb, revisions)
+	if err != nil {
+		return err
+	}
+	return r.run(ctx, historyApplyArgs(verb, oids, opts)...)
+}
+
+func validateHistoryApply(verb string, revisions []string, opts PickOptions) error {
 	if verb != "cherry-pick" && (opts.FastForward || opts.RecordOrigin) {
 		return fmt.Errorf("%s does not support cherry-pick fast-forward or origin recording", verb)
 	}
@@ -81,17 +92,22 @@ func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisio
 	if opts.Mainline < 0 {
 		return errors.New(verb + ": mainline must be positive")
 	}
-	if err := validateHistoryStrategy(opts.Strategy); err != nil {
-		return err
-	}
+	return validateHistoryStrategy(opts.Strategy)
+}
+
+func (r *Repository) resolveHistoryApplyRevisions(ctx context.Context, verb string, revisions []string) ([]string, error) {
 	oids := make([]string, len(revisions))
 	for i, revision := range revisions {
 		oid, err := r.resolveHistoryCommit(ctx, revision)
 		if err != nil {
-			return fmt.Errorf("%s commit %d: %w", verb, i+1, err)
+			return nil, fmt.Errorf("%s commit %d: %w", verb, i+1, err)
 		}
 		oids[i] = oid
 	}
+	return oids, nil
+}
+
+func historyApplyArgs(verb string, oids []string, opts PickOptions) []string {
 	args := []string{verb}
 	if opts.NoCommit {
 		args = append(args, "--no-commit")
@@ -120,7 +136,7 @@ func (r *Repository) historyApplyStart(ctx context.Context, verb string, revisio
 	}
 	args = append(args, "--")
 	args = append(args, oids...)
-	return r.run(ctx, args...)
+	return args
 }
 
 func validateHistoryStrategy(strategy string) error {
@@ -209,28 +225,7 @@ func (r *Repository) RebaseStart(ctx context.Context, opts RebaseOptions) error 
 	if err != nil {
 		return fmt.Errorf("rebase upstream: %w", err)
 	}
-	args := []string{"rebase"}
-	if opts.KeepEmpty {
-		args = append(args, "--keep-empty")
-	}
-	if opts.RebaseMerges {
-		args = append(args, "--rebase-merges")
-	}
-	if opts.UpdateRefs {
-		args = append(args, "--update-refs")
-	}
-	if opts.Autostash {
-		args = append(args, "--autostash")
-	}
-	if opts.ForceRebase {
-		args = append(args, "--force-rebase")
-	}
-	if opts.Strategy != "" {
-		args = append(args, "--strategy="+opts.Strategy)
-	}
-	if opts.Signoff {
-		args = append(args, "--signoff")
-	}
+	args := appendRebaseStartOptions([]string{"rebase"}, opts)
 	if opts.Onto != "" {
 		onto, err := r.resolveHistoryCommit(ctx, opts.Onto)
 		if err != nil {
@@ -247,6 +242,30 @@ func (r *Repository) RebaseStart(ctx context.Context, opts RebaseOptions) error 
 		args = append(args, branch)
 	}
 	return r.run(ctx, args...)
+}
+
+func appendRebaseStartOptions(args []string, opts RebaseOptions) []string {
+	for _, option := range []struct {
+		set  bool
+		flag string
+	}{
+		{opts.KeepEmpty, "--keep-empty"},
+		{opts.RebaseMerges, "--rebase-merges"},
+		{opts.UpdateRefs, "--update-refs"},
+		{opts.Autostash, "--autostash"},
+		{opts.ForceRebase, "--force-rebase"},
+	} {
+		if option.set {
+			args = append(args, option.flag)
+		}
+	}
+	if opts.Strategy != "" {
+		args = append(args, "--strategy="+opts.Strategy)
+	}
+	if opts.Signoff {
+		args = append(args, "--signoff")
+	}
+	return args
 }
 
 func (r *Repository) RebaseUpstream(ctx context.Context, upstream string) error {
@@ -299,13 +318,7 @@ func (r *Repository) DefaultRebaseTodo(ctx context.Context, upstream string) (st
 // editor callback; this uses only lazymagit's sealed, one-shot helper rather
 // than an external editor or a user-controlled shell command.
 func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) error {
-	if strings.TrimSpace(opts.Upstream) == "" {
-		return errors.New("rebase upstream is empty")
-	}
-	if opts.RebaseMerges {
-		return errors.New("interactive todo editor does not support merge topology commands")
-	}
-	if err := validateHistoryStrategy(opts.Strategy); err != nil {
+	if err := validateInteractiveRebaseOptions(opts); err != nil {
 		return err
 	}
 	upstream, err := r.resolveHistoryCommit(ctx, opts.Upstream)
@@ -325,6 +338,28 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 		return err
 	}
 	defer cleanup()
+	args := interactiveRebaseArgs(opts)
+	args, err = r.appendInteractiveRebaseOnto(ctx, args, opts.Onto)
+	if err != nil {
+		return err
+	}
+	args = append(args, "--", upstream)
+	ctx = context.WithValue(ctx, gitSequenceEditorKey{}, editor)
+	ctx = context.WithValue(ctx, gitExtraEnvKey{}, extraEnv)
+	return r.run(ctx, args...)
+}
+
+func validateInteractiveRebaseOptions(opts RebaseOptions) error {
+	if strings.TrimSpace(opts.Upstream) == "" {
+		return errors.New("rebase upstream is empty")
+	}
+	if opts.RebaseMerges {
+		return errors.New("interactive todo editor does not support merge topology commands")
+	}
+	return validateHistoryStrategy(opts.Strategy)
+}
+
+func interactiveRebaseArgs(opts RebaseOptions) []string {
 	args := []string{"rebase", "--interactive"}
 	if opts.KeepEmpty {
 		args = append(args, "--keep-empty")
@@ -335,6 +370,10 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 	if opts.Autostash {
 		args = append(args, "--autostash")
 	}
+	return appendInteractiveRebaseExtraArgs(args, opts)
+}
+
+func appendInteractiveRebaseExtraArgs(args []string, opts RebaseOptions) []string {
 	if opts.ForceRebase {
 		args = append(args, "--force-rebase")
 	}
@@ -344,17 +383,18 @@ func (r *Repository) RebaseInteractive(ctx context.Context, opts RebaseOptions) 
 	if opts.Signoff {
 		args = append(args, "--signoff")
 	}
-	if opts.Onto != "" {
-		onto, e := r.resolveHistoryCommit(ctx, opts.Onto)
-		if e != nil {
-			return fmt.Errorf("rebase onto: %w", e)
-		}
-		args = append(args, "--onto", onto)
+	return args
+}
+
+func (r *Repository) appendInteractiveRebaseOnto(ctx context.Context, args []string, onto string) ([]string, error) {
+	if onto == "" {
+		return args, nil
 	}
-	args = append(args, "--", upstream)
-	ctx = context.WithValue(ctx, gitSequenceEditorKey{}, editor)
-	ctx = context.WithValue(ctx, gitExtraEnvKey{}, extraEnv)
-	return r.run(ctx, args...)
+	oid, err := r.resolveHistoryCommit(ctx, onto)
+	if err != nil {
+		return nil, fmt.Errorf("rebase onto: %w", err)
+	}
+	return append(args, "--onto", oid), nil
 }
 
 func (r *Repository) rebaseTodoCommits(ctx context.Context, upstream string) ([]string, error) {
@@ -429,10 +469,7 @@ func (r *Repository) canonicalRebaseTodo(ctx context.Context, todo string, expec
 	if err := ValidateRebaseTodo(todo); err != nil {
 		return "", err
 	}
-	allowed := make(map[string]bool, len(expected))
-	for _, oid := range expected {
-		allowed[oid] = true
-	}
+	allowed := rebaseTodoOIDSet(expected)
 	seen := make(map[string]bool, len(expected))
 	var out strings.Builder
 	applied := false
@@ -441,34 +478,55 @@ func (r *Repository) canonicalRebaseTodo(ctx context.Context, todo string, expec
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		fields := strings.Fields(line)
-		oid, err := r.resolveHistoryCommit(ctx, fields[1])
-		if err != nil || !allowed[oid] {
-			return "", fmt.Errorf("rebase todo line %d: revision %q is not a commit selected for this rebase", lineNumber+1, fields[1])
-		}
-		if seen[oid] {
-			return "", fmt.Errorf("rebase todo line %d: commit %s appears more than once", lineNumber+1, oid)
-		}
-		if (fields[0] == "squash" || fields[0] == "fixup") && !applied {
-			return "", fmt.Errorf("rebase todo line %d: %s requires an earlier replayed commit", lineNumber+1, fields[0])
+		canonical, oid, replayed, err := r.canonicalRebaseTodoLine(ctx, line, lineNumber+1, allowed, seen, applied)
+		if err != nil {
+			return "", err
 		}
 		seen[oid] = true
-		if fields[0] != "drop" {
-			applied = true
-		}
-		out.WriteString(fields[0])
-		out.WriteByte(' ')
-		out.WriteString(oid)
-		if len(fields) > 2 {
-			out.WriteByte(' ')
-			out.WriteString(strings.Join(fields[2:], " "))
-		}
-		out.WriteByte('\n')
+		applied = applied || replayed
+		out.WriteString(canonical)
 	}
 	if len(seen) != len(expected) {
 		return "", errors.New("rebase todo must contain every selected commit exactly once")
 	}
 	return out.String(), nil
+}
+
+func rebaseTodoOIDSet(oids []string) map[string]bool {
+	set := make(map[string]bool, len(oids))
+	for _, oid := range oids {
+		set[oid] = true
+	}
+	return set
+}
+
+func (r *Repository) canonicalRebaseTodoLine(ctx context.Context, line string, lineNumber int, allowed, seen map[string]bool, applied bool) (string, string, bool, error) {
+	fields := strings.Fields(line)
+	oid, err := r.resolveHistoryCommit(ctx, fields[1])
+	if err != nil || !allowed[oid] {
+		return "", "", false, fmt.Errorf("rebase todo line %d: revision %q is not a commit selected for this rebase", lineNumber, fields[1])
+	}
+	if seen[oid] {
+		return "", "", false, fmt.Errorf("rebase todo line %d: commit %s appears more than once", lineNumber, oid)
+	}
+	command := fields[0]
+	if (command == "squash" || command == "fixup") && !applied {
+		return "", "", false, fmt.Errorf("rebase todo line %d: %s requires an earlier replayed commit", lineNumber, command)
+	}
+	return formatCanonicalRebaseTodoLine(command, oid, fields[2:]), oid, command != "drop", nil
+}
+
+func formatCanonicalRebaseTodoLine(command, oid string, description []string) string {
+	var out strings.Builder
+	out.WriteString(command)
+	out.WriteByte(' ')
+	out.WriteString(oid)
+	if len(description) > 0 {
+		out.WriteByte(' ')
+		out.WriteString(strings.Join(description, " "))
+	}
+	out.WriteByte('\n')
+	return out.String()
 }
 
 func newRebaseTodoEditor(todo, gitDir string) (string, []string, func(), error) {
@@ -513,36 +571,48 @@ func RunRebaseTodoEditor(args []string) (bool, error) {
 	if len(args) != 4 {
 		return true, errors.New("invalid internal rebase editor invocation")
 	}
-	source, admin, destination := args[1], args[2], args[3]
-	admin = filepath.Clean(admin)
-	expected := filepath.Join(admin, "rebase-merge", "git-rebase-todo")
-	// macOS commonly presents /var through the /private/var symlink to Git.
-	// Compare resolved paths, while retaining the supplied destination for the
-	// atomic replacement below.
-	if resolved, err := filepath.EvalSymlinks(expected); err == nil {
-		expected = resolved
-	}
-	actual := filepath.Clean(destination)
-	if resolved, err := filepath.EvalSymlinks(actual); err == nil {
-		actual = resolved
-	}
-	if actual != expected {
+	source, destination := args[1], args[3]
+	if !isExpectedRebaseTodoDestination(args[2], destination) {
 		return true, errors.New("internal rebase editor refused an unexpected destination")
 	}
-	info, err := os.Lstat(source)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 1<<20 {
-		return true, errors.New("internal rebase editor source is unsafe")
-	}
-	contents, err := os.ReadFile(source)
+	contents, err := readSafeRebaseTodoSource(source)
 	if err != nil {
 		return true, err
 	}
 	if err := ValidateRebaseTodo(string(contents)); err != nil {
 		return true, err
 	}
+	return true, replaceRebaseTodo(destination, contents)
+}
+
+func isExpectedRebaseTodoDestination(admin, destination string) bool {
+	expected := filepath.Join(filepath.Clean(admin), "rebase-merge", "git-rebase-todo")
+	// macOS commonly presents /var through the /private/var symlink to Git.
+	// Compare resolved paths, while retaining the supplied destination for the
+	// atomic replacement below.
+	return resolvedPath(expected) == resolvedPath(destination)
+}
+
+func resolvedPath(path string) string {
+	clean := filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+		return resolved
+	}
+	return clean
+}
+
+func readSafeRebaseTodoSource(source string) ([]byte, error) {
+	info, err := os.Lstat(source)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() > 1<<20 {
+		return nil, errors.New("internal rebase editor source is unsafe")
+	}
+	return os.ReadFile(source)
+}
+
+func replaceRebaseTodo(destination string, contents []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(destination), "lazymagit-todo-")
 	if err != nil {
-		return true, err
+		return err
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
@@ -555,7 +625,7 @@ func RunRebaseTodoEditor(args []string) (bool, error) {
 	if err == nil {
 		err = os.Rename(name, destination)
 	}
-	return true, err
+	return err
 }
 
 func (r *Repository) WriteRebaseTodo(ctx context.Context, todo string) error {
@@ -619,8 +689,8 @@ type ResetOptions struct {
 }
 
 func (r *Repository) ResetPreflight(ctx context.Context, opts ResetOptions) (DestructivePreflight, error) {
-	if opts.Mode > ResetFile {
-		return DestructivePreflight{}, errors.New("invalid reset mode")
+	if err := validateResetPreflightOptions(opts); err != nil {
+		return DestructivePreflight{}, err
 	}
 	target := opts.Target
 	if target == "" {
@@ -630,14 +700,26 @@ func (r *Repository) ResetPreflight(ctx context.Context, opts ResetOptions) (Des
 	if err != nil {
 		return DestructivePreflight{}, fmt.Errorf("reset target: %w", err)
 	}
+	p := DestructivePreflight{Operation: "reset", Target: oid, Paths: append([]string(nil), opts.Paths...), Summary: "reset repository state to " + oid}
+	setResetPreflightLosses(&p, opts.Mode)
+	return p, nil
+}
+
+func validateResetPreflightOptions(opts ResetOptions) error {
+	if opts.Mode > ResetFile {
+		return errors.New("invalid reset mode")
+	}
 	if opts.Mode == ResetFile && len(opts.Paths) != 1 {
-		return DestructivePreflight{}, errors.New("file reset requires exactly one path")
+		return errors.New("file reset requires exactly one path")
 	}
 	if opts.Mode != ResetFile && opts.Mode != ResetWorktree && opts.Mode != ResetIndex && len(opts.Paths) != 0 {
-		return DestructivePreflight{}, errors.New("paths are only valid for index/worktree/file reset")
+		return errors.New("paths are only valid for index/worktree/file reset")
 	}
-	p := DestructivePreflight{Operation: "reset", Target: oid, Paths: append([]string(nil), opts.Paths...), Summary: "reset repository state to " + oid}
-	switch opts.Mode {
+	return nil
+}
+
+func setResetPreflightLosses(p *DestructivePreflight, mode ResetMode) {
+	switch mode {
 	case ResetSoft:
 		p.LosesHEAD = true
 	case ResetMixed:
@@ -652,7 +734,6 @@ func (r *Repository) ResetPreflight(ctx context.Context, opts ResetOptions) (Des
 	case ResetWorktree, ResetFile:
 		p.LosesWorktree = true
 	}
-	return p, nil
 }
 
 func (r *Repository) Reset(ctx context.Context, opts ResetOptions) error {
@@ -663,32 +744,39 @@ func (r *Repository) Reset(ctx context.Context, opts ResetOptions) error {
 	if !opts.allowed() {
 		return &HistoryConfirmationRequiredError{Preflight: p}
 	}
-	switch opts.Mode {
-	case ResetMixed:
-		return r.run(ctx, "reset", "--mixed", p.Target)
-	case ResetSoft:
-		return r.run(ctx, "reset", "--soft", p.Target)
-	case ResetHard:
-		return r.run(ctx, "reset", "--hard", p.Target)
-	case ResetKeep:
-		return r.run(ctx, "reset", "--keep", p.Target)
-	case ResetIndex:
-		paths := p.Paths
-		if len(paths) == 0 {
-			paths = []string{"."}
-		}
-		return r.run(ctx, pathsArgs([]string{"reset", p.Target}, paths)...)
-	case ResetWorktree:
-		paths := p.Paths
-		if len(paths) == 0 {
-			paths = []string{"."}
-		}
-		return r.run(ctx, pathsArgs([]string{"restore", "--worktree", "--source=" + p.Target}, paths)...)
-	case ResetFile:
-		return r.run(ctx, pathsArgs([]string{"restore", "--staged", "--worktree", "--source=" + p.Target}, p.Paths)...)
-	default:
-		return errors.New("invalid reset mode")
+	args, err := resetArgs(opts.Mode, p)
+	if err != nil {
+		return err
 	}
+	return r.run(ctx, args...)
+}
+
+func resetArgs(mode ResetMode, p DestructivePreflight) ([]string, error) {
+	switch mode {
+	case ResetMixed:
+		return []string{"reset", "--mixed", p.Target}, nil
+	case ResetSoft:
+		return []string{"reset", "--soft", p.Target}, nil
+	case ResetHard:
+		return []string{"reset", "--hard", p.Target}, nil
+	case ResetKeep:
+		return []string{"reset", "--keep", p.Target}, nil
+	case ResetIndex:
+		return pathsArgs([]string{"reset", p.Target}, defaultResetPaths(p.Paths)), nil
+	case ResetWorktree:
+		return pathsArgs([]string{"restore", "--worktree", "--source=" + p.Target}, defaultResetPaths(p.Paths)), nil
+	case ResetFile:
+		return pathsArgs([]string{"restore", "--staged", "--worktree", "--source=" + p.Target}, p.Paths), nil
+	default:
+		return nil, errors.New("invalid reset mode")
+	}
+}
+
+func defaultResetPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return []string{"."}
+	}
+	return paths
 }
 
 type BisectStartOptions struct {

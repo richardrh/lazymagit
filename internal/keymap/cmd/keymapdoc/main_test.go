@@ -25,3 +25,32 @@ func TestGenerateAndCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRepositoryRootFromNestedDirectoryAndMissingModule(t *testing.T) {
+	original, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(original)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(nested, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(nested); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := repositoryRoot(); err != nil || got != root {
+		t.Fatalf("repositoryRoot() = %q, %v", got, err)
+	}
+	missing := t.TempDir()
+	if err := os.Chdir(missing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repositoryRoot(); err == nil {
+		t.Fatal("repositoryRoot found a module where none exists")
+	}
+}

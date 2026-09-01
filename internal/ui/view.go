@@ -8,7 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func (m *Model) View() tea.View {
@@ -98,6 +99,8 @@ func (m *Model) renderCompactStatus(width, height int) string {
 		prefix := "  "
 		if row.kind == rowHeading {
 			prefix = map[bool]string{true: "▸ ", false: "▾ "}[m.tree.IsFolded(id)]
+		} else if m.rowMarked(row) {
+			prefix = "● "
 		}
 		style := lipgloss.NewStyle()
 		switch {
@@ -131,28 +134,43 @@ func (m *Model) renderCompactDetail(width, height int) string {
 	rangeLow, rangeHigh := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
 	for visibleIndex, line := range lines[start:min(len(lines), start+height)] {
 		absoluteIndex := start + visibleIndex
-		style := lipgloss.NewStyle().Foreground(colorText)
-		switch {
-		case m.graphActive && absoluteIndex == m.graphCursor:
-			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
-			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
-		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
-			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-		case strings.HasPrefix(line, "@@") && m.detailHunkSelected(absoluteIndex):
-			style = style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			style = style.Foreground(colorGreen)
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			style = style.Foreground(colorRed)
-		case strings.HasPrefix(line, "@@"):
-			style = style.Foreground(colorCyan)
-		case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "commit "):
-			style = style.Foreground(colorPurple).Bold(true)
-		}
+		style := m.compactDetailStyle(line, absoluteIndex, rangeLow, rangeHigh)
 		styled = append(styled, style.Render(truncate(line, width)))
 	}
 	return fitBlock(strings.Join(styled, "\n"), width, height)
+}
+
+func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) lipgloss.Style {
+	style := lipgloss.NewStyle().Foreground(colorText)
+	switch {
+	case m.graphActive && index == m.graphCursor:
+		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	case m.blameActive && index == m.blameCursor:
+		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	case rangeLow >= 0 && index >= rangeLow && index <= rangeHigh:
+		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
+	case index == m.detailHunk && strings.HasPrefix(line, "@@"):
+		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	case strings.HasPrefix(line, "@@") && m.detailHunkSelected(index):
+		return style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
+	default:
+		return compactDiffLineStyle(style, line)
+	}
+}
+
+func compactDiffLineStyle(style lipgloss.Style, line string) lipgloss.Style {
+	switch {
+	case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
+		return style.Foreground(colorGreen)
+	case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
+		return style.Foreground(colorRed)
+	case strings.HasPrefix(line, "@@"):
+		return style.Foreground(colorCyan)
+	case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "commit "):
+		return style.Foreground(colorPurple).Bold(true)
+	default:
+		return style
+	}
 }
 
 func (m *Model) renderHeader() string {
@@ -181,60 +199,71 @@ func (m *Model) renderStatusPanel(width, height int) string {
 		return fitBlock("Status", width, height)
 	}
 	innerW, innerH := width-2, height-2
-	ids := m.tree.VisibleSectionIDs()
-	cursor := 0
-	for i, id := range ids {
-		if id == m.tree.Cursor() {
-			cursor = i
-		}
-	}
-	start := 0
-	if cursor >= innerH {
-		start = cursor - innerH + 1
-	}
-	end := min(len(ids), start+innerH)
 	lines := make([]string, 0, innerH)
-	for _, id := range ids[start:end] {
-		section := m.tree.Section(id)
-		r := m.rows[id]
-		selected := id == m.tree.Cursor()
-		prefix := "  "
-		if r.kind == rowHeading {
-			if len(section.Children()) > 0 {
-				if m.tree.IsFolded(id) {
-					prefix = "▸ "
-				} else {
-					prefix = "▾ "
-				}
-			} else {
-				prefix = "  "
-			}
-		} else {
-			prefix = "    "
-		}
-		text := truncate(prefix+section.Title(), innerW)
-		style := lipgloss.NewStyle().Width(innerW)
-		if r.kind == rowHeading {
-			style = style.Bold(true).Foreground(colorPurple)
-		} else if r.kind == rowUntracked || r.kind == rowUnstaged {
-			style = style.Foreground(colorGold)
-		} else if r.kind == rowStaged {
-			style = style.Foreground(colorGreen)
-		} else {
-			style = style.Foreground(colorCyan)
-		}
-		if m.statusSearchMatch(id) {
-			style = style.Underline(true).Foreground(colorCyan)
-		}
-		if selected {
-			style = style.Reverse(true).Bold(true)
-		}
-		lines = append(lines, style.Render(text))
+	for _, id := range m.statusPanelViewport(innerH) {
+		lines = append(lines, m.renderStatusRow(id, innerW))
 	}
 	for len(lines) < innerH {
 		lines = append(lines, "")
 	}
 	return panelStyle(width, height).Render(strings.Join(lines, "\n"))
+}
+
+func (m *Model) statusPanelViewport(height int) []sectionmodel.SectionID {
+	ids := m.tree.VisibleSectionIDs()
+	cursor := 0
+	for i, id := range ids {
+		if id == m.tree.Cursor() {
+			cursor = i
+			break
+		}
+	}
+	start := max(0, cursor-height+1)
+	return ids[start:min(len(ids), start+height)]
+}
+
+func (m *Model) renderStatusRow(id sectionmodel.SectionID, width int) string {
+	section := m.tree.Section(id)
+	row := m.rows[id]
+	text := truncate(m.statusRowPrefix(id, row)+section.Title(), width)
+	return m.statusRowStyle(id, row, width).Render(text)
+}
+
+func (m *Model) statusRowPrefix(id sectionmodel.SectionID, row row) string {
+	if row.kind != rowHeading {
+		if m.rowMarked(row) {
+			return "  ● "
+		}
+		return "    "
+	}
+	if len(m.tree.Section(id).Children()) == 0 {
+		return "  "
+	}
+	if m.tree.IsFolded(id) {
+		return "▸ "
+	}
+	return "▾ "
+}
+
+func (m *Model) statusRowStyle(id sectionmodel.SectionID, row row, width int) lipgloss.Style {
+	style := lipgloss.NewStyle().Width(width)
+	switch {
+	case row.kind == rowHeading:
+		style = style.Bold(true).Foreground(colorPurple)
+	case row.kind == rowUntracked || row.kind == rowUnstaged:
+		style = style.Foreground(colorGold)
+	case row.kind == rowStaged:
+		style = style.Foreground(colorGreen)
+	default:
+		style = style.Foreground(colorCyan)
+	}
+	if m.statusSearchMatch(id) {
+		style = style.Underline(true).Foreground(colorCyan)
+	}
+	if id == m.tree.Cursor() {
+		style = style.Reverse(true).Bold(true)
+	}
+	return style
 }
 
 func (m *Model) renderDetailPanel(width, height int) string {
@@ -255,27 +284,7 @@ func (m *Model) renderDetailPanel(width, height int) string {
 	rangeLow, rangeHigh := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
 	for visibleIndex, line := range lines {
 		absoluteIndex := start + visibleIndex
-		style := lipgloss.NewStyle()
-		switch {
-		case m.graphActive && absoluteIndex == m.graphCursor:
-			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-		case rangeLow >= 0 && absoluteIndex >= rangeLow && absoluteIndex <= rangeHigh:
-			style = style.Foreground(colorOnAccent).Background(colorGold).Bold(absoluteIndex == m.detailLine)
-		case absoluteIndex == m.detailHunk && strings.HasPrefix(line, "@@"):
-			style = style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-		case strings.HasPrefix(line, "@@") && m.detailHunkSelected(absoluteIndex):
-			style = style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
-		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			style = style.Foreground(colorGreen)
-		case strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
-			style = style.Foreground(colorRed)
-		case strings.HasPrefix(line, "@@"):
-			style = style.Foreground(colorCyan)
-		case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "commit "):
-			style = style.Foreground(colorPurple).Bold(true)
-		default:
-			style = style.Foreground(colorText)
-		}
+		style := m.compactDetailStyle(line, absoluteIndex, rangeLow, rangeHigh)
 		styled = append(styled, style.Render(truncate(line, innerW)))
 	}
 	for len(styled) < innerH {
@@ -327,62 +336,11 @@ func panelStyle(outerWidth, outerHeight int) lipgloss.Style {
 }
 
 func (m *Model) renderFooter() string {
-	prefix := m.resolver.PendingPrefix()
 	scheme := "Vim"
 	if m.scheme == schemeMagit {
 		scheme = "Magit"
 	}
-	var left string
-	if prefix != "" {
-		if m.resolver.ActiveTransient() != "" {
-			catalog, _ := m.activeTransientCatalog()
-			left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] " + catalog.Title + " — choose a suffix")
-		} else {
-			left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("[" + scheme + "] g …  g → first")
-		}
-	} else if m.mode == modeStatus && m.graphActive {
-		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Graph") + lipgloss.NewStyle().Foreground(colorMuted).Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
-	} else if m.mode == modeStatus && m.revisionActive {
-		controls := "  p first parent  Esc close"
-		if m.graphReturn != nil {
-			controls = "  p first parent  Esc return graph"
-		}
-		left = lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render("Revision") + lipgloss.NewStyle().Foreground(colorMuted).Render(controls)
-	} else if m.mode == modeStatus {
-		workflow := func(key, label string) string {
-			return lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(key) + " " + label
-		}
-		var primary []string
-		for _, binding := range keymap.PrimaryBindings(schemeID(m.scheme)) {
-			primary = append(primary, workflow(binding.Display, binding.Label))
-		}
-		left = strings.Join(primary, "  ")
-		optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "Ctrl-B Blame", "$ Processes", "Ctrl-G Graph", "? Commands"}
-		if m.scheme == schemeMagit {
-			optional = append(optional, "[Magit] F2 Vim", "n/p move")
-		} else {
-			optional = append(optional, "[Vim] F2 Magit", "j/k move")
-		}
-		for _, item := range optional {
-			candidate := left + "  " + lipgloss.NewStyle().Foreground(colorMuted).Render(item)
-			if ansi.StringWidth(candidate) <= m.width {
-				left = candidate
-			}
-		}
-	} else {
-		switch m.mode {
-		case modeCommit, modeConfirm, modeAddRemote:
-			left = lipgloss.NewStyle().Foreground(colorMuted).Render("Esc cancel")
-		case modeWorkflow:
-			left = lipgloss.NewStyle().Foreground(colorMuted).Render("Tab/↑/↓ field  Enter edit/submit  Esc cancel")
-		case modeHelp:
-			left = lipgloss.NewStyle().Foreground(colorMuted).Render("q/Esc close  ↑/↓ PageUp/PageDown")
-		case modeProcess:
-			left = lipgloss.NewStyle().Foreground(colorMuted).Render("y Copy output  $/q Close  ↑/↓ PageUp/PageDown")
-		default:
-			left = lipgloss.NewStyle().Foreground(colorMuted).Render("q/Esc back")
-		}
-	}
+	left := m.footerLeft(scheme)
 	messageStyle := lipgloss.NewStyle().Foreground(colorCyan)
 	if m.isError {
 		messageStyle = messageStyle.Foreground(colorRed).Bold(true)
@@ -395,13 +353,84 @@ func (m *Model) renderFooter() string {
 	return truncate(left+"  "+truncate(message, available), m.width)
 }
 
-func (m *Model) renderOverlay(height int) string {
-	if pending := m.resolver.PendingPrefix(); pending != "" && pending != "g" {
-		if m.resolver.ActiveTransient() != "" {
-			prefix := transientInvocationRoot(pending)
-			catalog, _ := m.transientCatalog(prefix)
-			return renderTransient(catalog, m.width, height, m.transientOffset)
+func (m *Model) footerLeft(scheme string) string {
+	if m.resolver.PendingPrefix() != "" {
+		return m.pendingFooter(scheme)
+	}
+	if m.mode == modeStatus {
+		return m.statusFooter()
+	}
+	return modeFooter(m.mode)
+}
+
+func (m *Model) pendingFooter(scheme string) string {
+	text := "[" + scheme + "] g …  g → first"
+	if m.resolver.ActiveTransient() != "" {
+		catalog, _ := m.activeTransientCatalog()
+		text = "[" + scheme + "] " + catalog.Title + " — choose a suffix"
+	}
+	return lipgloss.NewStyle().Foreground(colorGold).Bold(true).Render(text)
+}
+
+func (m *Model) statusFooter() string {
+	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
+	if m.graphActive {
+		return gold.Render("Graph") + muted.Render("  ↑/↓ select  Enter inspect  c cherry-pick  V revert  X reset  Esc close")
+	}
+	if m.blameActive {
+		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
+	}
+	if m.conflictInspectPath != "" {
+		return gold.Render("Conflict") + muted.Render("  1 base inspect-only  2 ours  3 theirs  r review resolution  Esc close")
+	}
+	if m.revisionActive {
+		controls := "  p first parent  Esc close"
+		if m.graphReturn != nil {
+			controls = "  p first parent  Esc return graph"
 		}
+		return gold.Render("Revision") + muted.Render(controls)
+	}
+	var primary []string
+	for _, binding := range keymap.PrimaryBindings(schemeID(m.scheme)) {
+		primary = append(primary, gold.Render(binding.Display)+" "+binding.Label)
+	}
+	return m.appendOptionalFooter(strings.Join(primary, "  "), muted)
+}
+
+func (m *Model) appendOptionalFooter(left string, style lipgloss.Style) string {
+	optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "Ctrl-B Blame", "$ Processes", "Ctrl-G Graph", "Alt-M Mark", "? Commands"}
+	if m.scheme == schemeMagit {
+		optional = append(optional, "[Magit] F2 Vim", "n/p move")
+	} else {
+		optional = append(optional, "[Vim] F2 Magit", "j/k move")
+	}
+	for _, item := range optional {
+		candidate := left + "  " + style.Render(item)
+		if ansi.StringWidth(candidate) <= m.width {
+			left = candidate
+		}
+	}
+	return left
+}
+
+func modeFooter(current mode) string {
+	text := "q/Esc back"
+	switch current {
+	case modeCommit, modeConfirm, modeAddRemote:
+		text = "Esc cancel"
+	case modeWorkflow:
+		text = "Tab/↑/↓ field  Enter edit/submit  Esc cancel"
+	case modeHelp:
+		text = "q/Esc close  ↑/↓ PageUp/PageDown"
+	case modeProcess:
+		text = "y Copy output  $/q Close  ↑/↓ PageUp/PageDown"
+	}
+	return lipgloss.NewStyle().Foreground(colorMuted).Render(text)
+}
+
+func (m *Model) renderOverlay(height int) string {
+	if overlay, ok := m.renderTransientOverlay(height); ok {
+		return overlay
 	}
 	if m.mode == modeRemotes {
 		return m.renderRemoteOverlay(height)
@@ -411,63 +440,89 @@ func (m *Model) renderOverlay(height int) string {
 	}
 	width := m.width
 	innerW, innerH := width-4, height-2 // Horizontal padding and border; vertical border.
-	var title, content string
-	switch m.mode {
-	case modeCommit:
-		title = " Commit message "
-		content = "Create commit\n\n> " + sanitizeSingleLine(m.input) + "█\n\nEnter commit  •  Esc cancel"
-	case modeConfirm:
-		title = " Confirm discard "
-		content = "Permanently discard changes to:\n\n" + sanitizeSingleLine(m.confirmPath) + "\n\n[y] yes    [n] no"
-	case modeBranches:
-		title = " Switch branch "
-		var lines []string
-		start := max(0, m.branchCursor-(innerH-4)/2)
-		end := min(len(m.branches), start+max(1, innerH-4))
-		for i := start; i < end; i++ {
-			mark := "  "
-			if m.branches[i].Current {
-				mark = "* "
-			}
-			line := mark + sanitizeSingleLine(m.branches[i].Name)
-			if i == m.branchCursor {
-				line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) == 0 {
-			lines = append(lines, "No local branches")
-		}
-		content = strings.Join(lines, "\n") + "\n\nEnter switch  •  q back"
-	case modeAddRemote:
-		title = " Add remote "
-		fields := [2]string{"Name", "URL"}
-		var lines []string
-		for i, label := range fields {
-			mark := "  "
-			if i == m.remoteField {
-				mark = "▶ "
-			}
-			value := sanitizeSingleLine(m.remoteInput[i])
-			if i == m.remoteField {
-				value += "█"
-			}
-			lines = append(lines, mark+label+": "+value)
-		}
-		fetch := "yes"
-		if !m.remoteFetch {
-			fetch = "no"
-		}
-		content = strings.Join(lines, "\n\n") + "\n\nFetch after add: " + fetch + " (Ctrl-f toggle)\n\nTab/↑/↓ field  •  Enter next/add  •  Esc cancel"
-	case modeHelp:
+	if m.mode == modeHelp {
 		return renderDispatcher(m.dispatcherCatalog(), m.width, height, m.transientOffset)
-	case modeWorkflow:
+	}
+	if m.mode == modeWorkflow {
 		return m.renderWorkflowOverlay(width, height)
 	}
+	title, content := m.basicOverlayContent(innerW, innerH)
 	heading := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(title)
 	text := fitBlock(heading+"\n\n"+content, innerW, innerH)
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
 		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func (m *Model) renderTransientOverlay(height int) (string, bool) {
+	pending := m.resolver.PendingPrefix()
+	if pending == "" || pending == "g" || m.resolver.ActiveTransient() == "" {
+		return "", false
+	}
+	catalog, _ := m.transientCatalog(transientInvocationRoot(pending))
+	return renderTransient(catalog, m.width, height, m.transientOffset), true
+}
+
+func (m *Model) basicOverlayContent(innerW, innerH int) (string, string) {
+	switch m.mode {
+	case modeCommit:
+		return " Commit message ", "Create commit\n\n> " + sanitizeSingleLine(m.input) + "█\n\nEnter commit  •  Esc cancel"
+	case modeConfirm:
+		return " Confirm discard ", discardConfirmationText(m.confirmPath, m.confirmPaths)
+	case modeBranches:
+		return " Switch branch ", m.branchOverlayContent(innerW, innerH)
+	case modeAddRemote:
+		return " Add remote ", m.addRemoteOverlayContent()
+	default:
+		return "", ""
+	}
+}
+
+func discardConfirmationText(fallback string, paths []string) string {
+	if len(paths) == 0 && fallback != "" {
+		paths = []string{fallback}
+	}
+	lines := make([]string, 0, len(paths))
+	for _, path := range paths {
+		lines = append(lines, "• "+sanitizeSingleLine(path))
+	}
+	return "Permanently discard changes to:\n\n" + strings.Join(lines, "\n") + "\n\n[y] yes    [n] no"
+}
+
+func (m *Model) branchOverlayContent(innerW, innerH int) string {
+	var lines []string
+	start := max(0, m.branchCursor-(innerH-4)/2)
+	end := min(len(m.branches), start+max(1, innerH-4))
+	for i := start; i < end; i++ {
+		mark := "  "
+		if m.branches[i].Current {
+			mark = "* "
+		}
+		line := mark + sanitizeSingleLine(m.branches[i].Name)
+		if i == m.branchCursor {
+			line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "No local branches")
+	}
+	return strings.Join(lines, "\n") + "\n\nEnter switch  •  q back"
+}
+
+func (m *Model) addRemoteOverlayContent() string {
+	fields, lines := [2]string{"Name", "URL"}, []string{}
+	for i, label := range fields {
+		mark, value := "  ", sanitizeSingleLine(m.remoteInput[i])
+		if i == m.remoteField {
+			mark, value = "▶ ", value+"█"
+		}
+		lines = append(lines, mark+label+": "+value)
+	}
+	fetch := "yes"
+	if !m.remoteFetch {
+		fetch = "no"
+	}
+	return strings.Join(lines, "\n\n") + "\n\nFetch after add: " + fetch + " (Ctrl-f toggle)\n\nTab/↑/↓ field  •  Enter next/add  •  Esc cancel"
 }
 
 func (m *Model) renderWorkflowOverlay(width, height int) string {
@@ -499,10 +554,7 @@ func renderWorkflowFields(w *workflowState) []string {
 }
 
 func renderWorkflowField(field WorkflowField, selected bool) []string {
-	mark := "  "
-	if selected {
-		mark = "▶ "
-	}
+	mark := workflowFieldMark(selected)
 	if field.Kind == WorkflowSearch {
 		return renderWorkflowSearchField(field, mark, selected)
 	}
@@ -510,20 +562,17 @@ func renderWorkflowField(field WorkflowField, selected bool) []string {
 		return renderWorkflowMultilineField(field, mark, selected)
 	}
 	value := workflowFieldValue(field)
-	if field.Kind == WorkflowMultiline {
-		lines := []string{mark + sanitizeSingleLine(field.Label) + " (Ctrl-J new line):"}
-		for _, line := range strings.Split(value, "\n") {
-			lines = append(lines, "    "+sanitizeSingleLine(line))
-		}
-		if selected {
-			lines[len(lines)-1] += "█"
-		}
-		return lines
-	}
 	if selected && (field.Kind == WorkflowText || field.Kind == WorkflowConfirm) {
 		value += "█"
 	}
 	return []string{mark + sanitizeSingleLine(field.Label) + ": " + sanitizeSingleLine(value)}
+}
+
+func workflowFieldMark(selected bool) string {
+	if selected {
+		return "▶ "
+	}
+	return "  "
 }
 
 func renderWorkflowMultilineField(field WorkflowField, mark string, selected bool) []string {

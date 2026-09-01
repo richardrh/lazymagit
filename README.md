@@ -7,12 +7,25 @@ prefixes with an optional Vim navigation layer.
 ![Go](https://img.shields.io/badge/Go-1.25+-00ADD8)
 ![TUI](https://img.shields.io/badge/TUI-Bubble_Tea_v2-7D56F4)
 
+## Screenshots
+
+### Status and diff
+
+![Lazymagit status view showing staged, unstaged, and untracked files beside a selected diff](docs/images/lazymagit-status.png)
+
+### Command dispatcher
+
+![Lazymagit command dispatcher showing Magit-style transient command groups](docs/images/lazymagit-commands.png)
+
 ## Features
 
 - Porcelain-v2 status parsing with separate staged and unstaged state
 - Safe handling of spaces, Unicode, leading dashes, and Git pathspec magic
 - Stable, foldable sections for untracked, unstaged, staged, upstream, and log
-- Whole-file and reviewed file/hunk/multi-hunk/disjoint-region stage, unstage, and discard
+- Persistent selectable log/graph rows with contextual cherry-pick, revert, reset, and revision inspection
+- Selectable blame lines with exact commit drilldown and restored cursor position
+- Three-stage conflict inspection with direct reviewed ours/theirs resolution
+- Marked multi-file and reviewed file/hunk/multi-hunk/disjoint-region stage, unstage, and discard
 - Stale-safe interactive patch reviews that revalidate the exact source diff before mutation and reject unresolved conflicts
 - Commit creation, revision inspection, searchable branch switching, remote add, fetch, and push
 - Reviewed merge, non-interactive rebase, cherry-pick/revert, reset, and bisect workflows with stale-state rejection
@@ -24,6 +37,40 @@ prefixes with an optional Vim navigation layer.
 - Asynchronous Git operations with stale-result protection
 - Bounded Magit-style Git process transcript with terminal-safe clipboard copy
 - Terminal-control sanitization for untrusted repository content
+
+## Install
+
+### Go
+
+With Go 1.25 or newer installed:
+
+```sh
+go install github.com/richardrh/lazymagit/cmd/lazymagit@latest
+```
+
+The binary is installed into `$(go env GOPATH)/bin` unless `GOBIN` is set.
+
+### Linux release packages
+
+Each tagged GitHub release publishes `amd64` and `arm64` binaries plus native
+Debian, RPM, and Arch Linux packages. Download the package for your architecture
+from the [releases page](https://github.com/richardrh/lazymagit/releases), then
+install it with the platform package manager:
+
+```sh
+# Ubuntu or Debian
+sudo apt install ./lazymagit_*_linux_amd64.deb
+
+# Fedora or another RPM-based distribution
+sudo dnf install ./lazymagit_*_linux_amd64.rpm
+
+# Arch Linux
+sudo pacman -U ./lazymagit_*_linux_amd64.pkg.tar.zst
+```
+
+Generic Linux, macOS, and Windows archives and `checksums.txt` are published in
+the same release. The first release will be available after the `v0.1.0` tag is
+created on the merged release commit.
 
 ## Build
 

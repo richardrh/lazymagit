@@ -163,33 +163,9 @@ func (r *Repository) AddIgnoreRule(ctx context.Context, rule, directory string, 
 	if rule == "" || strings.ContainsAny(rule, "\r\n") {
 		return "", errors.New("ignore rule must be one non-empty line")
 	}
-	var path string
-	stage := false
-	switch target {
-	case IgnoreTopLevel:
-		path, stage = filepath.Join(r.workTree, ".gitignore"), true
-	case IgnoreSubdirectory:
-		dir, err := validateRepoRelative(directory, true)
-		if err != nil {
-			return "", err
-		}
-		path, stage = filepath.Join(r.workTree, dir, ".gitignore"), true
-	case IgnoreRepositoryExclude:
-		path = filepath.Join(r.gitDir, "info", "exclude")
-	case IgnoreGlobalExclude:
-		configured, ok, err := r.configValue(ctx, "core.excludesFile")
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", errors.New("core.excludesFile is not configured")
-		}
-		path, err = expandUserPath(configured)
-		if err != nil {
-			return "", err
-		}
-	default:
-		return "", errors.New("unknown ignore target")
+	path, stage, err := r.ignoreRulePath(ctx, directory, target)
+	if err != nil {
+		return "", err
 	}
 	if stage {
 		if err := ensurePathParentWithin(r.workTree, path); err != nil {
@@ -199,16 +175,48 @@ func (r *Repository) AddIgnoreRule(ctx context.Context, rule, directory string, 
 	if err := appendRule(path, rule); err != nil {
 		return "", err
 	}
-	if stage {
-		rel, err := filepath.Rel(r.workTree, path)
-		if err != nil {
-			return "", err
-		}
-		if err := r.stageAppendedIgnoreRule(ctx, filepath.ToSlash(rel), rule); err != nil {
-			return "", err
-		}
+	if err := r.stageIgnoreRuleIfNeeded(ctx, path, rule, stage); err != nil {
+		return "", err
 	}
 	return path, nil
+}
+
+func (r *Repository) ignoreRulePath(ctx context.Context, directory string, target IgnoreTarget) (string, bool, error) {
+	switch target {
+	case IgnoreTopLevel:
+		return filepath.Join(r.workTree, ".gitignore"), true, nil
+	case IgnoreSubdirectory:
+		dir, err := validateRepoRelative(directory, true)
+		if err != nil {
+			return "", false, err
+		}
+		return filepath.Join(r.workTree, dir, ".gitignore"), true, nil
+	case IgnoreRepositoryExclude:
+		return filepath.Join(r.gitDir, "info", "exclude"), false, nil
+	case IgnoreGlobalExclude:
+		configured, ok, err := r.configValue(ctx, "core.excludesFile")
+		if err != nil {
+			return "", false, err
+		}
+		if !ok {
+			return "", false, errors.New("core.excludesFile is not configured")
+		}
+		path, err := expandUserPath(configured)
+		return path, false, err
+	default:
+		return "", false, errors.New("unknown ignore target")
+	}
+}
+
+func (r *Repository) stageIgnoreRuleIfNeeded(ctx context.Context, path, rule string, stage bool) error {
+	if !stage {
+		return nil
+	}
+	rel, err := filepath.Rel(r.workTree, path)
+	if err != nil {
+		return err
+	}
+	return r.stageAppendedIgnoreRule(ctx, filepath.ToSlash(rel), rule)
 }
 
 // stageAppendedIgnoreRule updates only the index version of the appended rule;
@@ -376,27 +384,12 @@ func (r *Repository) RenamePath(ctx context.Context, source, destination string)
 	if err := r.requireWorkTree(); err != nil {
 		return err
 	}
-	src, err := validateRepoRelative(source, false)
-	if err != nil {
-		return err
-	}
-	dst, err := validateRepoRelative(destination, false)
+	src, dst, err := validateRenamePaths(source, destination)
 	if err != nil {
 		return err
 	}
 	srcFull, dstFull := filepath.Join(r.workTree, src), filepath.Join(r.workTree, dst)
-	if err := ensurePathParentWithin(r.workTree, srcFull); err != nil {
-		return err
-	}
-	if err := ensurePathParentWithin(r.workTree, dstFull); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(srcFull); err != nil {
-		return fmt.Errorf("inspect rename source: %w", err)
-	}
-	if _, err := os.Lstat(dstFull); err == nil {
-		return fmt.Errorf("%w: destination already exists", ErrUnsafeDestination)
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := validateRenameFilesystem(r.workTree, srcFull, dstFull); err != nil {
 		return err
 	}
 	tracked, err := r.output(ctx, "ls-files", "-z", "--", filepath.ToSlash(src))
@@ -410,6 +403,33 @@ func (r *Repository) RenamePath(ctx context.Context, source, destination string)
 		return err
 	}
 	return os.Rename(srcFull, dstFull)
+}
+
+func validateRenamePaths(source, destination string) (string, string, error) {
+	src, err := validateRepoRelative(source, false)
+	if err != nil {
+		return "", "", err
+	}
+	dst, err := validateRepoRelative(destination, false)
+	return src, dst, err
+}
+
+func validateRenameFilesystem(root, source, destination string) error {
+	if err := ensurePathParentWithin(root, source); err != nil {
+		return err
+	}
+	if err := ensurePathParentWithin(root, destination); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(source); err != nil {
+		return fmt.Errorf("inspect rename source: %w", err)
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return fmt.Errorf("%w: destination already exists", ErrUnsafeDestination)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 type Worktree struct {
@@ -544,6 +564,13 @@ func safeNewDirectory(path string) error {
 	if abs == string(filepath.Separator) {
 		return fmt.Errorf("%w: destination is filesystem root", ErrUnsafeDestination)
 	}
+	if err := validateNewDirectoryDestination(abs); err != nil {
+		return err
+	}
+	return validateNewDirectoryParent(filepath.Dir(abs))
+}
+
+func validateNewDirectoryDestination(abs string) error {
 	if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: destination is a symbolic link", ErrUnsafeDestination)
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -563,7 +590,10 @@ func safeNewDirectory(path string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	parent := filepath.Dir(abs)
+	return nil
+}
+
+func validateNewDirectoryParent(parent string) error {
 	for {
 		if info, err := os.Stat(parent); err == nil {
 			if !info.IsDir() {
@@ -612,6 +642,16 @@ func (r *Repository) MoveWorktree(ctx context.Context, source, destination strin
 	if err != nil {
 		return err
 	}
+	if err := validateWorktreeMove(ctx, wt, force); err != nil {
+		return err
+	}
+	if err := safeNewDirectory(destination); err != nil {
+		return err
+	}
+	return r.managementRun(ctx, worktreeMoveArgs(source, destination, force, wt.Locked)...)
+}
+
+func validateWorktreeMove(ctx context.Context, wt Worktree, force ConfirmedForce) error {
 	if wt.Primary {
 		return ErrPrimaryWorktree
 	}
@@ -625,18 +665,18 @@ func (r *Repository) MoveWorktree(ctx context.Context, source, destination strin
 	if dirty && force != Confirmed {
 		return ErrDirtyWorktree
 	}
-	if err := safeNewDirectory(destination); err != nil {
-		return err
-	}
+	return nil
+}
+
+func worktreeMoveArgs(source, destination string, force ConfirmedForce, locked bool) []string {
 	args := []string{"worktree", "move"}
 	if force == Confirmed {
 		args = append(args, "--force")
-		if wt.Locked {
-			args = append(args, "--force")
-		}
 	}
-	args = append(args, "--", source, destination)
-	return r.managementRun(ctx, args...)
+	if force == Confirmed && locked {
+		args = append(args, "--force")
+	}
+	return append(args, "--", source, destination)
 }
 
 func (r *Repository) RemoveWorktree(ctx context.Context, path string, force ConfirmedForce) error {
@@ -871,18 +911,34 @@ type SubmoduleUpdateOptions struct {
 }
 
 func (r *Repository) UpdateSubmodules(ctx context.Context, paths []string, o SubmoduleUpdateOptions) error {
+	if err := validateSubmoduleUpdateOptions(o); err != nil {
+		return err
+	}
+	return r.submodulePaths(ctx, submoduleUpdateArgs(o), paths)
+}
+
+func validateSubmoduleUpdateOptions(o SubmoduleUpdateOptions) error {
 	if o.Depth < 0 || o.Jobs < 0 {
 		return errors.New("depth and jobs cannot be negative")
 	}
-	modes := 0
-	for _, v := range []bool{o.Rebase, o.Merge, o.Checkout} {
-		if v {
-			modes++
-		}
-	}
+	modes := boolCount(o.Rebase, o.Merge, o.Checkout)
 	if modes > 1 {
 		return errors.New("submodule update modes are mutually exclusive")
 	}
+	return nil
+}
+
+func boolCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
+}
+
+func submoduleUpdateArgs(o SubmoduleUpdateOptions) []string {
 	args := []string{"submodule", "update"}
 	if o.Init {
 		args = append(args, "--init")
@@ -914,7 +970,7 @@ func (r *Repository) UpdateSubmodules(ctx context.Context, paths []string, o Sub
 	if o.Jobs > 0 {
 		args = append(args, "--jobs", strconv.Itoa(o.Jobs))
 	}
-	return r.submodulePaths(ctx, args, paths)
+	return args
 }
 func (r *Repository) SyncSubmodules(ctx context.Context, paths []string, recursive bool) error {
 	args := []string{"submodule", "sync"}
@@ -966,14 +1022,7 @@ func (r *Repository) RemoveSubmodule(ctx context.Context, path string, confirm C
 	if err != nil {
 		return err
 	}
-	var moduleName string
-	for _, module := range modules {
-		modulePath, pathErr := validateRepoRelative(module.Path, false)
-		if pathErr == nil && modulePath == rel {
-			moduleName = module.Name
-			break
-		}
-	}
+	moduleName := configuredSubmoduleName(modules, rel)
 	if moduleName == "" {
 		return fmt.Errorf("path %q is not a configured submodule", path)
 	}
@@ -981,16 +1030,7 @@ func (r *Repository) RemoveSubmodule(ctx context.Context, path string, confirm C
 	if err != nil {
 		return fmt.Errorf("unsafe submodule metadata name: %w", err)
 	}
-	full := filepath.Join(r.workTree, rel)
-	if _, err := os.Stat(filepath.Join(full, ".git")); err == nil {
-		dirty, err := worktreeDirty(ctx, full)
-		if err != nil {
-			return err
-		}
-		if dirty {
-			return ErrDirtyWorktree
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	if err := ensureCleanInitializedSubmodule(ctx, filepath.Join(r.workTree, rel)); err != nil {
 		return err
 	}
 	if err := r.managementRun(ctx, "submodule", "deinit", "--force", "--", filepath.ToSlash(rel)); err != nil {
@@ -1004,6 +1044,34 @@ func (r *Repository) RemoveSubmodule(ctx context.Context, path string, confirm C
 	// and only when its configured name cannot escape $GIT_DIR/modules.
 	if err := os.RemoveAll(filepath.Join(r.gitDir, "modules", metadataName)); err != nil {
 		return fmt.Errorf("remove submodule metadata: %w", err)
+	}
+	return nil
+}
+
+func configuredSubmoduleName(modules []Submodule, rel string) string {
+	for _, module := range modules {
+		modulePath, err := validateRepoRelative(module.Path, false)
+		if err == nil && modulePath == rel {
+			return module.Name
+		}
+	}
+	return ""
+}
+
+func ensureCleanInitializedSubmodule(ctx context.Context, full string) error {
+	_, err := os.Stat(filepath.Join(full, ".git"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	dirty, err := worktreeDirty(ctx, full)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return ErrDirtyWorktree
 	}
 	return nil
 }
@@ -1030,43 +1098,8 @@ type SubtreeOptions struct {
 }
 
 func (r *Repository) subtreeRun(ctx context.Context, action string, o SubtreeOptions) error {
-	if o.Prefix == "" {
-		return errors.New("subtree prefix is required")
-	}
-	invalid := func(message string) error { return fmt.Errorf("subtree %s: %s", action, message) }
-	for name, value := range map[string]string{"repository": o.Repository, "ref": o.Ref, "branch": o.Branch} {
-		if value != "" && (strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n")) {
-			return invalid(name + " is option-like or contains a control character")
-		}
-	}
-	switch action {
-	case "add":
-		if o.Ref == "" {
-			return invalid("ref is required")
-		}
-		if o.Branch != "" {
-			return invalid("branch is not supported")
-		}
-	case "merge":
-		if o.Ref == "" {
-			return invalid("commit is required")
-		}
-		if o.Repository != "" || o.Branch != "" {
-			return invalid("repository and branch are not supported")
-		}
-	case "pull", "push":
-		if o.Repository == "" || o.Ref == "" {
-			return invalid("repository and ref are required")
-		}
-		if o.Branch != "" || action == "push" && (o.Squash || o.Message != "") {
-			return invalid("unsupported options")
-		}
-	case "split":
-		if o.Repository != "" || o.Ref != "" || o.Squash || o.Message != "" {
-			return invalid("repository, ref, squash, and message are not supported")
-		}
-	default:
-		return invalid("unknown operation")
+	if err := validateSubtreeOptions(action, o); err != nil {
+		return err
 	}
 	ok, err := r.HasSubtree(ctx)
 	if err != nil {
@@ -1075,6 +1108,82 @@ func (r *Repository) subtreeRun(ctx context.Context, action string, o SubtreeOpt
 	if !ok {
 		return ErrSubtreeUnavailable
 	}
+	return r.managementRun(ctx, subtreeArgs(action, o)...)
+}
+
+func validateSubtreeOptions(action string, o SubtreeOptions) error {
+	if o.Prefix == "" {
+		return errors.New("subtree prefix is required")
+	}
+	if err := validateSubtreeTokens(action, o); err != nil {
+		return err
+	}
+	var message string
+	switch action {
+	case "add":
+		message = validateSubtreeAdd(o)
+	case "merge":
+		message = validateSubtreeMerge(o)
+	case "pull", "push":
+		message = validateSubtreeTransfer(action, o)
+	case "split":
+		message = validateSubtreeSplit(o)
+	default:
+		message = "unknown operation"
+	}
+	if message != "" {
+		return fmt.Errorf("subtree %s: %s", action, message)
+	}
+	return nil
+}
+
+func validateSubtreeAdd(o SubtreeOptions) string {
+	if o.Ref == "" {
+		return "ref is required"
+	}
+	if o.Branch != "" {
+		return "branch is not supported"
+	}
+	return ""
+}
+
+func validateSubtreeMerge(o SubtreeOptions) string {
+	if o.Ref == "" {
+		return "commit is required"
+	}
+	if o.Repository != "" || o.Branch != "" {
+		return "repository and branch are not supported"
+	}
+	return ""
+}
+
+func validateSubtreeTransfer(action string, o SubtreeOptions) string {
+	if o.Repository == "" || o.Ref == "" {
+		return "repository and ref are required"
+	}
+	if o.Branch != "" || action == "push" && (o.Squash || o.Message != "") {
+		return "unsupported options"
+	}
+	return ""
+}
+
+func validateSubtreeSplit(o SubtreeOptions) string {
+	if o.Repository != "" || o.Ref != "" || o.Squash || o.Message != "" {
+		return "repository, ref, squash, and message are not supported"
+	}
+	return ""
+}
+
+func validateSubtreeTokens(action string, o SubtreeOptions) error {
+	for name, value := range map[string]string{"repository": o.Repository, "ref": o.Ref, "branch": o.Branch} {
+		if value != "" && (strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n")) {
+			return fmt.Errorf("subtree %s: %s is option-like or contains a control character", action, name)
+		}
+	}
+	return nil
+}
+
+func subtreeArgs(action string, o SubtreeOptions) []string {
 	args := []string{"subtree", action, "--prefix", o.Prefix}
 	if o.Repository != "" {
 		args = append(args, o.Repository)
@@ -1091,7 +1200,7 @@ func (r *Repository) subtreeRun(ctx context.Context, action string, o SubtreeOpt
 	if o.Branch != "" {
 		args = append(args, "--branch", o.Branch)
 	}
-	return r.managementRun(ctx, args...)
+	return args
 }
 func (r *Repository) AddSubtree(ctx context.Context, o SubtreeOptions) error {
 	return r.subtreeRun(ctx, "add", o)
@@ -1125,9 +1234,7 @@ func appendCloneNoTags(args []string, noTags bool) []string {
 	return args
 }
 
-// CloneRepository clones into destination without discovering it and therefore
-// cannot alter any existing Repository value.
-func CloneRepository(ctx context.Context, source, destination string, o CloneOptions) error {
+func validateCloneRequest(source, destination string, o CloneOptions) error {
 	if source == "" {
 		return errors.New("clone source is empty")
 	}
@@ -1137,43 +1244,53 @@ func CloneRepository(ctx context.Context, source, destination string, o CloneOpt
 	if o.Depth < 0 || o.Jobs < 0 {
 		return errors.New("depth and jobs cannot be negative")
 	}
-	if err := safeNewDirectory(destination); err != nil {
+	return safeNewDirectory(destination)
+}
+
+func cloneArgs(source, destination string, o CloneOptions) []string {
+	args := appendCloneModes([]string{"clone"}, o)
+	args = appendCloneValues(args, o)
+	return append(args, "--", source, destination)
+}
+
+func appendCloneModes(args []string, o CloneOptions) []string {
+	for _, option := range []struct {
+		set  bool
+		flag string
+	}{{o.Bare, "--bare"}, {o.Mirror, "--mirror"}, {o.NoCheckout, "--no-checkout"}, {o.SingleBranch, "--single-branch"}, {o.NoTags, "--no-tags"}, {o.RecurseSubmodules, "--recurse-submodules"}} {
+		if option.set {
+			args = append(args, option.flag)
+		}
+	}
+	return args
+}
+
+func appendCloneValues(args []string, o CloneOptions) []string {
+	for _, option := range []struct{ flag, value string }{{"--branch", o.Branch}, {"--depth", positiveInt(o.Depth)}, {"--jobs", positiveInt(o.Jobs)}, {"--origin", o.Origin}} {
+		if option.value != "" {
+			args = append(args, option.flag, option.value)
+		}
+	}
+	return args
+}
+
+func positiveInt(value int) string {
+	if value > 0 {
+		return strconv.Itoa(value)
+	}
+	return ""
+}
+
+// CloneRepository clones into destination without discovering it and therefore
+// cannot alter any existing Repository value.
+func CloneRepository(ctx context.Context, source, destination string, o CloneOptions) error {
+	if err := validateCloneRequest(source, destination, o); err != nil {
 		return err
 	}
-	args := []string{"clone"}
-	if o.Bare {
-		args = append(args, "--bare")
-	}
-	if o.Mirror {
-		args = append(args, "--mirror")
-	}
-	if o.NoCheckout {
-		args = append(args, "--no-checkout")
-	}
-	if o.SingleBranch {
-		args = append(args, "--single-branch")
-	}
-	args = appendCloneNoTags(args, o.NoTags)
-	if o.Branch != "" {
-		args = append(args, "--branch", o.Branch)
-	}
-	if o.Depth > 0 {
-		args = append(args, "--depth", strconv.Itoa(o.Depth))
-	}
-	if o.RecurseSubmodules {
-		args = append(args, "--recurse-submodules")
-	}
-	if o.Jobs > 0 {
-		args = append(args, "--jobs", strconv.Itoa(o.Jobs))
-	}
-	if o.Origin != "" {
-		args = append(args, "--origin", o.Origin)
-	}
-	args = append(args, "--", source, destination)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	_, err = executeRecordedGit(ctx, cwd, nil, args)
+	_, err = executeRecordedGit(ctx, cwd, nil, cloneArgs(source, destination, o))
 	return err
 }

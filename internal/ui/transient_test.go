@@ -11,9 +11,74 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
+
+func TestTransientAvailabilityHelpers(t *testing.T) {
+	for name, test := range map[string]struct {
+		active    bool
+		consumers int
+		available bool
+		reason    string
+	}{
+		"inactive":   {reason: "condition failed"},
+		"unconsumed": {active: true, reason: "no registered workflow consumes this option"},
+		"available":  {active: true, consumers: 1, available: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			available, reason, category := infixAvailability(test.active, "condition failed", test.consumers)
+			if available != test.available || reason != test.reason || category != menuEntryInfix {
+				t.Fatalf("infix availability = %v, %q, %q", available, reason, category)
+			}
+		})
+	}
+
+	available, reason, category := finalizeTransientAvailability(false, "", menuEntryMissing, false, "condition failed")
+	if available || reason != "condition failed" || category != menuEntryContext {
+		t.Fatalf("inactive final availability = %v, %q, %q", available, reason, category)
+	}
+	available, reason, category = finalizeTransientAvailability(false, "registry reason", menuEntryMissing, false, "condition failed")
+	if available || reason != "registry reason" || category != menuEntryContext {
+		t.Fatalf("inactive reason preservation = %v, %q, %q", available, reason, category)
+	}
+	available, reason, category = finalizeTransientAvailability(false, "", menuEntryMissing, true, "")
+	if available || reason != "not available in the current context" || category != menuEntryMissing {
+		t.Fatalf("default final availability = %v, %q, %q", available, reason, category)
+	}
+	available, reason, category = finalizeTransientAvailability(true, "", menuEntryRegistry, true, "")
+	if !available || reason != "" || category != menuEntryRegistry {
+		t.Fatalf("available final availability = %v, %q, %q", available, reason, category)
+	}
+}
+
+func TestTransientAvailabilityRoutesEveryBindingKind(t *testing.T) {
+	m := New(nil)
+	installed := keymap.CommandID("test.installed")
+	m.workflowHandlers[installed] = func(*Model, WorkflowCommand) tea.Cmd { return nil }
+	tests := []struct {
+		name      string
+		binding   keymap.Binding
+		active    bool
+		available bool
+		reason    string
+		category  menuEntryCategory
+	}{
+		{"infix", keymap.Binding{Kind: keymap.KindInfix}, true, false, "no registered workflow consumes this option", menuEntryInfix},
+		{"prefix", keymap.Binding{Handler: keymap.HandlerPrefix}, false, false, "condition failed", menuEntryContext},
+		{"workflow", keymap.Binding{Command: installed}, true, true, "", menuEntryRegistry},
+		{"execute", keymap.Binding{Handler: keymap.HandlerExecute, Availability: keymap.AvailabilityNever, Unavailable: "registry reason"}, true, false, "registry reason", menuEntryRegistry},
+		{"missing", keymap.Binding{}, true, false, "workflow handler is not registered", menuEntryMissing},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			available, reason, category := m.transientAvailability("missing", test.binding, m.keyContext(), test.active, "condition failed")
+			if available != test.available || reason != test.reason || category != test.category {
+				t.Fatalf("availability = %v, %q, %q; want %v, %q, %q", available, reason, category, test.available, test.reason, test.category)
+			}
+		})
+	}
+}
 
 func TestBranchMenuHidesInactiveDirectConfigurationRows(t *testing.T) {
 	m := New(nil)

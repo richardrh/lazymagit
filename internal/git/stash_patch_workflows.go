@@ -437,7 +437,31 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if err != nil {
 		return nil, err
 	}
+	args := formatPatchArgs(dir, revisionRange, options)
+	if err := r.run(ctx, args...); err != nil {
+		return nil, err
+	}
+	created, err := newFormatPatchFiles(dir, before)
+	if err != nil {
+		return nil, err
+	}
+	if options.CoverLetterBody != "" {
+		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
+			return nil, err
+		}
+	}
+	return created, nil
+}
+
+func formatPatchArgs(dir, revisionRange string, options FormatPatchOptions) []string {
 	args := []string{"format-patch", "--quiet", "--output-directory=" + dir}
+	args = appendFormatPatchFlags(args, options)
+	args = appendFormatPatchValues(args, options)
+	args = appendFormatPatchRecipients(args, options)
+	return append(args, revisionRange)
+}
+
+func appendFormatPatchFlags(args []string, options FormatPatchOptions) []string {
 	if options.Numbered {
 		args = append(args, "--numbered")
 	}
@@ -455,11 +479,12 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if options.RFC {
 		args = append(args, "--rfc")
 	}
+	return args
+}
+
+func appendFormatPatchValues(args []string, options FormatPatchOptions) []string {
 	if options.SubjectPrefix != "" {
 		args = append(args, "--subject-prefix="+options.SubjectPrefix)
-	}
-	if options.RerollCount < 0 || options.StartNumber < 0 {
-		return nil, errors.New("format-patch numeric options cannot be negative")
 	}
 	if options.RerollCount > 0 {
 		args = append(args, "--reroll-count="+strconv.Itoa(options.RerollCount))
@@ -476,15 +501,20 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if options.Base != "" {
 		args = append(args, "--base="+options.Base)
 	}
+	return args
+}
+
+func appendFormatPatchRecipients(args []string, options FormatPatchOptions) []string {
 	for _, address := range options.To {
 		args = append(args, "--to="+address)
 	}
 	for _, address := range options.Cc {
 		args = append(args, "--cc="+address)
 	}
-	if err := r.run(ctx, append(args, revisionRange)...); err != nil {
-		return nil, err
-	}
+	return args
+}
+
+func newFormatPatchFiles(dir string, before map[string]bool) ([]string, error) {
 	entries, err := boundedDirectoryNames(dir, maxFormatPatchDirectoryEntries)
 	if err != nil {
 		return nil, fmt.Errorf("read format-patch output: %w", err)
@@ -504,20 +534,12 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 		}
 	}
 	sort.Strings(created)
-	if options.CoverLetterBody != "" {
-		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
-			return nil, err
-		}
-	}
 	return created, nil
 }
 
 func validateFormatPatchOptions(options FormatPatchOptions) error {
-	if options.RerollCount < 0 || options.StartNumber < 0 {
-		return errors.New("format-patch numeric options cannot be negative")
-	}
-	if options.ThreadStyle != "" && options.ThreadStyle != "shallow" && options.ThreadStyle != "deep" {
-		return errors.New("format-patch thread style must be shallow or deep")
+	if err := validateFormatPatchScalars(options); err != nil {
+		return err
 	}
 	if err := validFormatPatchHeader("subject prefix", options.SubjectPrefix, true); err != nil {
 		return err
@@ -525,13 +547,8 @@ func validateFormatPatchOptions(options FormatPatchOptions) error {
 	if err := validFormatPatchAddress("from", options.From, true); err != nil {
 		return err
 	}
-	if options.InReplyTo != "" && (!messageIDRE.MatchString(options.InReplyTo) || validFormatPatchHeader("in-reply-to", options.InReplyTo, false) != nil) {
-		return errors.New("format-patch in-reply-to must be a bounded message ID")
-	}
-	if options.Base != "" {
-		if err := safeRevisionArgument(options.Base); err != nil {
-			return fmt.Errorf("format-patch base: %w", err)
-		}
+	if err := validateFormatPatchReplyAndBase(options); err != nil {
+		return err
 	}
 	if err := validFormatPatchAddresses("to", options.To); err != nil {
 		return err
@@ -539,10 +556,37 @@ func validateFormatPatchOptions(options FormatPatchOptions) error {
 	if err := validFormatPatchAddresses("cc", options.Cc); err != nil {
 		return err
 	}
-	if len(options.CoverLetterBody) > maxFormatPatchCoverBody || !utf8.ValidString(options.CoverLetterBody) || strings.ContainsRune(options.CoverLetterBody, 0) || strings.ContainsRune(options.CoverLetterBody, '\r') {
+	return validateFormatPatchCoverBody(options.CoverLetterBody)
+}
+
+func validateFormatPatchScalars(options FormatPatchOptions) error {
+	if options.RerollCount < 0 || options.StartNumber < 0 {
+		return errors.New("format-patch numeric options cannot be negative")
+	}
+	if options.ThreadStyle != "" && options.ThreadStyle != "shallow" && options.ThreadStyle != "deep" {
+		return errors.New("format-patch thread style must be shallow or deep")
+	}
+	return nil
+}
+
+func validateFormatPatchReplyAndBase(options FormatPatchOptions) error {
+	if options.InReplyTo != "" && (!messageIDRE.MatchString(options.InReplyTo) || validFormatPatchHeader("in-reply-to", options.InReplyTo, false) != nil) {
+		return errors.New("format-patch in-reply-to must be a bounded message ID")
+	}
+	if options.Base == "" {
+		return nil
+	}
+	if err := safeRevisionArgument(options.Base); err != nil {
+		return fmt.Errorf("format-patch base: %w", err)
+	}
+	return nil
+}
+
+func validateFormatPatchCoverBody(body string) error {
+	if len(body) > maxFormatPatchCoverBody || !utf8.ValidString(body) || strings.ContainsRune(body, 0) || strings.ContainsRune(body, '\r') {
 		return errors.New("format-patch cover letter body is invalid or exceeds 64 KiB")
 	}
-	for _, r := range options.CoverLetterBody {
+	for _, r := range body {
 		if r < 32 && r != '\n' || r == 127 {
 			return errors.New("format-patch cover letter body contains a control character")
 		}
@@ -591,35 +635,47 @@ func validFormatPatchHeader(name, value string, optional bool) error {
 }
 
 func replaceFormatPatchCoverLetter(paths []string, body string) error {
-	const placeholder = "*** BLURB HERE ***"
-	var cover string
-	for _, path := range paths {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read generated cover letter: %w", err)
-		}
-		if bytes.Count(data, []byte(placeholder)) == 1 {
-			if cover != "" {
-				return errors.New("format-patch generated multiple cover letters")
-			}
-			cover = path
-		}
-	}
-	if cover == "" {
-		return errors.New("format-patch did not generate an editable cover letter")
-	}
-	info, err := os.Lstat(cover)
+	cover, info, err := editableFormatPatchCoverLetter(paths)
 	if err != nil {
-		return fmt.Errorf("inspect generated cover letter: %w", err)
-	}
-	if !info.Mode().IsRegular() {
-		return errors.New("generated cover letter is not a regular file")
+		return err
 	}
 	data, err := os.ReadFile(cover)
 	if err != nil {
 		return fmt.Errorf("read generated cover letter: %w", err)
 	}
-	updated := bytes.Replace(data, []byte(placeholder), []byte(body), 1)
+	updated := bytes.Replace(data, []byte("*** BLURB HERE ***"), []byte(body), 1)
+	return installFormatPatchCoverLetter(cover, updated, info.Mode().Perm())
+}
+
+func editableFormatPatchCoverLetter(paths []string) (string, os.FileInfo, error) {
+	const placeholder = "*** BLURB HERE ***"
+	var cover string
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", nil, fmt.Errorf("read generated cover letter: %w", err)
+		}
+		if bytes.Count(data, []byte(placeholder)) == 1 {
+			if cover != "" {
+				return "", nil, errors.New("format-patch generated multiple cover letters")
+			}
+			cover = path
+		}
+	}
+	if cover == "" {
+		return "", nil, errors.New("format-patch did not generate an editable cover letter")
+	}
+	info, err := os.Lstat(cover)
+	if err != nil {
+		return "", nil, fmt.Errorf("inspect generated cover letter: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", nil, errors.New("generated cover letter is not a regular file")
+	}
+	return cover, info, nil
+}
+
+func installFormatPatchCoverLetter(cover string, updated []byte, mode os.FileMode) error {
 	// Do not reopen the final pathname for writing: a concurrent replacement
 	// with a symlink must never redirect a cover-letter edit outside its output
 	// directory. Rename replaces that final entry rather than following it.
@@ -629,7 +685,7 @@ func replaceFormatPatchCoverLetter(paths []string, body string) error {
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(info.Mode().Perm()); err == nil {
+	if err := temporary.Chmod(mode); err == nil {
 		_, err = temporary.Write(updated)
 	}
 	if closeErr := temporary.Close(); err == nil {
@@ -748,20 +804,9 @@ func (r *Repository) SaveDiffPatch(ctx context.Context, filename string, options
 			return err
 		}
 	}
-	path := filename
-	if path == "" {
-		return errors.New("patch output filename is empty")
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(r.commandDir, path)
-	}
-	path = filepath.Clean(path)
-	parent, err := os.Stat(filepath.Dir(path))
-	if err != nil || !parent.IsDir() {
-		if err == nil {
-			err = errors.New("parent is not a directory")
-		}
-		return fmt.Errorf("inspect patch output directory: %w", err)
+	path, err := r.diffPatchOutputPath(filename)
+	if err != nil {
+		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".lazymagit-patch-*")
 	if err != nil {
@@ -775,15 +820,7 @@ func (r *Repository) SaveDiffPatch(ctx context.Context, filename string, options
 			_ = os.Remove(tmpName)
 		}
 	}()
-	args := []string{"diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv"}
-	if options.Cached {
-		args = append(args, "--cached")
-	}
-	if options.Range != "" {
-		args = append(args, options.Range)
-	}
-	args = pathsArgs(args, options.Paths)
-	if err := r.runMutationToWriter(ctx, tmp, args...); err != nil {
+	if err := r.runMutationToWriter(ctx, tmp, diffPatchArgs(options)...); err != nil {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
@@ -792,31 +829,73 @@ func (r *Repository) SaveDiffPatch(ctx context.Context, filename string, options
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close patch output: %w", err)
 	}
-	if !options.Overwrite {
-		// Hard-link installation is an atomic create-if-absent operation on the
-		// Darwin and Linux filesystems supported by this package.
-		if err := os.Link(tmpName, path); err != nil {
-			if errors.Is(err, os.ErrExist) {
-				return fmt.Errorf("patch output %q already exists", filename)
-			}
-			// Some portable/network filesystems do not support hard links. An
-			// O_EXCL claim retains the no-replacement guarantee and is used only
-			// as the fallback because a link publishes complete contents at once.
-			if fallbackErr := copyFileExclusive(tmpName, path); fallbackErr != nil {
-				if errors.Is(fallbackErr, os.ErrExist) {
-					return fmt.Errorf("patch output %q already exists", filename)
-				}
-				return fmt.Errorf("install patch output without replacement: link: %v; exclusive fallback: %w", err, fallbackErr)
-			}
-		}
-		if err := os.Remove(tmpName); err != nil {
-			_ = os.Remove(path)
-			return fmt.Errorf("finalize patch output: %w", err)
-		}
-	} else if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install patch output: %w", err)
+	if err := installDiffPatch(tmpName, path, filename, options.Overwrite); err != nil {
+		return err
 	}
 	keep = true
+	return nil
+}
+
+func (r *Repository) diffPatchOutputPath(filename string) (string, error) {
+	if filename == "" {
+		return "", errors.New("patch output filename is empty")
+	}
+	path := filename
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(r.commandDir, path)
+	}
+	path = filepath.Clean(path)
+	parent, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return "", fmt.Errorf("inspect patch output directory: %w", err)
+	}
+	if !parent.IsDir() {
+		return "", errors.New("inspect patch output directory: parent is not a directory")
+	}
+	return path, nil
+}
+
+func diffPatchArgs(options DiffPatchOptions) []string {
+	args := []string{"diff", "--binary", "--full-index", "--no-color", "--no-ext-diff", "--no-textconv"}
+	if options.Cached {
+		args = append(args, "--cached")
+	}
+	if options.Range != "" {
+		args = append(args, options.Range)
+	}
+	return pathsArgs(args, options.Paths)
+}
+
+func installDiffPatch(tmpName, path, filename string, overwrite bool) error {
+	if overwrite {
+		if err := os.Rename(tmpName, path); err != nil {
+			return fmt.Errorf("install patch output: %w", err)
+		}
+		return nil
+	}
+	if err := linkOrCopyDiffPatch(tmpName, path, filename); err != nil {
+		return err
+	}
+	if err := os.Remove(tmpName); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("finalize patch output: %w", err)
+	}
+	return nil
+}
+
+func linkOrCopyDiffPatch(tmpName, path, filename string) error {
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("patch output %q already exists", filename)
+		}
+		fallbackErr := copyFileExclusive(tmpName, path)
+		if errors.Is(fallbackErr, os.ErrExist) {
+			return fmt.Errorf("patch output %q already exists", filename)
+		}
+		if fallbackErr != nil {
+			return fmt.Errorf("install patch output without replacement: link: %v; exclusive fallback: %w", err, fallbackErr)
+		}
+	}
 	return nil
 }
 

@@ -3,47 +3,83 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
-	"github.com/richard/lazymagit/internal/quality"
+	"github.com/richardrh/lazymagit/internal/quality"
 )
 
 func main() {
-	coverprofile := flag.String("coverprofile", "", "native Go coverprofile to analyze (required)")
-	baselinePath := flag.String("baseline", "internal/quality/crap-baseline.json", "ratchet baseline")
-	threshold := flag.Float64("threshold", 30, "maximum score before ratcheting")
-	update := flag.Bool("update", false, "replace the baseline with current violations")
-	root := flag.String("root", ".", "module root")
-	flag.Parse()
-	if *coverprofile == "" {
-		fmt.Fprintln(os.Stderr, "crap: -coverprofile is required")
-		flag.Usage()
-		os.Exit(2)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+type options struct {
+	coverprofile, baselinePath, root string
+	threshold                        float64
+	update                           bool
+}
+
+func parseOptions(args []string, stderr io.Writer) (options, error) {
+	var opts options
+	flags := flag.NewFlagSet("crap", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	flags.StringVar(&opts.coverprofile, "coverprofile", "", "native Go coverprofile to analyze (required)")
+	flags.StringVar(&opts.baselinePath, "baseline", "internal/quality/crap-baseline.json", "ratchet baseline")
+	flags.Float64Var(&opts.threshold, "threshold", 30, "maximum score before ratcheting")
+	flags.BoolVar(&opts.update, "update", false, "replace the baseline with current violations")
+	flags.StringVar(&opts.root, "root", ".", "module root")
+	if err := flags.Parse(args); err != nil {
+		return options{}, err
 	}
-	functions, err := quality.Analyze(*root, *coverprofile)
+	if opts.coverprofile == "" {
+		return options{}, fmt.Errorf("-coverprofile is required")
+	}
+	return opts, nil
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	opts, err := parseOptions(args, stderr)
 	if err != nil {
-		fatal(err)
+		fmt.Fprintln(stderr, "crap:", err)
+		return 2
 	}
+	if err := execute(opts, stdout); err != nil {
+		fmt.Fprintln(stderr, "crap:", err)
+		return 1
+	}
+	return 0
+}
+
+func execute(opts options, stdout io.Writer) error {
+	functions, err := quality.Analyze(opts.root, opts.coverprofile)
+	if err != nil {
+		return err
+	}
+	printFunctions(stdout, functions)
+	if opts.update {
+		return updateBaseline(opts, stdout, functions)
+	}
+	return gateBaseline(opts, functions)
+}
+
+func printFunctions(stdout io.Writer, functions []quality.Function) {
 	for _, fn := range functions {
-		fmt.Printf("%s complexity=%d coverage=%.2f%% crap=%.2f\n", fn.ID, fn.Complexity, fn.Coverage*100, fn.CRAP)
-	}
-	if *update {
-		if err := quality.WriteBaseline(*baselinePath, *threshold, functions); err != nil {
-			fatal(err)
-		}
-		fmt.Printf("updated %s\n", *baselinePath)
-		return
-	}
-	baseline, err := quality.ReadBaseline(*baselinePath)
-	if err != nil {
-		fatal(err)
-	}
-	if err := quality.Gate(functions, baseline, *threshold); err != nil {
-		fatal(err)
+		fmt.Fprintf(stdout, "%s complexity=%d coverage=%.2f%% crap=%.2f\n", fn.ID, fn.Complexity, fn.Coverage*100, fn.CRAP)
 	}
 }
 
-func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "crap:", err)
-	os.Exit(1)
+func updateBaseline(opts options, stdout io.Writer, functions []quality.Function) error {
+	if err := quality.WriteBaseline(opts.baselinePath, opts.threshold, functions); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "updated %s\n", opts.baselinePath)
+	return nil
+}
+
+func gateBaseline(opts options, functions []quality.Function) error {
+	baseline, err := quality.ReadBaseline(opts.baselinePath)
+	if err != nil {
+		return err
+	}
+	return quality.Gate(functions, baseline, opts.threshold)
 }

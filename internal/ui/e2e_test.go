@@ -9,7 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestRebaseTodoEditorHelper(t *testing.T) {
@@ -177,6 +177,49 @@ func TestE2EInitialViewAndShiftSStagesOnlyTrackedChanges(t *testing.T) {
 	sendE2EKey(t, m, shiftS)
 	if m.isError || m.message != "No tracked unstaged changes to stage" {
 		t.Fatalf("second Shift-S error=%v message=%q", m.isError, m.message)
+	}
+}
+
+func TestE2EMarkedFilesStageAndUnstageAsOneBatch(t *testing.T) {
+	r := newUIE2ERepo(t)
+	for _, path := range []string{"a.txt", "b.txt"} {
+		r.write(path, "base\n")
+	}
+	r.git("add", "--", "a.txt", "b.txt")
+	r.git("commit", "-m", "initial")
+	r.write("a.txt", "changed a\n")
+	r.write("b.txt", "changed b\n")
+
+	m := newE2EModel(t, r)
+	for _, path := range []string{"a.txt", "b.txt"} {
+		selectE2EPath(t, m, path, rowUnstaged)
+		sendE2EKey(t, m, keyMsg("alt+m"))
+	}
+	sendE2EKey(t, m, keyMsg("s"))
+	if got := strings.Fields(r.git("diff", "--cached", "--name-only")); len(got) != 2 || got[0] != "a.txt" || got[1] != "b.txt" {
+		t.Fatalf("batch stage paths = %v", got)
+	}
+
+	for _, path := range []string{"a.txt", "b.txt"} {
+		selectE2EPath(t, m, path, rowStaged)
+		sendE2EKey(t, m, keyMsg("alt+m"))
+	}
+	sendE2EKey(t, m, keyMsg("u"))
+	if got := r.git("diff", "--cached", "--name-only"); got != "" {
+		t.Fatalf("batch unstage left paths %q", got)
+	}
+
+	for _, path := range []string{"a.txt", "b.txt"} {
+		selectE2EPath(t, m, path, rowUnstaged)
+		sendE2EKey(t, m, keyMsg("alt+m"))
+	}
+	sendE2EKey(t, m, keyMsg("x"))
+	if m.mode != modeConfirm || len(m.confirmPaths) != 2 {
+		t.Fatalf("batch discard confirmation mode=%v paths=%v", m.mode, m.confirmPaths)
+	}
+	sendE2EKey(t, m, keyMsg("y"))
+	if got := r.git("diff", "--name-only"); got != "" {
+		t.Fatalf("batch discard left paths %q", got)
 	}
 }
 

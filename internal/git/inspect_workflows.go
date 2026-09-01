@@ -72,26 +72,60 @@ type DiffResult struct {
 }
 
 func (r *Repository) QueryDiff(ctx context.Context, q DiffQuery) (DiffResult, error) {
-	if q.Context < 0 || q.Context > 10000 {
-		return DiffResult{}, errors.New("diff context must be between 0 and 10000")
+	args, limit, err := r.compileDiffQuery(ctx, q)
+	if err != nil {
+		return DiffResult{}, err
 	}
-	if q.Stat && (q.NameOnly || q.NameStatus) || q.NameOnly && q.NameStatus {
-		return DiffResult{}, errors.New("diff stat, name-only, and name-status modes are mutually exclusive")
+	out, truncated, err := r.outputLimited(ctx, limit, args...)
+	if err != nil {
+		return DiffResult{}, err
+	}
+	return DiffResult{Detail: string(out), Truncated: truncated}, nil
+}
+
+func (r *Repository) compileDiffQuery(ctx context.Context, q DiffQuery) ([]string, int, error) {
+	if err := validateDiffQuery(q); err != nil {
+		return nil, 0, err
 	}
 	args := []string{"--no-pager", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"}
+	options, err := diffQueryOptions(q)
+	if err != nil {
+		return nil, 0, err
+	}
+	args = append(args, options...)
+	revisions, err := r.diffQueryRevisions(ctx, q)
+	if err != nil {
+		return nil, 0, err
+	}
+	args = append(args, revisions...)
+	args = append(args, "--")
+	args = append(args, q.Files...)
+	limit, err := inspectionByteLimit("diff", q.OutputLimit)
+	return args, limit, err
+}
+
+func validateDiffQuery(q DiffQuery) error {
+	if q.Context < 0 || q.Context > 10000 {
+		return errors.New("diff context must be between 0 and 10000")
+	}
+	if q.Stat && (q.NameOnly || q.NameStatus) || q.NameOnly && q.NameStatus {
+		return errors.New("diff stat, name-only, and name-status modes are mutually exclusive")
+	}
+	return nil
+}
+
+func diffQueryOptions(q DiffQuery) ([]string, error) {
+	var args []string
 	if q.ContextSet || q.Context != 0 {
 		args = append(args, "--unified="+strconv.Itoa(q.Context))
 	}
-	switch q.Algorithm {
-	case DiffAlgorithmDefault:
-	case DiffAlgorithmMinimal:
-		args = append(args, "--minimal")
-	case DiffAlgorithmPatience:
-		args = append(args, "--patience")
-	case DiffAlgorithmHistogram:
-		args = append(args, "--histogram")
-	default:
-		return DiffResult{}, errors.New("unknown diff algorithm")
+	algorithms := map[DiffAlgorithm]string{DiffAlgorithmDefault: "", DiffAlgorithmMinimal: "--minimal", DiffAlgorithmPatience: "--patience", DiffAlgorithmHistogram: "--histogram"}
+	algorithm, ok := algorithms[q.Algorithm]
+	if !ok {
+		return nil, errors.New("unknown diff algorithm")
+	}
+	if algorithm != "" {
+		args = append(args, algorithm)
 	}
 	options := []struct {
 		enabled bool
@@ -108,64 +142,72 @@ func (r *Repository) QueryDiff(ctx context.Context, q DiffQuery) (DiffResult, er
 			args = append(args, candidate.option)
 		}
 	}
-	resolve := func(value, label string) (string, error) {
-		if strings.TrimSpace(value) == "" {
-			return "", fmt.Errorf("diff %s revision is empty", label)
-		}
-		return r.resolveCommitOID(ctx, value)
-	}
+	return args, nil
+}
+
+func (r *Repository) diffQueryRevisions(ctx context.Context, q DiffQuery) ([]string, error) {
 	switch q.Kind {
 	case DiffWorktree:
-		if q.Base != "" || q.Target != "" {
-			return DiffResult{}, errors.New("worktree diff does not accept revisions")
-		}
+		return diffNoRevisions(q, nil, "worktree diff does not accept revisions")
 	case DiffIndex:
-		if q.Base != "" || q.Target != "" {
-			return DiffResult{}, errors.New("index diff does not accept revisions")
-		}
-		args = append(args, "--cached")
+		return diffNoRevisions(q, []string{"--cached"}, "index diff does not accept revisions")
 	case DiffRevision:
-		base, err := resolve(q.Base, "base")
+		base, err := r.resolveDiffRevision(ctx, q.Base, "base")
 		if err != nil {
-			return DiffResult{}, err
+			return nil, err
 		}
-		args = append(args, base)
+		return []string{base}, nil
 	case DiffRevisionRange:
-		base, err := resolve(q.Base, "base")
-		if err != nil {
-			return DiffResult{}, err
-		}
-		target, err := resolve(q.Target, "target")
-		if err != nil {
-			return DiffResult{}, err
-		}
-		separator := ".."
-		if q.TripleDot {
-			separator = "..."
-		}
-		args = append(args, base+separator+target)
+		return r.diffRevisionRange(ctx, q)
 	case DiffConflicts:
-		if q.Base != "" || q.Target != "" || q.TripleDot {
-			return DiffResult{}, errors.New("conflict diff does not accept revisions")
+		if q.TripleDot {
+			return nil, errors.New("conflict diff does not accept revisions")
 		}
-		args = append(args, "--cc")
+		return diffNoRevisions(q, []string{"--cc"}, "conflict diff does not accept revisions")
 	default:
-		return DiffResult{}, errors.New("unknown diff kind")
+		return nil, errors.New("unknown diff kind")
 	}
-	args = append(args, "--")
-	args = append(args, q.Files...)
-	limit := q.OutputLimit
+}
+
+func diffNoRevisions(q DiffQuery, result []string, message string) ([]string, error) {
+	if q.Base != "" || q.Target != "" {
+		return nil, errors.New(message)
+	}
+	return result, nil
+}
+
+func (r *Repository) resolveDiffRevision(ctx context.Context, value, label string) (string, error) {
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("diff %s revision is empty", label)
+	}
+	return r.resolveCommitOID(ctx, value)
+}
+
+func (r *Repository) diffRevisionRange(ctx context.Context, q DiffQuery) ([]string, error) {
+	base, err := r.resolveDiffRevision(ctx, q.Base, "base")
+	if err != nil {
+		return nil, err
+	}
+	target, err := r.resolveDiffRevision(ctx, q.Target, "target")
+	if err != nil {
+		return nil, err
+	}
+	separator := ".."
+	if q.TripleDot {
+		separator = "..."
+	}
+	return []string{base + separator + target}, nil
+}
+
+func inspectionByteLimit(resource string, requested int) (int, error) {
+	limit := requested
 	if limit == 0 {
 		limit = inspectionOutputLimit
 	}
 	if limit < 0 || limit > inspectionOutputLimit {
-		return DiffResult{}, fmt.Errorf("diff output limit must be between 0 and %d", inspectionOutputLimit)
+		return 0, fmt.Errorf("%s output limit must be between 0 and %d", resource, inspectionOutputLimit)
 	}
-	out, truncated, err := r.outputLimited(ctx, limit, args...)
-	if err != nil {
-		return DiffResult{}, err
-	}
-	return DiffResult{Detail: string(out), Truncated: truncated}, nil
+	return limit, nil
 }
 
 type LogOrder uint8
@@ -221,56 +263,19 @@ type ShortlogResult struct {
 const inspectionReflogFormat = "%x1e%H%x00%h%x00%gd%x00%gs%x00%aN%x00"
 
 func (r *Repository) QueryReflog(ctx context.Context, q ReflogQuery) (ReflogResult, error) {
-	if q.Limit < 0 {
-		return ReflogResult{}, errors.New("reflog limit cannot be negative")
+	limit, truncatedByLimit, err := reflogLimit(q.Limit)
+	if err != nil {
+		return ReflogResult{}, err
 	}
-	limit := q.Limit
-	if limit == 0 {
-		limit = 256
+	revision, err := r.resolveReflogRevision(ctx, q)
+	if err != nil {
+		return ReflogResult{}, err
 	}
-	truncatedByLimit := false
-	if limit > inspectionItemLimit {
-		limit, truncatedByLimit = inspectionItemLimit, true
+	byteLimit, err := reflogOutputLimit(q.OutputLimit)
+	if err != nil {
+		return ReflogResult{}, err
 	}
-	if q.All && q.Revision != "" {
-		return ReflogResult{}, errors.New("reflog selectors are ambiguous")
-	}
-	revision := q.Revision
-	if revision == "" && !q.All {
-		revision = "HEAD"
-	}
-	if strings.HasPrefix(revision, "-") || strings.ContainsAny(revision, "\x00\r\n") {
-		return ReflogResult{}, errors.New("invalid reflog ref")
-	}
-	if !q.All {
-		if revision != "HEAD" {
-			resolved, err := r.output(ctx, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", revision)
-			if err != nil {
-				return ReflogResult{}, err
-			}
-			revision = trimLine(resolved)
-			if revision == "" {
-				return ReflogResult{}, errors.New("reflog ref does not resolve to a named ref")
-			}
-		}
-		if _, err := r.output(ctx, "reflog", "exists", revision); err != nil {
-			return ReflogResult{}, err
-		}
-	}
-	args := []string{"--no-pager", "reflog", "show", "--no-color", "--date=raw", "--format=" + inspectionReflogFormat, "-n", strconv.Itoa(limit + 1)}
-	if q.All {
-		args = append(args, "--all")
-	} else {
-		args = append(args, revision)
-	}
-	args = append(args, "--")
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
-	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return ReflogResult{}, fmt.Errorf("reflog output limit must be between 0 and %d", inspectionOutputLimit)
-	}
+	args := reflogArgs(q.All, revision, limit)
 	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
 	if err != nil {
 		return ReflogResult{}, err
@@ -281,6 +286,71 @@ func (r *Repository) QueryReflog(ctx context.Context, q ReflogQuery) (ReflogResu
 		items, truncated = items[:limit], true
 	}
 	return ReflogResult{Items: items, Truncated: truncated}, nil
+}
+
+func reflogLimit(value int) (int, bool, error) {
+	if value < 0 {
+		return 0, false, errors.New("reflog limit cannot be negative")
+	}
+	if value == 0 {
+		value = 256
+	}
+	if value > inspectionItemLimit {
+		return inspectionItemLimit, true, nil
+	}
+	return value, false, nil
+}
+
+func (r *Repository) resolveReflogRevision(ctx context.Context, q ReflogQuery) (string, error) {
+	if q.All && q.Revision != "" {
+		return "", errors.New("reflog selectors are ambiguous")
+	}
+	revision := q.Revision
+	if revision == "" && !q.All {
+		revision = "HEAD"
+	}
+	if strings.HasPrefix(revision, "-") || strings.ContainsAny(revision, "\x00\r\n") {
+		return "", errors.New("invalid reflog ref")
+	}
+	if q.All {
+		return revision, nil
+	}
+	return r.resolveNamedReflog(ctx, revision)
+}
+
+func (r *Repository) resolveNamedReflog(ctx context.Context, revision string) (string, error) {
+	if revision != "HEAD" {
+		resolved, err := r.output(ctx, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", revision)
+		if err != nil {
+			return "", err
+		}
+		revision = trimLine(resolved)
+		if revision == "" {
+			return "", errors.New("reflog ref does not resolve to a named ref")
+		}
+	}
+	_, err := r.output(ctx, "reflog", "exists", revision)
+	return revision, err
+}
+
+func reflogOutputLimit(value int) (int, error) {
+	if value == 0 {
+		return inspectionOutputLimit, nil
+	}
+	if value < 0 || value > inspectionOutputLimit {
+		return 0, fmt.Errorf("reflog output limit must be between 0 and %d", inspectionOutputLimit)
+	}
+	return value, nil
+}
+
+func reflogArgs(all bool, revision string, limit int) []string {
+	args := []string{"--no-pager", "reflog", "show", "--no-color", "--date=raw", "--format=" + inspectionReflogFormat, "-n", strconv.Itoa(limit + 1)}
+	if all {
+		args = append(args, "--all")
+	} else {
+		args = append(args, revision)
+	}
+	return append(args, "--")
 }
 
 func parseInspectionReflog(out []byte) ([]ReflogEntry, bool) {
@@ -307,10 +377,38 @@ func parseInspectionReflog(out []byte) ([]ReflogEntry, bool) {
 }
 
 func (r *Repository) QueryShortlog(ctx context.Context, q ShortlogQuery) (ShortlogResult, error) {
+	args, byteLimit, err := r.compileShortlogQuery(ctx, q)
+	if err != nil {
+		return ShortlogResult{}, err
+	}
+	out, truncated, err := r.outputLimited(ctx, byteLimit, args...)
+	if err != nil {
+		return ShortlogResult{}, err
+	}
+	return ShortlogResult{Detail: string(out), Truncated: truncated}, nil
+}
+
+func (r *Repository) compileShortlogQuery(ctx context.Context, q ShortlogQuery) ([]string, int, error) {
 	if q.Revision != "" && q.Range != "" || q.Since && q.Range != "" {
-		return ShortlogResult{}, errors.New("shortlog revision selectors are ambiguous")
+		return nil, 0, errors.New("shortlog revision selectors are ambiguous")
 	}
 	args := []string{"--no-pager", "shortlog"}
+	options, err := shortlogQueryOptions(q)
+	if err != nil {
+		return nil, 0, err
+	}
+	args = append(args, options...)
+	selector, err := r.shortlogQuerySelector(ctx, q)
+	if err != nil {
+		return nil, 0, err
+	}
+	args = append(args, selector)
+	byteLimit, err := inspectionByteLimit("shortlog", q.OutputLimit)
+	return args, byteLimit, err
+}
+
+func shortlogQueryOptions(q ShortlogQuery) ([]string, error) {
+	var args []string
 	for _, option := range []struct {
 		enabled bool
 		value   string
@@ -321,27 +419,38 @@ func (r *Repository) QueryShortlog(ctx context.Context, q ShortlogQuery) (Shortl
 	}
 	if q.Group != "" {
 		if strings.ContainsAny(q.Group, "\x00\r\n") || strings.HasPrefix(q.Group, "-") {
-			return ShortlogResult{}, errors.New("invalid shortlog group")
+			return nil, errors.New("invalid shortlog group")
 		}
 		if q.Group != "author" && q.Group != "committer" && !strings.HasPrefix(q.Group, "trailer:") {
-			return ShortlogResult{}, errors.New("shortlog group must be author, committer, or trailer:<field>")
+			return nil, errors.New("shortlog group must be author, committer, or trailer:<field>")
 		}
 		args = append(args, "--group="+q.Group)
 	}
 	if q.Format != "" {
 		if strings.ContainsAny(q.Format, "\x00\r\n") {
-			return ShortlogResult{}, errors.New("invalid shortlog format")
+			return nil, errors.New("invalid shortlog format")
 		}
 		args = append(args, "--format="+q.Format)
 	}
+	wrap, err := shortlogWrapOption(q)
+	if err != nil {
+		return nil, err
+	}
+	if wrap != "" {
+		args = append(args, wrap)
+	}
+	return args, nil
+}
+
+func shortlogWrapOption(q ShortlogQuery) (string, error) {
 	if q.WrapWidth < 0 || q.WrapIndent1 < 0 || q.WrapIndent2 < 0 {
-		return ShortlogResult{}, errors.New("shortlog wrap values cannot be negative")
+		return "", errors.New("shortlog wrap values cannot be negative")
 	}
 	if q.WrapWidth > 10000 || q.WrapIndent1 > 10000 || q.WrapIndent2 > 10000 {
-		return ShortlogResult{}, errors.New("shortlog wrap values cannot exceed 10000")
+		return "", errors.New("shortlog wrap values cannot exceed 10000")
 	}
 	if q.WrapIndent2Set && !q.WrapIndent1Set {
-		return ShortlogResult{}, errors.New("shortlog second indent requires the first indent")
+		return "", errors.New("shortlog second indent requires the first indent")
 	}
 	if q.WrapWidth > 0 {
 		wrap := "-w" + strconv.Itoa(q.WrapWidth)
@@ -351,41 +460,31 @@ func (r *Repository) QueryShortlog(ctx context.Context, q ShortlogQuery) (Shortl
 				wrap += "," + strconv.Itoa(q.WrapIndent2)
 			}
 		}
-		args = append(args, wrap)
+		return wrap, nil
 	}
+	return "", nil
+}
+
+func (r *Repository) shortlogQuerySelector(ctx context.Context, q ShortlogQuery) (string, error) {
 	selector := q.Revision
 	if q.Range != "" {
 		resolved, err := r.resolveRevisionRange(ctx, q.Range)
 		if err != nil {
-			return ShortlogResult{}, err
+			return "", err
 		}
-		selector = resolved
-	} else {
-		if selector == "" {
-			selector = "HEAD"
-		}
-		oid, err := r.resolveCommitOID(ctx, selector)
-		if err != nil {
-			return ShortlogResult{}, err
-		}
-		selector = oid
-		if q.Since {
-			selector += "..HEAD"
-		}
+		return resolved, nil
 	}
-	args = append(args, selector)
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
+	if selector == "" {
+		selector = "HEAD"
 	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return ShortlogResult{}, fmt.Errorf("shortlog output limit must be between 0 and %d", inspectionOutputLimit)
-	}
-	out, truncated, err := r.outputLimited(ctx, byteLimit, args...)
+	oid, err := r.resolveCommitOID(ctx, selector)
 	if err != nil {
-		return ShortlogResult{}, err
+		return "", err
 	}
-	return ShortlogResult{Detail: string(out), Truncated: truncated}, nil
+	if q.Since {
+		oid += "..HEAD"
+	}
+	return oid, nil
 }
 
 type RequestPullQuery struct {
@@ -434,39 +533,63 @@ func (r *Repository) QueryRequestPull(ctx context.Context, q RequestPullQuery) (
 }
 
 func (r *Repository) resolveRevisionRange(ctx context.Context, value string) (string, error) {
+	rangeSpec, err := parseRevisionRange(value)
+	if err != nil {
+		return "", err
+	}
+	if rangeSpec.separator == "" {
+		return r.resolveCommitOID(ctx, rangeSpec.left)
+	}
+	leftOID, err := r.resolveCommitOID(ctx, rangeSpec.left)
+	if err != nil {
+		return "", err
+	}
+	rightOID, err := r.resolveCommitOID(ctx, rangeSpec.right)
+	if err != nil {
+		return "", err
+	}
+	return leftOID + rangeSpec.separator + rightOID, nil
+}
+
+type revisionRange struct {
+	left, separator, right string
+}
+
+func parseRevisionRange(value string) (revisionRange, error) {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n") {
-		return "", errors.New("invalid revision or range")
+	if invalidRevisionRange(value) {
+		return revisionRange{}, errors.New("invalid revision or range")
 	}
-	separator := ""
-	position := strings.Index(value, "...")
-	if position >= 0 {
-		separator = "..."
-	} else if position = strings.Index(value, ".."); position >= 0 {
-		separator = ".."
-	}
+	separator, position := revisionRangeSeparator(value)
 	if separator == "" {
-		return r.resolveCommitOID(ctx, value)
+		return revisionRange{left: value}, nil
 	}
 	left, right := value[:position], value[position+len(separator):]
 	if strings.Contains(left, "..") || strings.Contains(right, "..") {
-		return "", errors.New("revision range has multiple separators")
+		return revisionRange{}, errors.New("revision range has multiple separators")
 	}
-	if left == "" {
-		left = "HEAD"
+	return revisionRange{left: defaultRangeEndpoint(left), separator: separator, right: defaultRangeEndpoint(right)}, nil
+}
+
+func invalidRevisionRange(value string) bool {
+	return value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, "\x00\r\n")
+}
+
+func revisionRangeSeparator(value string) (string, int) {
+	if position := strings.Index(value, "..."); position >= 0 {
+		return "...", position
 	}
-	if right == "" {
-		right = "HEAD"
+	if position := strings.Index(value, ".."); position >= 0 {
+		return "..", position
 	}
-	leftOID, err := r.resolveCommitOID(ctx, left)
-	if err != nil {
-		return "", err
+	return "", -1
+}
+
+func defaultRangeEndpoint(value string) string {
+	if value == "" {
+		return "HEAD"
 	}
-	rightOID, err := r.resolveCommitOID(ctx, right)
-	if err != nil {
-		return "", err
-	}
-	return leftOID + separator + rightOID, nil
+	return value
 }
 
 type LogQuery struct {
@@ -509,29 +632,104 @@ type LogResult struct {
 const inspectionLogFormat = "%x1e%H%x00%h%x00%P%x00%D%x00%s%x00%an%x00%ae%x00%aI%x00%cI%x00"
 
 func (r *Repository) QueryLog(ctx context.Context, q LogQuery) (LogResult, error) {
+	args, limit, truncatedByLimit, err := r.compileLogQuery(ctx, q)
+	if err != nil {
+		return LogResult{}, err
+	}
+	byteLimit, err := inspectionByteLimit("log", q.OutputLimit)
+	if err != nil {
+		return LogResult{}, err
+	}
+	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
+	if err != nil {
+		if r.isUnbornDefaultLog(ctx, q, err) {
+			return LogResult{}, nil
+		}
+		return LogResult{}, err
+	}
+	items, incomplete, err := parseInspectionLog(out)
+	if err != nil {
+		return LogResult{}, err
+	}
+	truncated := truncatedByLimit || byteTruncated || incomplete
+	if len(items) > limit {
+		items, truncated = items[:limit], true
+	}
+	return LogResult{Items: items, Truncated: truncated}, nil
+}
+
+func (r *Repository) isUnbornDefaultLog(ctx context.Context, q LogQuery, logErr error) bool {
+	defaultQuery := q.Revision == "" && q.From == "" && len(q.Revisions) == 0 && q.BranchPattern == "" && q.TagPattern == "" && !q.Reflog
+	if !defaultQuery || !isExitError(logErr) {
+		return false
+	}
+	_, verifyErr := r.output(ctx, "rev-parse", "--verify", "HEAD")
+	return isExitError(verifyErr)
+}
+
+func (r *Repository) compileLogQuery(ctx context.Context, q LogQuery) ([]string, int, bool, error) {
+	if err := validateLogQuery(q); err != nil {
+		return nil, 0, false, err
+	}
+	limit, truncatedByLimit := logItemLimit(q.Limit)
+	args := []string{"--no-pager", "log", "--no-color", "--no-ext-diff", "--no-textconv", "-n", strconv.Itoa(limit + 1), "--format=" + inspectionLogFormat}
+	options, err := logQueryOptions(q)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	args = append(args, options...)
+	selectors, err := r.logQuerySelectors(ctx, q)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	args = append(args, selectors...)
+	args = append(args, "--")
+	args = append(args, q.Files...)
+	return args, limit, truncatedByLimit, nil
+}
+
+func validateLogQuery(q LogQuery) error {
 	if q.Limit < 0 {
-		return LogResult{}, errors.New("log limit cannot be negative")
+		return errors.New("log limit cannot be negative")
 	}
 	if q.MergesOnly && q.NoMerges {
-		return LogResult{}, errors.New("merges-only and no-merges are mutually exclusive")
+		return errors.New("merges-only and no-merges are mutually exclusive")
 	}
 	if q.BranchPattern != "" && q.TagPattern != "" {
-		return LogResult{}, errors.New("branch and tag patterns are mutually exclusive")
+		return errors.New("branch and tag patterns are mutually exclusive")
 	}
 	for _, pattern := range []string{q.BranchPattern, q.TagPattern} {
 		if strings.ContainsAny(pattern, "\x00\r\n") || strings.HasPrefix(pattern, "-") {
-			return LogResult{}, errors.New("invalid log ref pattern")
+			return errors.New("invalid log ref pattern")
 		}
 	}
-	limit := q.Limit
-	if limit == 0 {
-		limit = 256
+	return nil
+}
+
+func logItemLimit(requested int) (int, bool) {
+	if requested == 0 {
+		return 256, false
 	}
-	truncatedByLimit := false
-	if limit > inspectionItemLimit {
-		limit, truncatedByLimit = inspectionItemLimit, true
+	if requested > inspectionItemLimit {
+		return inspectionItemLimit, true
 	}
-	args := []string{"--no-pager", "log", "--no-color", "--no-ext-diff", "--no-textconv", "-n", strconv.Itoa(limit + 1), "--format=" + inspectionLogFormat}
+	return requested, false
+}
+
+func logQueryOptions(q LogQuery) ([]string, error) {
+	args := logDisplayOptions(q)
+	order, err := logOrderOption(q.Order)
+	if err != nil {
+		return nil, err
+	}
+	if order != "" {
+		args = append(args, order)
+	}
+	return appendLogFilterOptions(args, q), nil
+}
+
+func logDisplayOptions(q LogQuery) []string {
+	var args []string
 	if q.Graph {
 		args = append(args, "--graph")
 	}
@@ -551,17 +749,25 @@ func (r *Repository) QueryLog(ctx context.Context, q LogQuery) (LogResult, error
 			args = append(args, candidate.option)
 		}
 	}
-	switch q.Order {
+	return args
+}
+
+func logOrderOption(order LogOrder) (string, error) {
+	switch order {
 	case LogOrderDefault:
+		return "", nil
 	case LogOrderDate:
-		args = append(args, "--date-order")
+		return "--date-order", nil
 	case LogOrderAuthorDate:
-		args = append(args, "--author-date-order")
+		return "--author-date-order", nil
 	case LogOrderTopo:
-		args = append(args, "--topo-order")
+		return "--topo-order", nil
 	default:
-		return LogResult{}, errors.New("unknown log order")
+		return "", errors.New("unknown log order")
 	}
+}
+
+func appendLogFilterOptions(args []string, q LogQuery) []string {
 	if q.Author != "" {
 		args = append(args, "--author="+q.Author)
 	}
@@ -580,67 +786,63 @@ func (r *Repository) QueryLog(ctx context.Context, q LogQuery) (LogResult, error
 	if q.TagPattern != "" {
 		args = append(args, "HEAD", "--tags="+q.TagPattern)
 	}
-	if q.Revision != "" && (q.From != "" || q.To != "" || len(q.Revisions) != 0 || q.BranchPattern != "" || q.TagPattern != "") || (q.From != "") != (q.To != "") {
-		return LogResult{}, errors.New("log revision selectors are ambiguous or incomplete")
+	return args
+}
+
+func (r *Repository) logQuerySelectors(ctx context.Context, q LogQuery) ([]string, error) {
+	if invalidLogSelectors(q) {
+		return nil, errors.New("log revision selectors are ambiguous or incomplete")
 	}
 	if q.Revision != "" {
 		oid, err := r.resolveCommitOID(ctx, q.Revision)
+		return singleSelector(oid, err)
+	}
+	if q.From != "" {
+		return r.resolveLogRange(ctx, q)
+	}
+	if q.BranchPattern == "" && q.TagPattern == "" {
+		return r.resolveLogRevisions(ctx, q.Revisions)
+	}
+	return nil, nil
+}
+
+func invalidLogSelectors(q LogQuery) bool {
+	return q.Revision != "" && (q.From != "" || q.To != "" || len(q.Revisions) != 0 || q.BranchPattern != "" || q.TagPattern != "") || (q.From != "") != (q.To != "")
+}
+
+func singleSelector(oid string, err error) ([]string, error) {
+	if err != nil {
+		return nil, err
+	}
+	return []string{oid}, nil
+}
+
+func (r *Repository) resolveLogRange(ctx context.Context, q LogQuery) ([]string, error) {
+	from, err := r.resolveCommitOID(ctx, q.From)
+	if err != nil {
+		return nil, err
+	}
+	to, err := r.resolveCommitOID(ctx, q.To)
+	if err != nil {
+		return nil, err
+	}
+	separator := ".."
+	if q.Symmetric {
+		separator = "..."
+	}
+	return []string{from + separator + to}, nil
+}
+
+func (r *Repository) resolveLogRevisions(ctx context.Context, revisions []string) ([]string, error) {
+	var args []string
+	for _, revision := range revisions {
+		oid, err := r.resolveCommitOID(ctx, revision)
 		if err != nil {
-			return LogResult{}, err
+			return nil, err
 		}
 		args = append(args, oid)
-	} else if q.From != "" {
-		from, err := r.resolveCommitOID(ctx, q.From)
-		if err != nil {
-			return LogResult{}, err
-		}
-		to, err := r.resolveCommitOID(ctx, q.To)
-		if err != nil {
-			return LogResult{}, err
-		}
-		separator := ".."
-		if q.Symmetric {
-			separator = "..."
-		}
-		args = append(args, from+separator+to)
-	} else if q.BranchPattern == "" && q.TagPattern == "" {
-		for _, revision := range q.Revisions {
-			oid, err := r.resolveCommitOID(ctx, revision)
-			if err != nil {
-				return LogResult{}, err
-			}
-			args = append(args, oid)
-		}
 	}
-	args = append(args, "--")
-	args = append(args, q.Files...)
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
-	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return LogResult{}, fmt.Errorf("log output limit must be between 0 and %d", inspectionOutputLimit)
-	}
-	out, byteTruncated, err := r.outputLimited(ctx, byteLimit, args...)
-	if err != nil {
-		// An unborn repository has no default log, but an explicitly bad selector
-		// has already failed resolution and must not be hidden here.
-		if q.Revision == "" && q.From == "" && len(q.Revisions) == 0 && q.BranchPattern == "" && q.TagPattern == "" && !q.Reflog && isExitError(err) {
-			if _, verifyErr := r.output(ctx, "rev-parse", "--verify", "HEAD"); isExitError(verifyErr) {
-				return LogResult{}, nil
-			}
-		}
-		return LogResult{}, err
-	}
-	items, incomplete, err := parseInspectionLog(out)
-	if err != nil {
-		return LogResult{}, err
-	}
-	truncated := truncatedByLimit || byteTruncated || incomplete
-	if len(items) > limit {
-		items, truncated = items[:limit], true
-	}
-	return LogResult{Items: items, Truncated: truncated}, nil
+	return args, nil
 }
 
 func parseInspectionLog(out []byte) ([]LogEntry, bool, error) {

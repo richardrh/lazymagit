@@ -251,13 +251,7 @@ type ReviewedNotesPrune struct {
 
 func (r *Repository) ReviewNotesPrune(ctx context.Context, ref string) (ReviewedNotesPrune, error) {
 	p := ReviewedNotesPrune{Ref: ref}
-	fullRef := ref
-	if fullRef == "" {
-		fullRef = "refs/notes/commits"
-	} else if !strings.HasPrefix(fullRef, "refs/notes/") {
-		fullRef = "refs/notes/" + fullRef
-	}
-	out, err := r.output(ctx, "rev-parse", "--verify", "--quiet", fullRef)
+	out, err := r.output(ctx, "rev-parse", "--verify", "--quiet", canonicalNotesRef(ref))
 	if err == nil {
 		p.NotesOID = trimLine(out)
 	} else if commandExitCode(err) != 1 {
@@ -270,13 +264,29 @@ func (r *Repository) ReviewNotesPrune(ctx context.Context, ref string) (Reviewed
 	if truncated {
 		return p, &TooLargeError{Resource: "notes prune plan"}
 	}
+	p.Objects = parseNotesPruneObjects(out)
+	return p, nil
+}
+
+func canonicalNotesRef(ref string) string {
+	if ref == "" {
+		return "refs/notes/commits"
+	}
+	if strings.HasPrefix(ref, "refs/notes/") {
+		return ref
+	}
+	return "refs/notes/" + ref
+}
+
+func parseNotesPruneObjects(out []byte) []string {
+	var objects []string
 	for _, line := range strings.Split(trimLine(out), "\n") {
 		if line != "" {
-			p.Objects = append(p.Objects, line)
+			objects = append(objects, line)
 		}
 	}
-	sort.Strings(p.Objects)
-	return p, nil
+	sort.Strings(objects)
+	return objects
 }
 
 func (r *Repository) PruneNotesReviewed(ctx context.Context, review ReviewedNotesPrune) error {

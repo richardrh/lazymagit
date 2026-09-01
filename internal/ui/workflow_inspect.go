@@ -13,8 +13,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 const (
@@ -161,6 +161,8 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 	}
 	m.cancelDetail()
 	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
+	m.conflictInspectPath, m.conflictResolution = "", ""
 	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.detailOffset = 0
 	m.detailRequest++
@@ -184,10 +186,26 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 }
 
 func selectedInspectRevision(m *Model) string {
+	if revision := activeInspectionRevision(m); revision != "" {
+		return revision
+	}
 	if row, ok := m.rows[m.tree.Cursor()]; ok && row.kind == rowCommit && row.commit.ID != "" {
 		return row.commit.ID
 	}
 	return "HEAD"
+}
+
+func activeInspectionRevision(m *Model) string {
+	if m.graphActive {
+		return m.graphEntries[m.graphCursor].ID
+	}
+	if m.revisionActive {
+		return m.revisionID
+	}
+	if m.blameActive {
+		return m.blameEntries[m.blameCursor].CommitID
+	}
+	return ""
 }
 
 func selectedInspectPath(m *Model) []string {
@@ -287,13 +305,32 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 		return nil
 	}
 	path := paths[0]
-	return loadInspection(m, "Blame "+path, func(ctx context.Context) (string, error) {
+	return loadBlameInspection(m, path)
+}
+
+func loadBlameInspection(m *Model, path string) tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	m.cancelDetail()
+	m.inspectionActive, m.blameActive, m.blameEntries, m.blameCursor = true, false, nil, -1
+	m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
+	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn, m.blameReturn = false, "", nil, nil, nil
+	m.detailOffset = 0
+	m.detailRequest++
+	request, id, title := m.detailRequest, m.tree.Cursor(), "Blame "+sanitizeSingleLine(path)
+	m.detailID, m.detail = id, "Loading "+title+"…"
+	m.setMessage("Loading " + title + "…")
+	ctx, cancel := context.WithCancel(m.appCtx)
+	m.detailCtx, m.detailCancel = ctx, cancel
+	return func() tea.Msg {
 		result, err := m.repo.QueryBlame(ctx, gitbackend.BlameQuery{Path: path, OutputLimit: inspectOutputLimit})
 		if err != nil {
-			return "", err
+			return blameMsg{id: id, request: request, title: title, err: err}
 		}
-		return formatBlameResult(result), nil
-	})
+		text, entries := blameResultText(result)
+		return blameMsg{id: id, request: request, title: title, text: text, entries: entries}
+	}
 }
 
 // inspectGraph is a bounded all-refs graph browser. Git computes lanes from
@@ -301,10 +338,10 @@ func inspectBlame(m *Model, _ WorkflowCommand) tea.Cmd {
 // decorations in the pageable terminal detail pane.
 func inspectGraph(m *Model, _ WorkflowCommand) tea.Cmd {
 	query := gitbackend.LogQuery{All: true, Graph: true, Decorations: true, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
-	return loadGraphInspection(m, query)
+	return loadGraphInspection(m, "All refs graph", query)
 }
 
-func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
+func loadGraphInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
 	if !m.canOperate() {
 		return nil
 	}
@@ -314,17 +351,18 @@ func loadGraphInspection(m *Model, query gitbackend.LogQuery) tea.Cmd {
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
-	m.detailID, m.detail = id, "Loading all refs graph…"
-	m.setMessage("Loading all refs graph…")
+	title = sanitizeSingleLine(title)
+	m.detailID, m.detail = id, "Loading "+title+"…"
+	m.setMessage("Loading " + title + "…")
 	ctx, cancel := context.WithCancel(m.appCtx)
 	m.detailCtx, m.detailCancel = ctx, cancel
 	return func() tea.Msg {
 		result, err := m.repo.QueryLog(ctx, query)
 		if err != nil {
-			return graphMsg{id: id, request: request, err: err}
+			return graphMsg{id: id, request: request, title: title, err: err}
 		}
 		text, entries := graphResultText(result)
-		return graphMsg{id: id, request: request, text: text, entries: entries}
+		return graphMsg{id: id, request: request, title: title, text: text, entries: entries}
 	}
 }
 
@@ -371,8 +409,28 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 	}
 	m.graphCursor = lines[index]
 	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects")
+	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects, c cherry-picks, V reverts, X resets")
 	return nil, true
+}
+
+func (m *Model) handleInspectionNavigationKey(key string) (tea.Cmd, bool) {
+	handlers := []struct {
+		active bool
+		handle func(string) (tea.Cmd, bool)
+	}{
+		{m.graphActive, m.handleGraphKey},
+		{m.blameActive, m.handleBlameKey},
+		{m.conflictInspectPath != "", m.handleConflictInspectionKey},
+		{m.revisionActive, m.handleRevisionKey},
+	}
+	for _, candidate := range handlers {
+		if candidate.active {
+			if cmd, handled := candidate.handle(key); handled {
+				return cmd, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
@@ -385,6 +443,76 @@ func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
 	}
 	m.setMessage("Opening first parent commit")
 	return inspectRevision(m, m.revisionParents[0]), true
+}
+
+func firstBlameLine(entries map[int]gitbackend.BlameLine) int {
+	first := -1
+	for line := range entries {
+		if first < 0 || line < first {
+			first = line
+		}
+	}
+	return first
+}
+
+func (m *Model) handleBlameKey(key string) (tea.Cmd, bool) {
+	lines := make([]int, 0, len(m.blameEntries))
+	for line := range m.blameEntries {
+		lines = append(lines, line)
+	}
+	sort.Ints(lines)
+	if len(lines) == 0 {
+		return nil, false
+	}
+	index := sort.SearchInts(lines, m.blameCursor)
+	if index == len(lines) || lines[index] != m.blameCursor {
+		index = 0
+	}
+	switch key {
+	case "up", "k", "p":
+		index = max(0, index-1)
+	case "down", "j", "n":
+		index = min(len(lines)-1, index+1)
+	case "enter":
+		return m.openSelectedBlameCommit(), true
+	default:
+		return nil, false
+	}
+	m.blameCursor = lines[index]
+	m.detailOffset = min(m.blameCursor, m.detailMaximumOffset())
+	entry := m.blameEntries[m.blameCursor]
+	m.setMessage(fmt.Sprintf("Blame line %d selected; Enter inspects %s", entry.Line, shortID(entry.CommitID)))
+	return nil, true
+}
+
+func (m *Model) openSelectedBlameCommit() tea.Cmd {
+	entry := m.blameEntries[m.blameCursor]
+	if strings.Trim(entry.CommitID, "0") == "" {
+		m.setMessage("Selected line has not been committed yet")
+		return nil
+	}
+	m.blameReturn = m.captureBlameInspection()
+	m.blameActive, m.blameEntries, m.blameCursor = false, nil, -1
+	return inspectRevision(m, entry.CommitID)
+}
+
+func (m *Model) captureBlameInspection() *blameInspection {
+	entries := make(map[int]gitbackend.BlameLine, len(m.blameEntries))
+	for line, entry := range m.blameEntries {
+		entries[line] = entry
+	}
+	return &blameInspection{detail: m.detail, id: m.detailID, entries: entries, cursor: m.blameCursor, offset: m.detailOffset}
+}
+
+func (m *Model) restoreBlameInspection() {
+	if m.blameReturn == nil {
+		return
+	}
+	state := m.blameReturn
+	m.detail, m.detailID, m.detailOffset = state.detail, state.id, state.offset
+	m.blameEntries, m.blameCursor, m.blameActive = state.entries, state.cursor, true
+	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
+	m.clampDetailOffset()
 }
 
 func (m *Model) captureGraphInspection() *graphInspection {
@@ -407,7 +535,16 @@ func (m *Model) restoreGraphInspection() {
 }
 
 func formatBlameResult(result gitbackend.BlameResult) string {
+	text, _ := blameResultText(result)
+	return text
+}
+
+func blameResultText(result gitbackend.BlameResult) (string, map[int]gitbackend.BlameLine) {
 	lines := make([]string, 0, len(result.Lines))
+	entries := make(map[int]gitbackend.BlameLine, len(result.Lines))
+	if result.Truncated {
+		lines = append(lines, strings.TrimSuffix(truncationNote(true), "\n"))
+	}
 	for _, line := range result.Lines {
 		id := line.CommitID
 		if len(id) > 12 {
@@ -425,9 +562,10 @@ func formatBlameResult(result gitbackend.BlameResult) string {
 		if summary != "" {
 			summary = " " + summary
 		}
+		entries[len(lines)+2] = line
 		lines = append(lines, fmt.Sprintf("%6d  %s  %s  %s%s | %s", line.Line, id, author, date, summary, line.Content))
 	}
-	return truncationNote(result.Truncated) + strings.Join(lines, "\n")
+	return strings.Join(lines, "\n"), entries
 }
 
 func inspectShowLatestStash(m *Model, _ WorkflowCommand) tea.Cmd {
@@ -555,13 +693,7 @@ func logEntryText(item gitbackend.LogEntry) string {
 }
 
 func runLogInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
-	return loadInspection(m, title, func(ctx context.Context) (string, error) {
-		result, err := m.repo.QueryLog(ctx, query)
-		if err != nil {
-			return "", err
-		}
-		return logResultText(result), nil
-	})
+	return loadGraphInspection(m, title, query)
 }
 
 func inspectLogCurrent(m *Model, command WorkflowCommand) tea.Cmd {
@@ -625,51 +757,76 @@ func shortlogQueryFromCommand(command WorkflowCommand) (gitbackend.ShortlogQuery
 		if !ok {
 			continue
 		}
-		switch binding.UpstreamCommand {
-		case "transient:magit-shortlog:--numbered":
-			query.Numbered = value.Enabled
-		case "transient:magit-shortlog:--summary":
-			query.Summary = value.Enabled
-		case "transient:magit-shortlog:--email":
-			query.Email = value.Enabled
-		case "transient:magit-shortlog:--group=":
-			query.Group = value.Value
-		case "transient:magit-shortlog:--format=":
-			query.Format = value.Value
-		case "transient:magit-shortlog:-w":
-			if value.Value == "" {
-				continue
-			}
-			parts := strings.Split(value.Value, ",")
-			if len(parts) > 3 {
-				return query, errors.New("shortlog wrap accepts width and at most two indents")
-			}
-			if len(parts) > 0 && parts[0] != "" {
-				n, err := strconv.Atoi(parts[0])
-				if err != nil || n <= 0 {
-					return query, errors.New("shortlog width must be a positive integer")
-				}
-				query.WrapWidth = n
-			}
-			if len(parts) > 1 && parts[1] != "" {
-				n, err := strconv.Atoi(parts[1])
-				if err != nil || n < 0 {
-					return query, errors.New("shortlog first indent must be a non-negative integer")
-				}
-				query.WrapIndent1, query.WrapIndent1Set = n, true
-			}
-			if len(parts) > 2 && parts[2] != "" {
-				n, err := strconv.Atoi(parts[2])
-				if err != nil || n < 0 {
-					return query, errors.New("shortlog second indent must be a non-negative integer")
-				}
-				query.WrapIndent2, query.WrapIndent2Set = n, true
-			}
-		default:
-			return query, fmt.Errorf("unsupported shortlog option %s", binding.UpstreamCommand)
+		if err := applyShortlogOption(&query, binding.UpstreamCommand, value); err != nil {
+			return query, err
 		}
 	}
 	return query, nil
+}
+
+func applyShortlogOption(query *gitbackend.ShortlogQuery, upstream string, value OptionValue) error {
+	switch upstream {
+	case "transient:magit-shortlog:--numbered":
+		query.Numbered = value.Enabled
+	case "transient:magit-shortlog:--summary":
+		query.Summary = value.Enabled
+	case "transient:magit-shortlog:--email":
+		query.Email = value.Enabled
+	case "transient:magit-shortlog:--group=":
+		query.Group = value.Value
+	case "transient:magit-shortlog:--format=":
+		query.Format = value.Value
+	case "transient:magit-shortlog:-w":
+		return applyShortlogWrap(query, value.Value)
+	default:
+		return fmt.Errorf("unsupported shortlog option %s", upstream)
+	}
+	return nil
+}
+
+func applyShortlogWrap(query *gitbackend.ShortlogQuery, value string) error {
+	if value == "" {
+		return nil
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) > 3 {
+		return errors.New("shortlog wrap accepts width and at most two indents")
+	}
+	parsers := []func(string) error{
+		func(part string) error { return setShortlogWidth(query, part) },
+		func(part string) error {
+			return setShortlogIndent(&query.WrapIndent1, &query.WrapIndent1Set, "first", part)
+		},
+		func(part string) error {
+			return setShortlogIndent(&query.WrapIndent2, &query.WrapIndent2Set, "second", part)
+		},
+	}
+	for index, part := range parts {
+		if part != "" {
+			if err := parsers[index](part); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func setShortlogWidth(query *gitbackend.ShortlogQuery, value string) error {
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		return errors.New("shortlog width must be a positive integer")
+	}
+	query.WrapWidth = n
+	return nil
+}
+
+func setShortlogIndent(indent *int, set *bool, name, value string) error {
+	n, err := strconv.Atoi(value)
+	if err != nil || n < 0 {
+		return fmt.Errorf("shortlog %s indent must be a non-negative integer", name)
+	}
+	*indent, *set = n, true
+	return nil
 }
 
 func runShortlogInspection(m *Model, title string, query gitbackend.ShortlogQuery) tea.Cmd {

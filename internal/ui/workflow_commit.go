@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 const (
@@ -65,43 +65,55 @@ func commitCommandID(upstream string) (keymap.CommandID, bool) {
 }
 
 func commitOptionsFromWorkflow(values map[keymap.CommandID]OptionValue) (gitbackend.CommitOptions, error) {
+	upstreamByID := commitOptionUpstreams()
+	var out gitbackend.CommitOptions
+	for id, value := range values {
+		if !optionValueActive(value) {
+			continue
+		}
+		if err := applyCommitWorkflowOption(&out, upstreamByID[id], value); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func commitOptionUpstreams() map[keymap.CommandID]string {
 	upstreamByID := make(map[keymap.CommandID]string)
 	for _, binding := range keymap.Registry() {
 		if binding.Context == keymap.ContextTransient+"c" && binding.Kind == keymap.KindInfix {
 			upstreamByID[binding.Command] = binding.UpstreamCommand
 		}
 	}
-	var out gitbackend.CommitOptions
-	for id, value := range values {
-		if !value.Enabled && value.Value == "" {
-			continue
-		}
-		switch upstreamByID[id] {
-		case "transient:magit-commit:--all":
-			out.All = true
-		case "transient:magit-commit:--allow-empty":
-			out.AllowEmpty = true
-		case "transient:magit-commit:--no-verify":
-			out.NoVerify = true
-		case "transient:magit-commit:--reset-author":
-			out.ResetAuthor = true
-		case "magit:--author":
-			out.Author = value.Value
-		case "magit-commit:--date":
-			out.Date = value.Value
-		case "magit:--signoff":
-			out.Signoff = true
-		case "magit-commit:--reuse-message":
-			out.ReuseMessage = value.Value
-		case "magit:--gpg-sign":
-			out.Sign, out.SigningKey = value.Value == "", value.Value
-		case "magit-commit:--reedit-message":
-			out.ReeditMessage = value.Value
-		case "transient:magit-commit:--verbose":
-			return out, errors.New("verbose commit preview is unavailable")
-		}
+	return upstreamByID
+}
+
+func applyCommitWorkflowOption(out *gitbackend.CommitOptions, upstream string, value OptionValue) error {
+	switch upstream {
+	case "transient:magit-commit:--all":
+		out.All = true
+	case "transient:magit-commit:--allow-empty":
+		out.AllowEmpty = true
+	case "transient:magit-commit:--no-verify":
+		out.NoVerify = true
+	case "transient:magit-commit:--reset-author":
+		out.ResetAuthor = true
+	case "magit:--author":
+		out.Author = value.Value
+	case "magit-commit:--date":
+		out.Date = value.Value
+	case "magit:--signoff":
+		out.Signoff = true
+	case "magit-commit:--reuse-message":
+		out.ReuseMessage = value.Value
+	case "magit:--gpg-sign":
+		out.Sign, out.SigningKey = value.Value == "", value.Value
+	case "magit-commit:--reedit-message":
+		out.ReeditMessage = value.Value
+	case "transient:magit-commit:--verbose":
+		return errors.New("verbose commit preview is unavailable")
 	}
-	return out, nil
+	return nil
 }
 
 func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowCommand) tea.Cmd {

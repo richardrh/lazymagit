@@ -29,6 +29,41 @@ func TestResolverUsesGenericSequences(t *testing.T) {
 	}
 }
 
+func TestBindingQueries(t *testing.T) {
+	status := BindingsFor(SchemeVim, ContextStatus)
+	if len(status) == 0 {
+		t.Fatal("BindingsFor returned no Vim status bindings")
+	}
+	for _, b := range status {
+		if b.Scheme != SchemeVim || b.Context != ContextStatus {
+			t.Fatalf("BindingsFor returned mismatched binding: %+v", b)
+		}
+	}
+	if got := BindingsFor(Scheme("missing"), ContextStatus); len(got) != 0 {
+		t.Fatalf("unknown scheme returned %d bindings", len(got))
+	}
+	transient := BindingsForTransient(SchemeMagit, "magit-commit")
+	if len(transient) == 0 {
+		t.Fatal("BindingsForTransient returned no commit bindings")
+	}
+	for _, b := range transient {
+		if b.Scheme != SchemeMagit || b.Transient != "magit-commit" {
+			t.Fatalf("BindingsForTransient returned mismatched binding: %+v", b)
+		}
+	}
+	for _, scheme := range []Scheme{SchemeVim, SchemeMagit} {
+		got := PrimaryBindings(scheme)
+		if len(got) != 4 {
+			t.Fatalf("PrimaryBindings(%s) returned %d bindings", scheme, len(got))
+		}
+		for _, b := range got {
+			if b.Scheme != scheme || b.Context != ContextStatus || b.Handler != HandlerPrefix {
+				t.Fatalf("PrimaryBindings(%s) returned %+v", scheme, b)
+			}
+		}
+	}
+}
+
 func TestAmbiguousVimGFlushesToRefresh(t *testing.T) {
 	r := NewResolver()
 	if !r.Feed(statusContext, "g").Pending {
@@ -103,5 +138,63 @@ func TestRegistryValidation(t *testing.T) {
 		if ValidateRegistry(bindings) == nil {
 			t.Errorf("%s validation passed", name)
 		}
+	}
+}
+
+func TestRegistryValidationHelpers(t *testing.T) {
+	base := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeVim, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	if err := validateBinding(base); err != nil {
+		t.Fatal(err)
+	}
+	bad := base
+	bad.Availability = AvailabilityNever
+	if err := validateBinding(bad); err == nil {
+		t.Fatal("validateBinding accepted untyped unavailability")
+	}
+	bad = base
+	bad.UpstreamCommand = "magit-one"
+	if err := validateBinding(bad); err == nil {
+		t.Fatal("validateBinding accepted missing source")
+	}
+	if err := validateTokens([]string{"x", "ctrl+TAB"}); err == nil {
+		t.Fatal("validateTokens accepted noncanonical token")
+	}
+	if err := validateTokens([]string{"x"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRegistryIdentityHelpers(t *testing.T) {
+	transient := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeVim, Context: ContextTransient + ".test", Handler: HandlerExecute, Occurrence: "one"}
+	occurrences := map[string]bool{}
+	if err := recordOccurrence(transient, occurrences); err != nil {
+		t.Fatal(err)
+	}
+	if err := recordOccurrence(transient, occurrences); err == nil {
+		t.Fatal("recordOccurrence accepted duplicate")
+	}
+	transient.Occurrence = ""
+	if err := recordOccurrence(transient, map[string]bool{}); err == nil {
+		t.Fatal("recordOccurrence accepted missing identity")
+	}
+	if err := recordOccurrence(Binding{Context: ContextStatus}, map[string]bool{}); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := map[string]CommandID{}
+	status := transient
+	status.Context, status.Occurrence = ContextStatus, ""
+	if err := recordSequence(status, seen); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := status
+	duplicate.Command = "two"
+	if err := recordSequence(duplicate, seen); err == nil {
+		t.Fatal("recordSequence accepted duplicate")
+	}
+	infix := duplicate
+	infix.Handler = HandlerInfix
+	if err := recordSequence(infix, seen); err != nil {
+		t.Fatal(err)
 	}
 }

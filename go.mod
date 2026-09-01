@@ -1,4 +1,4 @@
-module github.com/richard/lazymagit
+module github.com/richardrh/lazymagit
 
 go 1.25.0
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func TestStashStatusSectionJumpAndDetailUsesStableOID(t *testing.T) {

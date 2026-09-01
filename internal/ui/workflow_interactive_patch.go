@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func (m *Model) focusedHunkRequest(key string) (gitbackend.InteractiveChangeRequest, bool) {
@@ -75,9 +75,21 @@ func interactiveChangeAction(scheme keyScheme, key string, kind rowKind) (gitbac
 
 func (m *Model) focusedPatchCoordinates() (hunk, start, end int, ok bool) {
 	lines := m.detailLines()
+	low, high := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
+	start, end = patchRangeCoordinates(lines, low, high)
+	hunk = focusedPatchHunk(lines, m.detailHunk)
+	if hunk < 0 {
+		return 0, 0, 0, false
+	}
+	if m.detailRangeStart < 0 || m.detailRangeEnd < 0 {
+		return hunk, 0, 0, true
+	}
+	return hunk, start, end, start >= 0 && end > start
+}
+
+func patchRangeCoordinates(lines []string, low, high int) (start, end int) {
 	hunk, lineIndex := -1, 0
 	start, end = -1, -1
-	low, high := min(m.detailRangeStart, m.detailRangeEnd), max(m.detailRangeStart, m.detailRangeEnd)
 	for index, line := range lines {
 		if strings.HasPrefix(line, "@@") {
 			hunk++
@@ -95,22 +107,20 @@ func (m *Model) focusedPatchCoordinates() (hunk, start, end int, ok bool) {
 		}
 		lineIndex++
 	}
+	return start, end
+}
+
+func focusedPatchHunk(lines []string, detailHunk int) int {
 	focused := -1
 	for index, line := range lines {
 		if strings.HasPrefix(line, "@@") {
 			focused++
 		}
-		if index == m.detailHunk {
+		if index == detailHunk {
 			break
 		}
 	}
-	if focused < 0 {
-		return 0, 0, 0, false
-	}
-	if m.detailRangeStart < 0 || m.detailRangeEnd < 0 {
-		return focused, 0, 0, true
-	}
-	return focused, start, end, start >= 0 && end > start
+	return focused
 }
 
 func (m *Model) handlePatchHunkSelectionKey(key string) bool {

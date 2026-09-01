@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestCommandArgvGrammarTreatsShellSyntaxAsData(t *testing.T) {
@@ -22,6 +22,64 @@ func TestCommandArgvGrammarTreatsShellSyntaxAsData(t *testing.T) {
 		if _, err := parseCommandArgv(malformed); err == nil {
 			t.Fatalf("malformed argv accepted: %q", malformed)
 		}
+	}
+}
+
+func TestCommandArgvParserHelpers(t *testing.T) {
+	unquoted := commandArgvParser{}
+	unquoted.consumeUnquoted('a')
+	unquoted.consumeUnquoted(' ')
+	unquoted.consumeUnquoted('\'')
+	if !unquoted.started || unquoted.mode != commandArgvSingleQuoted || strings.Join(unquoted.argv, "|") != "a" {
+		t.Fatalf("unquoted parser state = %+v", unquoted)
+	}
+
+	single := commandArgvParser{mode: commandArgvSingleQuoted}
+	single.consumeSingleQuoted('b')
+	single.consumeSingleQuoted('\'')
+	if single.word.String() != "b" || single.mode != commandArgvUnquoted || !single.started {
+		t.Fatalf("single-quoted parser state = %+v", single)
+	}
+
+	double := commandArgvParser{mode: commandArgvDoubleQuoted}
+	double.consumeDoubleQuoted('c')
+	double.consumeDoubleQuoted('\\')
+	double.consume('d')
+	double.consumeDoubleQuoted('"')
+	if double.word.String() != "cd" || double.mode != commandArgvUnquoted || double.escaped || !double.started {
+		t.Fatalf("double-quoted parser state = %+v", double)
+	}
+
+	quotedRoute := commandArgvParser{mode: commandArgvSingleQuoted}
+	quotedRoute.consume('x')
+	doubleRoute := commandArgvParser{mode: commandArgvDoubleQuoted}
+	doubleRoute.consume('y')
+	unquotedRoute := commandArgvParser{}
+	unquotedRoute.consume('z')
+	if quotedRoute.word.String() != "x" || doubleRoute.word.String() != "y" || unquotedRoute.word.String() != "z" {
+		t.Fatalf("consume routing failed: %q %q %q", quotedRoute.word.String(), doubleRoute.word.String(), unquotedRoute.word.String())
+	}
+
+	for name, parser := range map[string]commandArgvParser{
+		"escape": {escaped: true},
+		"quote":  {mode: commandArgvSingleQuoted},
+		"empty":  {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parser.finish(); err == nil {
+				t.Fatal("invalid parser state finished without an error")
+			}
+		})
+	}
+	finished := commandArgvParser{started: true}
+	finished.word.WriteString("done")
+	argv, err := finished.finish()
+	if err != nil || strings.Join(argv, "|") != "done" {
+		t.Fatalf("finished argv = %#v, %v", argv, err)
+	}
+	finished.flush()
+	if strings.Join(finished.argv, "|") != "done" {
+		t.Fatalf("empty flush changed argv: %#v", finished.argv)
 	}
 }
 

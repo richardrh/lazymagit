@@ -7,8 +7,8 @@ import (
 	"strconv"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 // History registration is derived from upstream identities. This intentionally
@@ -86,90 +86,79 @@ func historyTopHandler(upstream string) WorkflowHandler {
 func historyTransientHandler(transient, upstream string) WorkflowHandler {
 	switch transient {
 	case "magit-cherry-pick":
-		switch upstream {
-		case "magit-cherry-copy":
-			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, false, false, c) }
-		case "magit-cherry-apply":
-			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, false, true, c) }
-		case "magit-sequencer-continue":
-			return reviewedHistoryAction(gitbackend.HistoryUICherryContinue)
-		case "magit-sequencer-skip":
-			return reviewedHistoryAction(gitbackend.HistoryUICherrySkip)
-		case "magit-sequencer-abort":
-			return reviewedHistoryAction(gitbackend.HistoryUICherryAbort)
-		}
+		return cherryPickTransientHandler(upstream)
 	case "magit-revert":
-		switch upstream {
-		case "magit-revert-and-commit":
-			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, true, false, c) }
-		case "magit-revert-no-commit":
-			return func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, true, true, c) }
-		case "magit-sequencer-continue":
-			return reviewedHistoryAction(gitbackend.HistoryUIRevertContinue)
-		case "magit-sequencer-skip":
-			return reviewedHistoryAction(gitbackend.HistoryUIRevertSkip)
-		case "magit-sequencer-abort":
-			return reviewedHistoryAction(gitbackend.HistoryUIRevertAbort)
-		}
+		return revertTransientHandler(upstream)
 	case "magit-rebase":
-		switch upstream {
-		case "magit-rebase-branch", "magit-rebase-subset":
-			return openRebaseWorkflow
-		case "magit-rebase-interactive", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit":
-			return openInteractiveRebaseWorkflow
-		case "magit-rebase-onto-upstream":
-			return openRebaseUpstream
-		case "magit-rebase-onto-pushremote":
-			return openRebasePushRemote
-		case "magit-rebase-continue":
-			return reviewedHistoryAction(gitbackend.HistoryUIRebaseContinue)
-		case "magit-rebase-skip":
-			return reviewedHistoryAction(gitbackend.HistoryUIRebaseSkip)
-		case "magit-rebase-abort":
-			return reviewedHistoryAction(gitbackend.HistoryUIRebaseAbort)
-		case "magit-rebase-edit":
-			return openRebaseTodoWorkflow
-		}
+		return rebaseTransientHandler(upstream)
 	case "magit-reset":
-		switch upstream {
-		case "magit-reset-mixed", "magit-branch-reset":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetMixed, false) }
-		case "magit-reset-soft":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetSoft, false) }
-		case "magit-reset-hard":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetHard, false) }
-		case "magit-reset-keep":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetKeep, false) }
-		case "magit-reset-index":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetIndex, true) }
-		case "magit-reset-worktree":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetWorktree, true) }
-		case "magit-file-checkout":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, gitbackend.ResetFile, true) }
-		}
+		return resetTransientHandler(upstream)
 	case "magit-bisect":
-		switch upstream {
-		case "magit-bisect-start":
-			return openBisectStart
-		case "magit-bisect-good":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd {
-				return openBisectRevision(m, gitbackend.HistoryUIBisectGood)
-			}
-		case "magit-bisect-bad":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd { return openBisectRevision(m, gitbackend.HistoryUIBisectBad) }
-		case "magit-bisect-skip":
-			return func(m *Model, _ WorkflowCommand) tea.Cmd {
-				return openBisectRevision(m, gitbackend.HistoryUIBisectSkip)
-			}
-		case "magit-bisect-mark":
-			return openBisectMark
-		case "magit-bisect-reset":
-			return reviewedHistoryAction(gitbackend.HistoryUIBisectReset)
-			// magit-bisect-run deliberately has no handler. Arbitrary argv execution
-			// requires both an unsafe capability and a reviewed execution contract.
-		}
+		return bisectTransientHandler(upstream)
 	}
 	return nil
+}
+
+func cherryPickTransientHandler(upstream string) WorkflowHandler {
+	return map[string]WorkflowHandler{
+		"magit-cherry-copy":        func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, false, false, c) },
+		"magit-cherry-apply":       func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, false, true, c) },
+		"magit-sequencer-continue": reviewedHistoryAction(gitbackend.HistoryUICherryContinue),
+		"magit-sequencer-skip":     reviewedHistoryAction(gitbackend.HistoryUICherrySkip),
+		"magit-sequencer-abort":    reviewedHistoryAction(gitbackend.HistoryUICherryAbort),
+	}[upstream]
+}
+
+func revertTransientHandler(upstream string) WorkflowHandler {
+	return map[string]WorkflowHandler{
+		"magit-revert-and-commit":  func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, true, false, c) },
+		"magit-revert-no-commit":   func(m *Model, c WorkflowCommand) tea.Cmd { return openPickWorkflow(m, true, true, c) },
+		"magit-sequencer-continue": reviewedHistoryAction(gitbackend.HistoryUIRevertContinue),
+		"magit-sequencer-skip":     reviewedHistoryAction(gitbackend.HistoryUIRevertSkip),
+		"magit-sequencer-abort":    reviewedHistoryAction(gitbackend.HistoryUIRevertAbort),
+	}[upstream]
+}
+
+func rebaseTransientHandler(upstream string) WorkflowHandler {
+	return map[string]WorkflowHandler{
+		"magit-rebase-branch": openRebaseWorkflow, "magit-rebase-subset": openRebaseWorkflow,
+		"magit-rebase-interactive": openInteractiveRebaseWorkflow, "magit-rebase-edit-commit": openInteractiveRebaseWorkflow,
+		"magit-rebase-reword-commit": openInteractiveRebaseWorkflow, "magit-rebase-remove-commit": openInteractiveRebaseWorkflow,
+		"magit-rebase-onto-upstream": openRebaseUpstream, "magit-rebase-onto-pushremote": openRebasePushRemote,
+		"magit-rebase-continue": reviewedHistoryAction(gitbackend.HistoryUIRebaseContinue),
+		"magit-rebase-skip":     reviewedHistoryAction(gitbackend.HistoryUIRebaseSkip),
+		"magit-rebase-abort":    reviewedHistoryAction(gitbackend.HistoryUIRebaseAbort), "magit-rebase-edit": openRebaseTodoWorkflow,
+	}[upstream]
+}
+
+func resetTransientHandler(upstream string) WorkflowHandler {
+	type resetTarget struct {
+		mode gitbackend.ResetMode
+		file bool
+	}
+	target, ok := map[string]resetTarget{
+		"magit-reset-mixed": {gitbackend.ResetMixed, false}, "magit-branch-reset": {gitbackend.ResetMixed, false},
+		"magit-reset-soft": {gitbackend.ResetSoft, false}, "magit-reset-hard": {gitbackend.ResetHard, false},
+		"magit-reset-keep": {gitbackend.ResetKeep, false}, "magit-reset-index": {gitbackend.ResetIndex, true},
+		"magit-reset-worktree": {gitbackend.ResetWorktree, true}, "magit-file-checkout": {gitbackend.ResetFile, true},
+	}[upstream]
+	if !ok {
+		return nil
+	}
+	return func(m *Model, _ WorkflowCommand) tea.Cmd { return openResetWorkflow(m, target.mode, target.file) }
+}
+
+func bisectTransientHandler(upstream string) WorkflowHandler {
+	if action, ok := map[string]gitbackend.HistoryUIAction{
+		"magit-bisect-good": gitbackend.HistoryUIBisectGood, "magit-bisect-bad": gitbackend.HistoryUIBisectBad,
+		"magit-bisect-skip": gitbackend.HistoryUIBisectSkip,
+	}[upstream]; ok {
+		return func(m *Model, _ WorkflowCommand) tea.Cmd { return openBisectRevision(m, action) }
+	}
+	return map[string]WorkflowHandler{
+		"magit-bisect-start": openBisectStart, "magit-bisect-mark": openBisectMark,
+		"magit-bisect-reset": reviewedHistoryAction(gitbackend.HistoryUIBisectReset),
+	}[upstream]
 }
 
 func historyUnavailable(reason string) WorkflowHandler {
@@ -177,6 +166,9 @@ func historyUnavailable(reason string) WorkflowHandler {
 }
 
 func selectedHistoryRevision(m *Model) string {
+	if revision := activeInspectionRevision(m); revision != "" {
+		return revision
+	}
 	if current, ok := m.rows[m.tree.Cursor()]; ok && current.kind == rowCommit && current.commit.ID != "" {
 		return current.commit.ID
 	}

@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/richard/lazymagit/internal/keymap"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 // WorkflowCommand is the lossless hand-off from a transient to a domain.
@@ -142,34 +142,48 @@ func (m *Model) hasInjectedBackend() bool {
 // It is exported for domain tests and is also exercised by central tests.
 func (m *Model) ValidateUIHandlers() error {
 	for _, binding := range keymap.Registry() {
-		if binding.Handler == keymap.HandlerExecute && !builtinUICommands[binding.Command] {
-			if _, ok := m.workflowHandlers[binding.Command]; !ok {
-				return fmt.Errorf("%s has no UI handler", binding.Command)
-			}
-		}
-		if binding.Handler == keymap.HandlerInfix && binding.Kind != keymap.KindInfix {
-			return fmt.Errorf("%s has invalid infix handler", binding.Command)
-		}
-		if binding.Availability == keymap.AvailabilityNever && (binding.Unavailable == "" || binding.UnavailableCategory == keymap.UnavailableNone) {
-			return fmt.Errorf("%s has untyped unavailability", binding.Command)
+		if err := validateUIBinding(binding, m.workflowHandlers); err != nil {
+			return err
 		}
 	}
 	for id, capability := range m.workflowCapabilities {
-		if _, ok := m.workflowHandlers[id]; !ok {
-			return fmt.Errorf("%s declares a capability without a handler", id)
-		}
-		matched := false
-		for _, binding := range keymap.Registry() {
-			if binding.UpstreamCommand == capability.UpstreamCommand && (capability.Transient == "" || binding.Transient == capability.Transient) {
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			return fmt.Errorf("%s capability does not match the manifest", id)
+		if err := validateUICapability(id, capability, m.workflowHandlers); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func validateUIBinding(binding keymap.Binding, handlers map[keymap.CommandID]WorkflowHandler) error {
+	if binding.Handler == keymap.HandlerExecute && !builtinUICommands[binding.Command] && handlers[binding.Command] == nil {
+		return fmt.Errorf("%s has no UI handler", binding.Command)
+	}
+	if binding.Handler == keymap.HandlerInfix && binding.Kind != keymap.KindInfix {
+		return fmt.Errorf("%s has invalid infix handler", binding.Command)
+	}
+	if binding.Availability == keymap.AvailabilityNever && (binding.Unavailable == "" || binding.UnavailableCategory == keymap.UnavailableNone) {
+		return fmt.Errorf("%s has untyped unavailability", binding.Command)
+	}
+	return nil
+}
+
+func validateUICapability(id keymap.CommandID, capability WorkflowCapability, handlers map[keymap.CommandID]WorkflowHandler) error {
+	if handlers[id] == nil {
+		return fmt.Errorf("%s declares a capability without a handler", id)
+	}
+	if !capabilityMatchesManifest(capability) {
+		return fmt.Errorf("%s capability does not match the manifest", id)
+	}
+	return nil
+}
+
+func capabilityMatchesManifest(capability WorkflowCapability) bool {
+	for _, binding := range keymap.Registry() {
+		if binding.UpstreamCommand == capability.UpstreamCommand && (capability.Transient == "" || binding.Transient == capability.Transient) {
+			return true
+		}
+	}
+	return false
 }
 
 var builtinUICommands = map[keymap.CommandID]bool{
@@ -431,24 +445,42 @@ func (m *Model) workflowValues() WorkflowValues {
 }
 
 func validateWorkflow(d WorkflowDialog, values WorkflowValues) error {
-	for _, field := range d.Fields {
+	if err := validateRequiredWorkflowFields(d.Fields, values); err != nil {
+		return err
+	}
+	if err := validateWorkflowCallbacks(d); err != nil {
+		return err
+	}
+	if d.Validate != nil {
+		return d.Validate(values)
+	}
+	return nil
+}
+
+func validateRequiredWorkflowFields(fields []WorkflowField, values WorkflowValues) error {
+	for _, field := range fields {
 		if field.Required && strings.TrimSpace(values[field.Name]) == "" {
 			return fmt.Errorf("%s is required", field.Label)
 		}
 	}
+	return nil
+}
+
+func validateWorkflowCallbacks(d WorkflowDialog) error {
 	if d.Run != nil {
 		if d.Submit != nil || d.Preflight != nil || d.ReviewPreflight != nil || d.SubmitReview != nil {
 			return errors.New("workflow run callback is mutually exclusive with submit and preflight callbacks")
 		}
-	} else if d.ReviewPreflight != nil || d.SubmitReview != nil {
+		return nil
+	}
+	if d.ReviewPreflight != nil || d.SubmitReview != nil {
 		if d.ReviewPreflight == nil || d.SubmitReview == nil {
 			return errors.New("reviewed workflow requires both preflight and submit callbacks")
 		}
-	} else if d.Submit == nil {
-		return errors.New("workflow submit callback is not configured")
+		return nil
 	}
-	if d.Validate != nil {
-		return d.Validate(values)
+	if d.Submit == nil {
+		return errors.New("workflow submit callback is not configured")
 	}
 	return nil
 }

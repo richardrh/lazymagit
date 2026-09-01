@@ -28,6 +28,31 @@ func (r *Repository) ReviewPush(ctx context.Context, in PushUIArgs) (ReviewedPus
 	if err != nil {
 		return ReviewedPush{}, err
 	}
+	p := reviewedPushFromArgv(argv)
+	if p.Branch, err = r.currentBranch(ctx); err != nil {
+		return p, err
+	}
+	if err = r.loadReviewedPushBranchConfig(ctx, &p); err != nil {
+		return p, err
+	}
+	p.SourceRef = reviewedPushSourceRef(p.Branch, in)
+	if err := r.freezeReviewedPrimarySource(ctx, &p); err != nil {
+		return p, err
+	}
+	if err := r.bindReviewedPushSources(ctx, &p); err != nil {
+		return p, err
+	}
+	if err := r.freezeReviewedPushNamespace(ctx, &p); err != nil {
+		return p, err
+	}
+	if p.RemoteConfig, err = r.remoteIdentityConfig(ctx, p.Remote); err != nil {
+		return p, err
+	}
+	p.Token = NewConfirmationToken(reviewedPushIdentity(p))
+	return p, nil
+}
+
+func reviewedPushFromArgv(argv []string) ReviewedPush {
 	p := ReviewedPush{Argv: append([]string(nil), argv...)}
 	for i, arg := range argv {
 		if arg == "--" && i+1 < len(argv) {
@@ -36,132 +61,146 @@ func (r *Repository) ReviewPush(ctx context.Context, in PushUIArgs) (ReviewedPus
 			break
 		}
 	}
-	if p.Branch, err = r.currentBranch(ctx); err != nil {
-		return p, err
+	return p
+}
+
+func (r *Repository) loadReviewedPushBranchConfig(ctx context.Context, p *ReviewedPush) error {
+	if p.Branch == "" {
+		return nil
 	}
-	if p.Branch != "" {
-		p.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".remote")
-		if err == nil {
-			p.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".merge")
-		}
-		if err == nil {
-			p.PushRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".pushRemote")
-		}
-		if err != nil {
-			return p, err
-		}
+	var err error
+	p.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".remote")
+	if err == nil {
+		p.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".merge")
 	}
-	p.SourceRef = p.Branch
+	if err == nil {
+		p.PushRemote, err = r.workflowConfigValue(ctx, "branch."+p.Branch+".pushRemote")
+	}
+	return err
+}
+
+func (r *Repository) freezeReviewedPushNamespace(ctx context.Context, p *ReviewedPush) error {
+	p.SourceNamespace = reviewedPushSourceNamespace(*p)
+	if p.SourceNamespace == "" {
+		freezeReviewedPushRefspecs(p)
+		return nil
+	}
+	var err error
+	p.Sources, err = r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
+	return err
+}
+
+func reviewedPushSourceRef(branch string, in PushUIArgs) string {
 	if in.Source != "" {
-		p.SourceRef = in.Source
-	} else if in.Tag != "" {
-		p.SourceRef = "refs/tags/" + in.Tag
-	} else if in.NotesRef != "" {
-		p.SourceRef = in.NotesRef
+		return in.Source
 	}
-	if p.SourceRef != "" {
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", p.SourceRef)
-		if resolveErr != nil {
-			return p, fmt.Errorf("resolve reviewed push source %q: %w", p.SourceRef, resolveErr)
-		}
-		p.SourceOID = trimLine(out)
-		// Freeze ordinary singular source selectors to the reviewed object while
-		// preserving the exact reviewed destination.
-		for i, spec := range p.Refspecs {
-			if spec == p.SourceRef {
-				destination := p.SourceRef
-				if !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
-				}
-				p.Refspecs[i] = p.SourceOID + ":" + destination
-			} else if strings.HasPrefix(spec, p.SourceRef+":") {
-				destination := strings.TrimPrefix(spec, p.SourceRef+":")
-				if destination != "" && !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
-				}
-				p.Refspecs[i] = p.SourceOID + ":" + destination
-			}
-		}
-		for i, arg := range p.Argv {
-			if arg == "--" && i+2 <= len(p.Argv) {
-				p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
-				break
-			}
+	if in.Tag != "" {
+		return "refs/tags/" + in.Tag
+	}
+	if in.NotesRef != "" {
+		return in.NotesRef
+	}
+	return branch
+}
+
+func (r *Repository) freezeReviewedPrimarySource(ctx context.Context, p *ReviewedPush) error {
+	if p.SourceRef == "" {
+		return nil
+	}
+	out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", p.SourceRef)
+	if err != nil {
+		return fmt.Errorf("resolve reviewed push source %q: %w", p.SourceRef, err)
+	}
+	p.SourceOID = trimLine(out)
+	for i, spec := range p.Refspecs {
+		if spec == p.SourceRef {
+			p.Refspecs[i] = p.SourceOID + ":" + reviewedPushDestination(p.SourceRef)
+		} else if strings.HasPrefix(spec, p.SourceRef+":") {
+			p.Refspecs[i] = p.SourceOID + ":" + reviewedPushDestination(strings.TrimPrefix(spec, p.SourceRef+":"))
 		}
 	}
-	// Bind every explicit source, not only the dialog's primary selector.
+	replaceReviewedPushArgv(p)
+	return nil
+}
+
+func reviewedPushDestination(value string) string {
+	if value != "" && !strings.HasPrefix(value, "refs/") {
+		return "refs/heads/" + value
+	}
+	return value
+}
+
+func (r *Repository) bindReviewedPushSources(ctx context.Context, p *ReviewedPush) error {
 	for _, spec := range p.Refspecs {
 		source, _, _ := strings.Cut(strings.TrimPrefix(spec, "+"), ":")
-		if source == "" || source == p.SourceOID || strings.Contains(source, "*") {
+		if source == "" || source == p.SourceOID || strings.Contains(source, "*") || reviewedPushHasSource(p.Sources, source) {
 			continue
 		}
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source)
-		if resolveErr != nil {
-			continue
-		}
-		found := false
-		for _, existing := range p.Sources {
-			found = found || existing.Ref == source
-		}
-		if !found {
+		out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source)
+		if err == nil {
 			p.Sources = append(p.Sources, ReviewedPushSource{source, trimLine(out)})
 		}
 	}
 	if p.SourceRef != "" && len(p.Sources) == 0 {
 		p.Sources = append(p.Sources, ReviewedPushSource{p.SourceRef, p.SourceOID})
 	}
+	return nil
+}
+
+func reviewedPushHasSource(sources []ReviewedPushSource, source string) bool {
+	for _, existing := range sources {
+		if existing.Ref == source {
+			return true
+		}
+	}
+	return false
+}
+
+func reviewedPushSourceNamespace(p ReviewedPush) string {
+	namespace := ""
 	for _, spec := range p.Refspecs {
 		if spec == ":" {
-			p.SourceNamespace = "refs/heads"
+			namespace = "refs/heads"
 		}
 		if strings.Contains(spec, "*") {
-			p.SourceNamespace = strings.Split(spec, "*")[0]
+			namespace = strings.Split(spec, "*")[0]
 		}
 	}
 	for _, arg := range p.Argv {
 		if arg == "--tags" {
-			p.SourceNamespace = "refs/tags"
+			return "refs/tags"
 		}
 	}
-	if p.SourceNamespace != "" {
-		p.Sources, err = r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
-		if err != nil {
-			return p, err
-		}
-	} else {
-		for i, spec := range p.Refspecs {
-			forced := strings.HasPrefix(spec, "+")
-			plain := strings.TrimPrefix(spec, "+")
-			source, destination, hasDestination := strings.Cut(plain, ":")
-			for _, reviewedSource := range p.Sources {
-				if source != reviewedSource.Ref {
-					continue
-				}
+	return namespace
+}
+
+func freezeReviewedPushRefspecs(p *ReviewedPush) {
+	for i, spec := range p.Refspecs {
+		forced := strings.HasPrefix(spec, "+")
+		source, destination, hasDestination := strings.Cut(strings.TrimPrefix(spec, "+"), ":")
+		for _, reviewedSource := range p.Sources {
+			if source == reviewedSource.Ref {
 				if !hasDestination {
 					destination = source
-				}
-				if destination != "" && !strings.HasPrefix(destination, "refs/") {
-					destination = "refs/heads/" + destination
 				}
 				prefix := ""
 				if forced {
 					prefix = "+"
 				}
-				p.Refspecs[i] = prefix + reviewedSource.OID + ":" + destination
-			}
-		}
-		for i, arg := range p.Argv {
-			if arg == "--" && i+1 < len(p.Argv) {
-				p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
-				break
+				p.Refspecs[i] = prefix + reviewedSource.OID + ":" + reviewedPushDestination(destination)
 			}
 		}
 	}
-	if p.RemoteConfig, err = r.remoteIdentityConfig(ctx, p.Remote); err != nil {
-		return p, err
+	replaceReviewedPushArgv(p)
+}
+
+func replaceReviewedPushArgv(p *ReviewedPush) {
+	for i, arg := range p.Argv {
+		if arg == "--" && i+1 < len(p.Argv) {
+			p.Argv = append(append([]string(nil), p.Argv[:i+2]...), p.Refspecs...)
+			return
+		}
 	}
-	p.Token = NewConfirmationToken(reviewedPushIdentity(p))
-	return p, nil
 }
 
 func (r *Repository) ExecuteReviewedPush(ctx context.Context, p ReviewedPush) error {
@@ -185,18 +224,20 @@ func (r *Repository) ExecuteReviewedPushWithPushRemote(ctx context.Context, p Re
 		return fmt.Errorf("configure push remote: %w", err)
 	}
 	if err := r.run(ctx, append([]string(nil), p.Argv...)...); err != nil {
-		var rollback error
-		if p.PushRemote.Set {
-			rollback = r.SetBranchPushRemote(ctx, p.Branch, p.PushRemote.Value)
-		} else {
-			rollback = r.UnsetBranchPushRemote(ctx, p.Branch)
-		}
-		if rollback != nil {
-			return &PartialMutationError{Operation: "persist pushRemote and push", Cause: err, Rollback: rollback, State: []string{"branch." + p.Branch + ".pushRemote=" + remote}}
-		}
-		return fmt.Errorf("push failed; previous pushRemote restored: %w", err)
+		return r.rollbackReviewedPushRemote(ctx, p, remote, err)
 	}
 	return nil
+}
+
+func (r *Repository) rollbackReviewedPushRemote(ctx context.Context, p ReviewedPush, remote string, cause error) error {
+	rollback := r.UnsetBranchPushRemote(ctx, p.Branch)
+	if p.PushRemote.Set {
+		rollback = r.SetBranchPushRemote(ctx, p.Branch, p.PushRemote.Value)
+	}
+	if rollback != nil {
+		return &PartialMutationError{Operation: "persist pushRemote and push", Cause: cause, Rollback: rollback, State: []string{"branch." + p.Branch + ".pushRemote=" + remote}}
+	}
+	return fmt.Errorf("push failed; previous pushRemote restored: %w", cause)
 }
 
 func (r *Repository) validateReviewedPush(ctx context.Context, p ReviewedPush) error {
@@ -204,58 +245,73 @@ func (r *Repository) validateReviewedPush(ctx context.Context, p ReviewedPush) e
 		return errors.New("invalid reviewed push")
 	}
 	current := p
-	var err error
-	if current.Branch, err = r.currentBranch(ctx); err != nil {
+	if err := r.loadReviewedPushBranchState(ctx, &current, p.Branch); err != nil {
 		return err
 	}
-	if current.Branch != p.Branch {
-		return ErrStalePlan
+	if err := r.validateReviewedPushSources(ctx, &current, p); err != nil {
+		return err
 	}
-	if current.Branch != "" {
-		current.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+current.Branch+".remote")
-		if err == nil {
-			current.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+current.Branch+".merge")
-		}
-		if err == nil {
-			current.PushRemote, err = r.workflowConfigValue(ctx, "branch."+current.Branch+".pushRemote")
-		}
-		if err != nil {
-			return err
-		}
-	}
-	if p.SourceRef != "" {
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", p.SourceRef)
-		if resolveErr != nil {
-			return ErrStalePlan
-		}
-		current.SourceOID = trimLine(out)
-	}
-	for _, source := range p.Sources {
-		out, resolveErr := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source.Ref)
-		if resolveErr != nil || trimLine(out) != source.OID {
-			return ErrStalePlan
-		}
-	}
-	if p.SourceNamespace != "" {
-		sources, sourceErr := r.reviewedSourcesInNamespace(ctx, p.SourceNamespace)
-		if sourceErr != nil {
-			return sourceErr
-		}
-		if len(sources) != len(p.Sources) {
-			return ErrStalePlan
-		}
-		for i := range sources {
-			if sources[i] != p.Sources[i] {
-				return ErrStalePlan
-			}
-		}
-	}
+	var err error
 	if current.RemoteConfig, err = r.remoteIdentityConfig(ctx, p.Remote); err != nil {
 		return err
 	}
 	current.Token = ConfirmationToken{}
 	if !p.Token.validFor(reviewedPushIdentity(current)) {
 		return ErrStalePlan
+	}
+	return nil
+}
+
+func (r *Repository) loadReviewedPushBranchState(ctx context.Context, current *ReviewedPush, reviewedBranch string) error {
+	branch, err := r.currentBranch(ctx)
+	if err != nil {
+		return err
+	}
+	current.Branch = branch
+	if branch != reviewedBranch {
+		return ErrStalePlan
+	}
+	if branch == "" {
+		return nil
+	}
+	current.UpstreamRemote, err = r.workflowConfigValue(ctx, "branch."+branch+".remote")
+	if err == nil {
+		current.UpstreamMerge, err = r.workflowConfigValue(ctx, "branch."+branch+".merge")
+	}
+	if err == nil {
+		current.PushRemote, err = r.workflowConfigValue(ctx, "branch."+branch+".pushRemote")
+	}
+	return err
+}
+
+func (r *Repository) validateReviewedPushSources(ctx context.Context, current *ReviewedPush, reviewed ReviewedPush) error {
+	if reviewed.SourceRef != "" {
+		out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", reviewed.SourceRef)
+		if err != nil {
+			return ErrStalePlan
+		}
+		current.SourceOID = trimLine(out)
+	}
+	for _, source := range reviewed.Sources {
+		out, err := r.output(ctx, "rev-parse", "--verify", "--end-of-options", source.Ref)
+		if err != nil || trimLine(out) != source.OID {
+			return ErrStalePlan
+		}
+	}
+	if reviewed.SourceNamespace == "" {
+		return nil
+	}
+	sources, err := r.reviewedSourcesInNamespace(ctx, reviewed.SourceNamespace)
+	if err != nil {
+		return err
+	}
+	if len(sources) != len(reviewed.Sources) {
+		return ErrStalePlan
+	}
+	for i := range sources {
+		if sources[i] != reviewed.Sources[i] {
+			return ErrStalePlan
+		}
 	}
 	return nil
 }

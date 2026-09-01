@@ -8,6 +8,46 @@ import (
 	"testing"
 )
 
+func TestFetchChoicesListsConfiguredRemoteBranchesWithinLimit(t *testing.T) {
+	ctx := context.Background()
+	remote := newBareTestRepo(t)
+	local := newTestRepo(t)
+	local.write("base", "base\n")
+	head := local.commitAll("base")
+	local.git("remote", "add", "origin", remote.dir)
+	local.git("remote", "add", "team/review", remote.dir)
+	local.git("update-ref", "refs/remotes/origin/main", head)
+	local.git("update-ref", "refs/remotes/team/review/topic", head)
+	local.git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	repo, err := Discover(local.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.FetchChoices(ctx, 0); err == nil {
+		t.Fatal("non-positive fetch choice limit was accepted")
+	}
+	choices, err := repo.FetchChoices(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(choices.Remotes, []string{"origin", "team/review"}) {
+		t.Fatalf("remotes = %#v", choices.Remotes)
+	}
+	wantBranches := []FetchRemoteBranch{{Remote: "origin", Branch: "main"}, {Remote: "team/review", Branch: "topic"}}
+	if !reflect.DeepEqual(choices.RemoteBranches, wantBranches) {
+		t.Fatalf("remote branches = %#v, want %#v", choices.RemoteBranches, wantBranches)
+	}
+
+	limited, err := repo.FetchChoices(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited.Remotes) != 1 || len(limited.RemoteBranches) != 1 {
+		t.Fatalf("limit was not enforced: %#v", limited)
+	}
+}
+
 func TestFetchUIWrappersPreserveOptionsAndRecordExactArgs(t *testing.T) {
 	remote := newBareTestRepo(t)
 	local := newTestRepo(t)

@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 const (
@@ -133,11 +133,15 @@ func tagChoices(ctx context.Context, m *Model) ([]WorkflowChoice, error) {
 	if len(tags) == 0 {
 		return nil, errors.New("no tags")
 	}
+	return tagsToChoices(tags), nil
+}
+
+func tagsToChoices(tags []gitbackend.TagInfo) []WorkflowChoice {
 	choices := make([]WorkflowChoice, 0, len(tags))
 	for _, tag := range tags {
 		choices = append(choices, WorkflowChoice{Value: tag.Name, Label: tag.Name + "  " + tag.ObjectID})
 	}
-	return choices, nil
+	return choices
 }
 
 func tagDeleteWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

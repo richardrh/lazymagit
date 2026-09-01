@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-	gitbackend "github.com/richard/lazymagit/internal/git"
-	"github.com/richard/lazymagit/internal/keymap"
-	sectionmodel "github.com/richard/lazymagit/internal/model"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
+	"github.com/richardrh/lazymagit/internal/keymap"
+	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
 
 func navigationUIModel() *Model {

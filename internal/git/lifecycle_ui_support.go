@@ -30,26 +30,9 @@ func CloneRepositoryForUI(ctx context.Context, source, destination string, optio
 	if err != nil {
 		return err
 	}
-	_, statErr := os.Lstat(abs)
-	destinationAbsent := errors.Is(statErr, os.ErrNotExist)
-	if statErr != nil && !destinationAbsent {
-		return fmt.Errorf("inspect clone destination: %w", statErr)
-	}
-	if err := ValidateCloneDestination(abs); err != nil {
+	destinationAbsent, owned, err := reserveCloneDestination(abs)
+	if err != nil {
 		return err
-	}
-	var owned os.FileInfo
-	if destinationAbsent {
-		if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-			return fmt.Errorf("create clone destination parent: %w", err)
-		}
-		if err := os.Mkdir(abs, 0o755); err != nil {
-			return fmt.Errorf("reserve clone destination: %w", err)
-		}
-		owned, err = os.Lstat(abs)
-		if err != nil {
-			return fmt.Errorf("inspect reserved clone destination: %w", err)
-		}
 	}
 	err = CloneRepository(ctx, source, abs, options)
 	if err == nil || !destinationAbsent {
@@ -59,6 +42,31 @@ func CloneRepositoryForUI(ctx context.Context, source, destination string, optio
 		return errors.Join(err, fmt.Errorf("remove partial clone destination: %w", cleanupErr))
 	}
 	return err
+}
+
+func reserveCloneDestination(abs string) (bool, os.FileInfo, error) {
+	_, statErr := os.Lstat(abs)
+	destinationAbsent := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !destinationAbsent {
+		return false, nil, fmt.Errorf("inspect clone destination: %w", statErr)
+	}
+	if err := ValidateCloneDestination(abs); err != nil {
+		return false, nil, err
+	}
+	if !destinationAbsent {
+		return false, nil, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return false, nil, fmt.Errorf("create clone destination parent: %w", err)
+	}
+	if err := os.Mkdir(abs, 0o755); err != nil {
+		return false, nil, fmt.Errorf("reserve clone destination: %w", err)
+	}
+	owned, err := os.Lstat(abs)
+	if err != nil {
+		return false, nil, fmt.Errorf("inspect reserved clone destination: %w", err)
+	}
+	return true, owned, nil
 }
 
 // ValidateInitDestination refuses repository reinitialization and requires an

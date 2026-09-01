@@ -192,13 +192,29 @@ func appendMessage(args []string, message string) []string {
 }
 
 func (r *Repository) commitArgs(ctx context.Context, operation string, initial []string, options CommitOptions) ([]string, error) {
+	if err := validateCommitArgsOptions(operation, options); err != nil {
+		return nil, err
+	}
+	args := appendCommitBooleanArgs(append([]string{"commit"}, initial...), options)
+	args = appendCommitValueArgs(args, options)
+	args, err := r.appendCommitMessageArgs(ctx, args, options)
+	if err != nil {
+		return nil, err
+	}
+	return appendCommitSigningArg(args, options), nil
+}
+
+func validateCommitArgsOptions(operation string, options CommitOptions) error {
 	if options.ReuseMessage != "" && options.ReeditMessage != "" {
-		return nil, &CommitOptionError{Message: operation + " cannot combine reuse-message and reedit-message"}
+		return &CommitOptionError{Message: operation + " cannot combine reuse-message and reedit-message"}
 	}
 	if (options.Sign || options.SigningKey != "") && !options.AllowInteractiveSigning {
-		return nil, fmt.Errorf("%w: commit signing", ErrInteractiveRequired)
+		return fmt.Errorf("%w: commit signing", ErrInteractiveRequired)
 	}
-	args := append([]string{"commit"}, initial...)
+	return nil
+}
+
+func appendCommitBooleanArgs(args []string, options CommitOptions) []string {
 	if options.All {
 		args = append(args, "--all")
 	}
@@ -208,38 +224,55 @@ func (r *Repository) commitArgs(ctx context.Context, operation string, initial [
 	if options.NoVerify {
 		args = append(args, "--no-verify")
 	}
+	return appendCommitAuthorFlags(args, options)
+}
+
+func appendCommitAuthorFlags(args []string, options CommitOptions) []string {
 	if options.ResetAuthor {
 		args = append(args, "--reset-author")
 	}
+	if options.Signoff {
+		args = append(args, "--signoff")
+	}
+	return args
+}
+
+func appendCommitValueArgs(args []string, options CommitOptions) []string {
 	if options.Author != "" {
 		args = append(args, "--author="+options.Author)
 	}
 	if options.Date != "" {
 		args = append(args, "--date="+options.Date)
 	}
-	if options.Signoff {
-		args = append(args, "--signoff")
-	}
+	return args
+}
+
+func (r *Repository) appendCommitMessageArgs(ctx context.Context, args []string, options CommitOptions) ([]string, error) {
 	if options.ReuseMessage != "" {
-		reuse, err := r.resolveCommitForCommitWorkflow(ctx, options.ReuseMessage)
+		oid, err := r.resolveCommitForCommitWorkflow(ctx, options.ReuseMessage)
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, "--reuse-message="+reuse)
+		return append(args, "--reuse-message="+oid), nil
 	}
-	if options.ReeditMessage != "" {
-		reedit, err := r.resolveCommitForCommitWorkflow(ctx, options.ReeditMessage)
-		if err != nil {
-			return nil, err
-		}
-		args = append(args, "--reedit-message="+reedit)
+	if options.ReeditMessage == "" {
+		return args, nil
 	}
+	oid, err := r.resolveCommitForCommitWorkflow(ctx, options.ReeditMessage)
+	if err != nil {
+		return nil, err
+	}
+	return append(args, "--reedit-message="+oid), nil
+}
+
+func appendCommitSigningArg(args []string, options CommitOptions) []string {
 	if options.SigningKey != "" {
-		args = append(args, "--gpg-sign="+options.SigningKey)
-	} else if options.Sign {
-		args = append(args, "--gpg-sign")
+		return append(args, "--gpg-sign="+options.SigningKey)
 	}
-	return args, nil
+	if options.Sign {
+		return append(args, "--gpg-sign")
+	}
+	return args
 }
 
 // CommitMessageForUI loads a bounded editable message after resolving the

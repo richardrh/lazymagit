@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	gitbackend "github.com/richard/lazymagit/internal/git"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
 func TestConflictE2EInspectResolveAndContinueByMagitKeys(t *testing.T) {
@@ -40,13 +40,25 @@ func TestConflictE2EInspectResolveAndContinueByMagitKeys(t *testing.T) {
 		}
 	}
 
-	// E t m is Magit's mergetool action route. It stays in-process, reviews
-	// the exact conflict state, checks out the selected stage, and stages it.
-	sendE2EKey(t, m, keyMsg("E"))
-	sendE2EKey(t, m, keyMsg("t"))
-	sendE2EKey(t, m, keyMsg("m"))
-	sendE2EKey(t, m, keyMsg("tab"))
-	selectWorkflowValue(t, m, "resolution", "theirs")
+	// The inspection itself can select a stage and jump directly into the same
+	// reviewed in-process resolver. Base remains inspect-only.
+	sendE2EKey(t, m, keyMsg("1"))
+	if !strings.Contains(m.message, "inspection only") {
+		t.Fatalf("base selection message = %q", m.message)
+	}
+	sendE2EKey(t, m, keyMsg("3"))
+	sendE2EKey(t, m, keyMsg("r"))
+	resolution := ""
+	if m.workflow != nil {
+		for _, field := range m.workflow.dialog.Fields {
+			if field.Name == "resolution" {
+				resolution = field.Value
+			}
+		}
+	}
+	if resolution != "theirs" {
+		t.Fatalf("direct resolver did not preserve theirs selection: resolution=%q workflow=%#v", resolution, m.workflow)
+	}
 	submitWorkflowByKeys(t, m, true)
 	if got := r.git("show", ":conflict.txt"); got != "theirs" {
 		t.Fatalf("resolved staged content = %q", got)
