@@ -1310,38 +1310,49 @@ func (m *Model) switchSelectedBranch() tea.Cmd {
 	return m.startOperation("switch branch", func(ctx context.Context) error { return m.repo.SwitchBranch(ctx, branch.Name) })
 }
 
+type detailScrollBehavior struct {
+	action string
+	amount int
+}
+
+var detailScrollBehaviors = map[string]detailScrollBehavior{
+	"down":   {action: "lines", amount: 1},
+	"up":     {action: "lines", amount: -1},
+	"home":   {action: "home"},
+	"end":    {action: "end"},
+	"]":      {action: "hunks", amount: 1},
+	"[":      {action: "hunks", amount: -1},
+	"pgdown": {action: "pages", amount: 1},
+	"ctrl+d": {action: "half-pages", amount: 1},
+	"pgup":   {action: "pages", amount: -1},
+	"ctrl+u": {action: "half-pages", amount: -1},
+}
+
 func (m *Model) handleDetailScroll(key string) (tea.Cmd, bool) {
 	viewport := m.detailViewportHeight()
-	if viewport <= 0 {
+	behavior, handled := detailScrollBehaviors[key]
+	if viewport <= 0 || !handled {
 		return nil, false
 	}
-	page := viewport
-	halfPage := max(1, viewport/2)
-	switch key {
-	case "down":
-		m.scrollDetail(1)
-	case "up":
-		m.scrollDetail(-1)
+	m.applyDetailScrollBehavior(behavior, viewport)
+	return nil, true
+}
+
+func (m *Model) applyDetailScrollBehavior(behavior detailScrollBehavior, viewport int) {
+	switch behavior.action {
+	case "lines":
+		m.scrollDetail(behavior.amount)
 	case "home":
 		m.detailOffset = 0
 	case "end":
 		m.detailOffset = m.detailMaximumOffset()
-	case "]":
-		m.scrollDetailHunk(1)
-	case "[":
-		m.scrollDetailHunk(-1)
-	case "pgdown":
-		m.scrollDetail(page)
-	case "ctrl+d":
-		m.scrollDetail(halfPage)
-	case "pgup":
-		m.scrollDetail(-page)
-	case "ctrl+u":
-		m.scrollDetail(-halfPage)
-	default:
-		return nil, false
+	case "hunks":
+		m.scrollDetailHunk(behavior.amount)
+	case "pages":
+		m.scrollDetail(behavior.amount * viewport)
+	case "half-pages":
+		m.scrollDetail(behavior.amount * max(1, viewport/2))
 	}
-	return nil, true
 }
 
 func (m *Model) scrollDetail(delta int) {
