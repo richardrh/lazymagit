@@ -495,35 +495,43 @@ func (r *Repository) resolvePushTarget(ctx context.Context, target PushTarget, e
 	case PushToPushRemote:
 		return r.PushRemote(ctx)
 	case PushToUpstream:
-		branch, err := r.currentBranch(ctx)
-		if err != nil {
-			return "", err
-		}
-		if branch == "" {
-			return "", ErrNoUpstream
-		}
-		remote, ok, err := r.configValue(ctx, "branch."+branch+".remote")
-		if err != nil {
-			return "", err
-		}
-		if !ok {
-			return "", ErrNoUpstream
-		}
-		if err := r.validateTransferRemote(ctx, remote); err != nil {
-			return "", err
-		}
-		return remote, nil
+		return r.upstreamPushRemote(ctx)
 	case PushElsewhere:
-		if explicit == "" {
-			return "", errors.New("push remote is empty")
-		}
-		if err := r.validateTransferRemote(ctx, explicit); err != nil {
-			return "", err
-		}
-		return explicit, nil
+		return r.explicitPushRemote(ctx, explicit)
 	default:
 		return "", errors.New("invalid push target")
 	}
+}
+
+func (r *Repository) upstreamPushRemote(ctx context.Context) (string, error) {
+	branch, err := r.currentBranch(ctx)
+	if err != nil {
+		return "", err
+	}
+	if branch == "" {
+		return "", ErrNoUpstream
+	}
+	remote, ok, err := r.configValue(ctx, "branch."+branch+".remote")
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrNoUpstream
+	}
+	if err := r.validateTransferRemote(ctx, remote); err != nil {
+		return "", err
+	}
+	return remote, nil
+}
+
+func (r *Repository) explicitPushRemote(ctx context.Context, remote string) (string, error) {
+	if remote == "" {
+		return "", errors.New("push remote is empty")
+	}
+	if err := r.validateTransferRemote(ctx, remote); err != nil {
+		return "", err
+	}
+	return remote, nil
 }
 
 func (r *Repository) validateTransferRemote(ctx context.Context, name string) error {

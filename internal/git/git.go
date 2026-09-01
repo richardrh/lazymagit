@@ -508,36 +508,55 @@ func parsePorcelainV2Status(out []byte) (Status, error) {
 		if len(record) == 0 {
 			continue
 		}
-		switch record[0] {
-		case '?':
-			if len(record) >= 3 {
-				status.Files = append(status.Files, FileStatus{Path: string(record[2:]), Unstaged: ChangeUntracked})
-			}
-		case '1', '2', 'u':
-			// Ordinary records have eight fixed fields before the path,
-			// rename records have nine, and unmerged records have ten.
-			fixed := 8
-			if record[0] == '2' {
-				fixed = 9
-			} else if record[0] == 'u' {
-				fixed = 10
-			}
-			parts := bytes.SplitN(record, []byte{' '}, fixed+1)
-			if len(parts) != fixed+1 || len(parts[1]) < 2 {
-				return Status{}, fmt.Errorf("malformed porcelain v2 status record %q", record)
-			}
-			file := FileStatus{Path: string(parts[fixed]), Staged: change(parts[1][0]), Unstaged: change(parts[1][1])}
-			if record[0] == '2' {
-				if i+1 >= len(records) {
-					return Status{}, errors.New("malformed porcelain v2 rename record")
-				}
-				i++
-				file.OriginalPath = string(records[i])
-			}
+		file, consumed, ok, err := parsePorcelainV2Record(record, records[i+1:])
+		if err != nil {
+			return Status{}, err
+		}
+		i += consumed
+		if ok {
 			status.Files = append(status.Files, file)
 		}
 	}
 	return status, nil
+}
+
+func parsePorcelainV2Record(record []byte, following [][]byte) (FileStatus, int, bool, error) {
+	if record[0] == '?' {
+		if len(record) < 3 {
+			return FileStatus{}, 0, false, nil
+		}
+		return FileStatus{Path: string(record[2:]), Unstaged: ChangeUntracked}, 0, true, nil
+	}
+	fixed, tracked := porcelainV2FixedFields(record[0])
+	if !tracked {
+		return FileStatus{}, 0, false, nil
+	}
+	parts := bytes.SplitN(record, []byte{' '}, fixed+1)
+	if len(parts) != fixed+1 || len(parts[1]) < 2 {
+		return FileStatus{}, 0, false, fmt.Errorf("malformed porcelain v2 status record %q", record)
+	}
+	file := FileStatus{Path: string(parts[fixed]), Staged: change(parts[1][0]), Unstaged: change(parts[1][1])}
+	if record[0] != '2' {
+		return file, 0, true, nil
+	}
+	if len(following) == 0 {
+		return FileStatus{}, 0, false, errors.New("malformed porcelain v2 rename record")
+	}
+	file.OriginalPath = string(following[0])
+	return file, 1, true, nil
+}
+
+func porcelainV2FixedFields(kind byte) (int, bool) {
+	switch kind {
+	case '1':
+		return 8, true
+	case '2':
+		return 9, true
+	case 'u':
+		return 10, true
+	default:
+		return 0, false
+	}
 }
 
 func pathsArgs(prefix []string, paths []string) []string {
@@ -1281,9 +1300,34 @@ func commandExitCode(err error) int {
 }
 
 func (r *Repository) upstreamOrPrimaryRemote(ctx context.Context, branch string) (string, error) {
-	out, err := r.output(ctx, "remote")
+	remotes, err := r.remoteNames(ctx)
 	if err != nil {
 		return "", err
+	}
+	remote, ok, err := r.branchRemote(ctx, branch)
+	if err != nil || ok {
+		return remote, err
+	}
+	if len(remotes) == 1 {
+		return remotes[0], nil
+	}
+	primary, err := r.primaryRemote(ctx, remotes)
+	if err != nil {
+		return "", err
+	}
+	if primary != "" {
+		return primary, nil
+	}
+	if len(remotes) == 0 {
+		return "", fmt.Errorf("%w: no remotes are configured", ErrNoFetchRemote)
+	}
+	return "", fmt.Errorf("%w: current branch has no configured remote and no primary remote exists", ErrNoFetchRemote)
+}
+
+func (r *Repository) remoteNames(ctx context.Context) ([]string, error) {
+	out, err := r.output(ctx, "remote")
+	if err != nil {
+		return nil, err
 	}
 	var remotes []string
 	for _, remote := range strings.Split(trimLine(out), "\n") {
@@ -1291,32 +1335,30 @@ func (r *Repository) upstreamOrPrimaryRemote(ctx context.Context, branch string)
 			remotes = append(remotes, remote)
 		}
 	}
-	if branch != "" {
-		if remote, ok, err := r.configValue(ctx, "branch."+branch+".remote"); err != nil {
-			return "", err
-		} else if ok {
-			return remote, nil
-		}
+	return remotes, nil
+}
+
+func (r *Repository) branchRemote(ctx context.Context, branch string) (string, bool, error) {
+	if branch == "" {
+		return "", false, nil
 	}
-	if len(remotes) == 1 {
-		return remotes[0], nil
-	}
-	primary, ok, err := r.configValue(ctx, "magit.primaryRemote")
+	return r.configValue(ctx, "branch."+branch+".remote")
+}
+
+func (r *Repository) primaryRemote(ctx context.Context, remotes []string) (string, error) {
+	configured, ok, err := r.configValue(ctx, "magit.primaryRemote")
 	if err != nil {
 		return "", err
 	}
-	if ok && containsString(remotes, primary) {
-		return primary, nil
+	if ok && containsString(remotes, configured) {
+		return configured, nil
 	}
-	for _, primary := range []string{"upstream", "origin"} {
-		if containsString(remotes, primary) {
-			return primary, nil
+	for _, candidate := range []string{"upstream", "origin"} {
+		if containsString(remotes, candidate) {
+			return candidate, nil
 		}
 	}
-	if len(remotes) == 0 {
-		return "", fmt.Errorf("%w: no remotes are configured", ErrNoFetchRemote)
-	}
-	return "", fmt.Errorf("%w: current branch has no configured remote and no primary remote exists", ErrNoFetchRemote)
+	return "", nil
 }
 
 func containsString(values []string, want string) bool {

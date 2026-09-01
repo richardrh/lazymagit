@@ -408,6 +408,24 @@ func (r *Repository) compileShortlogQuery(ctx context.Context, q ShortlogQuery) 
 }
 
 func shortlogQueryOptions(q ShortlogQuery) ([]string, error) {
+	args := shortlogBooleanOptions(q)
+	group, err := shortlogGroupOption(q.Group)
+	if err != nil {
+		return nil, err
+	}
+	format, err := shortlogFormatOption(q.Format)
+	if err != nil {
+		return nil, err
+	}
+	args = appendNonEmpty(args, group, format)
+	wrap, err := shortlogWrapOption(q)
+	if err != nil {
+		return nil, err
+	}
+	return appendNonEmpty(args, wrap), nil
+}
+
+func shortlogBooleanOptions(q ShortlogQuery) []string {
 	var args []string
 	for _, option := range []struct {
 		enabled bool
@@ -417,52 +435,76 @@ func shortlogQueryOptions(q ShortlogQuery) ([]string, error) {
 			args = append(args, option.value)
 		}
 	}
-	if q.Group != "" {
-		if strings.ContainsAny(q.Group, "\x00\r\n") || strings.HasPrefix(q.Group, "-") {
-			return nil, errors.New("invalid shortlog group")
+	return args
+}
+
+func shortlogGroupOption(group string) (string, error) {
+	if group == "" {
+		return "", nil
+	}
+	if strings.ContainsAny(group, "\x00\r\n") || strings.HasPrefix(group, "-") {
+		return "", errors.New("invalid shortlog group")
+	}
+	if group != "author" && group != "committer" && !strings.HasPrefix(group, "trailer:") {
+		return "", errors.New("shortlog group must be author, committer, or trailer:<field>")
+	}
+	return "--group=" + group, nil
+}
+
+func shortlogFormatOption(format string) (string, error) {
+	if strings.ContainsAny(format, "\x00\r\n") {
+		return "", errors.New("invalid shortlog format")
+	}
+	if format == "" {
+		return "", nil
+	}
+	return "--format=" + format, nil
+}
+
+func appendNonEmpty(args []string, values ...string) []string {
+	for _, value := range values {
+		if value != "" {
+			args = append(args, value)
 		}
-		if q.Group != "author" && q.Group != "committer" && !strings.HasPrefix(q.Group, "trailer:") {
-			return nil, errors.New("shortlog group must be author, committer, or trailer:<field>")
-		}
-		args = append(args, "--group="+q.Group)
 	}
-	if q.Format != "" {
-		if strings.ContainsAny(q.Format, "\x00\r\n") {
-			return nil, errors.New("invalid shortlog format")
-		}
-		args = append(args, "--format="+q.Format)
-	}
-	wrap, err := shortlogWrapOption(q)
-	if err != nil {
-		return nil, err
-	}
-	if wrap != "" {
-		args = append(args, wrap)
-	}
-	return args, nil
+	return args
 }
 
 func shortlogWrapOption(q ShortlogQuery) (string, error) {
-	if q.WrapWidth < 0 || q.WrapIndent1 < 0 || q.WrapIndent2 < 0 {
-		return "", errors.New("shortlog wrap values cannot be negative")
+	if err := validateShortlogWrap(q); err != nil {
+		return "", err
 	}
-	if q.WrapWidth > 10000 || q.WrapIndent1 > 10000 || q.WrapIndent2 > 10000 {
-		return "", errors.New("shortlog wrap values cannot exceed 10000")
+	if q.WrapWidth == 0 {
+		return "", nil
+	}
+	values := []int{q.WrapWidth}
+	if q.WrapIndent1Set {
+		values = append(values, q.WrapIndent1)
+	}
+	if q.WrapIndent2Set {
+		values = append(values, q.WrapIndent2)
+	}
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = strconv.Itoa(value)
+	}
+	return "-w" + strings.Join(parts, ","), nil
+}
+
+func validateShortlogWrap(q ShortlogQuery) error {
+	values := []int{q.WrapWidth, q.WrapIndent1, q.WrapIndent2}
+	for _, value := range values {
+		if value < 0 {
+			return errors.New("shortlog wrap values cannot be negative")
+		}
+		if value > 10000 {
+			return errors.New("shortlog wrap values cannot exceed 10000")
+		}
 	}
 	if q.WrapIndent2Set && !q.WrapIndent1Set {
-		return "", errors.New("shortlog second indent requires the first indent")
+		return errors.New("shortlog second indent requires the first indent")
 	}
-	if q.WrapWidth > 0 {
-		wrap := "-w" + strconv.Itoa(q.WrapWidth)
-		if q.WrapIndent1Set {
-			wrap += "," + strconv.Itoa(q.WrapIndent1)
-			if q.WrapIndent2Set {
-				wrap += "," + strconv.Itoa(q.WrapIndent2)
-			}
-		}
-		return wrap, nil
-	}
-	return "", nil
+	return nil
 }
 
 func (r *Repository) shortlogQuerySelector(ctx context.Context, q ShortlogQuery) (string, error) {
@@ -500,15 +542,24 @@ type RequestPullResult struct {
 }
 
 func (r *Repository) QueryRequestPull(ctx context.Context, q RequestPullQuery) (RequestPullResult, error) {
-	if strings.TrimSpace(q.URL) == "" {
-		return RequestPullResult{}, errors.New("request-pull URL is empty")
+	args, limit, err := r.compileRequestPullQuery(ctx, q)
+	if err != nil {
+		return RequestPullResult{}, err
 	}
-	if len(q.URL) > 16<<10 || strings.HasPrefix(q.URL, "-") || strings.ContainsAny(q.URL, "\x00\r\n") {
-		return RequestPullResult{}, errors.New("invalid request-pull URL")
+	out, truncated, err := r.outputLimited(ctx, limit, args...)
+	if err != nil {
+		return RequestPullResult{}, err
+	}
+	return RequestPullResult{Detail: string(out), Truncated: truncated}, nil
+}
+
+func (r *Repository) compileRequestPullQuery(ctx context.Context, q RequestPullQuery) ([]string, int, error) {
+	if err := validateRequestPullURL(q.URL); err != nil {
+		return nil, 0, err
 	}
 	start, err := r.resolveCommitOID(ctx, q.Start)
 	if err != nil {
-		return RequestPullResult{}, fmt.Errorf("resolve request-pull start: %w", err)
+		return nil, 0, fmt.Errorf("resolve request-pull start: %w", err)
 	}
 	endRevision := q.End
 	if endRevision == "" {
@@ -516,20 +567,20 @@ func (r *Repository) QueryRequestPull(ctx context.Context, q RequestPullQuery) (
 	}
 	end, err := r.resolveCommitOID(ctx, endRevision)
 	if err != nil {
-		return RequestPullResult{}, fmt.Errorf("resolve request-pull end: %w", err)
+		return nil, 0, fmt.Errorf("resolve request-pull end: %w", err)
 	}
-	limit := q.OutputLimit
-	if limit == 0 {
-		limit = inspectionOutputLimit
+	limit, err := inspectionByteLimit("request-pull", q.OutputLimit)
+	return []string{"--no-pager", "request-pull", start, q.URL, end}, limit, err
+}
+
+func validateRequestPullURL(url string) error {
+	if strings.TrimSpace(url) == "" {
+		return errors.New("request-pull URL is empty")
 	}
-	if limit < 0 || limit > inspectionOutputLimit {
-		return RequestPullResult{}, fmt.Errorf("request-pull output limit must be between 0 and %d", inspectionOutputLimit)
+	if len(url) > 16<<10 || strings.HasPrefix(url, "-") || strings.ContainsAny(url, "\x00\r\n") {
+		return errors.New("invalid request-pull URL")
 	}
-	out, truncated, err := r.outputLimited(ctx, limit, "--no-pager", "request-pull", start, q.URL, end)
-	if err != nil {
-		return RequestPullResult{}, err
-	}
-	return RequestPullResult{Detail: string(out), Truncated: truncated}, nil
+	return nil
 }
 
 func (r *Repository) resolveRevisionRange(ctx context.Context, value string) (string, error) {
