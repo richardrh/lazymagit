@@ -12,13 +12,14 @@ import (
 )
 
 const (
-	stashBothID        keymap.CommandID = "stash.stash-both"
-	stashKeepIndexID   keymap.CommandID = "stash.stash-keep-index"
-	stashPushID        keymap.CommandID = "stash-push.stash-push"
-	stashApplyID       keymap.CommandID = "stash.stash-apply"
-	stashListID        keymap.CommandID = "stash.stash-list"
-	stashBranchID      keymap.CommandID = "stash.stash-branch"
-	stashFormatPatchID keymap.CommandID = "stash.stash-format-patch"
+	stashBothID         keymap.CommandID = "stash.stash-both"
+	stashSnapshotBothID keymap.CommandID = "stash.snapshot-both"
+	stashKeepIndexID    keymap.CommandID = "stash.stash-keep-index"
+	stashPushID         keymap.CommandID = "stash-push.stash-push"
+	stashApplyID        keymap.CommandID = "stash.stash-apply"
+	stashListID         keymap.CommandID = "stash.stash-list"
+	stashBranchID       keymap.CommandID = "stash.stash-branch"
+	stashFormatPatchID  keymap.CommandID = "stash.stash-format-patch"
 
 	stashPathLimit  = 4096
 	stashInputLimit = 64 << 10
@@ -30,6 +31,7 @@ func init() {
 	pushOptions := []string{"magit:--", "transient:magit-stash-push:--include-untracked", "transient:magit-stash-push:--all", "transient:magit-stash-push:--keep-index", "transient:magit-stash-push:--no-keep-index"}
 	capabilities := []WorkflowCapability{
 		WorkflowCapability{ID: stashBothID, Transient: "magit-stash", UpstreamCommand: "magit-stash-both", Consumes: topOptions},
+		WorkflowCapability{ID: stashSnapshotBothID, Transient: "magit-stash", UpstreamCommand: "magit-snapshot-both"},
 		WorkflowCapability{ID: stashKeepIndexID, Transient: "magit-stash", UpstreamCommand: "magit-stash-keep-index", Consumes: topOptions},
 		WorkflowCapability{ID: stashPushID, Transient: "magit-stash-push", UpstreamCommand: "magit-stash-push", Consumes: pushOptions},
 		WorkflowCapability{ID: stashApplyID, Transient: "magit-stash", UpstreamCommand: "magit-stash-apply"},
@@ -47,7 +49,7 @@ func init() {
 	RegisterWorkflowCapabilities(capabilities...)
 	RegisterWorkflowDomain(func(*Model) map[keymap.CommandID]WorkflowHandler {
 		handlers := map[keymap.CommandID]WorkflowHandler{
-			stashBothID: stashPushWorkflow(false), stashKeepIndexID: stashPushWorkflow(true), stashPushID: stashPushWorkflow(false),
+			stashBothID: stashPushWorkflow(false), stashSnapshotBothID: stashSnapshotWorkflow, stashKeepIndexID: stashPushWorkflow(true), stashPushID: stashPushWorkflow(false),
 			stashApplyID: stashApplyWorkflow,
 			stashListID:  stashListWorkflow, stashBranchID: stashBranchWorkflow, stashFormatPatchID: stashFormatPatchWorkflow,
 		}
@@ -57,6 +59,22 @@ func init() {
 			}
 		}
 		return handlers
+	})
+}
+
+func stashSnapshotWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
+	return m.OpenWorkflow(WorkflowDialog{
+		Title: "Snapshot index and worktree", Operation: "snapshot changes", Confirmation: "Create this non-destructive snapshot",
+		Fields: []WorkflowField{{Name: "message", Label: "Message (optional)", Kind: WorkflowText}},
+		Validate: func(v WorkflowValues) error {
+			if v["message"] == "" {
+				return nil
+			}
+			return validBoundedText("snapshot message", v["message"])
+		},
+		Submit: func(ctx context.Context, v WorkflowValues) error {
+			return m.repo.StashSnapshot(ctx, v["message"])
+		},
 	})
 }
 

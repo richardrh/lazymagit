@@ -114,6 +114,31 @@ type StashPushOptions struct {
 	Paths            []string
 }
 
+// StashSnapshot creates an ordinary stash entry without changing either the
+// index or the worktree. Git first writes the stash commit, then stores that
+// immutable commit in the stash reflog. If there are no tracked changes, no
+// reflog entry is created.
+func (r *Repository) StashSnapshot(ctx context.Context, message string) error {
+	args := []string{"stash", "create"}
+	if message != "" {
+		args = append(args, message)
+	}
+	out, err := r.output(ctx, args...)
+	if err != nil {
+		return err
+	}
+	oid := strings.TrimSpace(string(out))
+	if oid == "" {
+		return errors.New("no tracked changes to snapshot")
+	}
+	store := []string{"stash", "store"}
+	if message != "" {
+		store = append(store, "--message", message)
+	}
+	store = append(store, oid)
+	return r.run(ctx, store...)
+}
+
 func (r *Repository) StashPush(ctx context.Context, options StashPushOptions) error {
 	args := []string{"stash", "push"}
 	if options.All {

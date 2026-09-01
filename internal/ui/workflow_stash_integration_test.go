@@ -128,6 +128,39 @@ func TestStashE2EChildOptionsDoNotInheritParentInfixes(t *testing.T) {
 	}
 }
 
+func TestStashE2ESnapshotBothKeepsIndexAndWorktree(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("staged", "base staged\n")
+	r.write("worktree", "base worktree\n")
+	r.git("add", "--", "staged", "worktree")
+	r.git("commit", "-m", "base")
+	r.write("staged", "indexed checkpoint\n")
+	r.git("add", "--", "staged")
+	r.write("worktree", "worktree checkpoint\n")
+	beforeIndex := r.git("diff", "--cached", "--binary")
+	beforeWorktree := r.git("diff", "--binary")
+	m := newE2EModel(t, r)
+
+	openStashByKeys(t, m, "z", "Z")
+	setStashMessageAndSubmit(t, m, "safe checkpoint")
+	if m.isError {
+		t.Fatalf("snapshot workflow failed: %s", m.message)
+	}
+	if got := r.git("diff", "--cached", "--binary"); got != beforeIndex {
+		t.Fatalf("z Z changed index:\n%s", got)
+	}
+	if got := r.git("diff", "--binary"); got != beforeWorktree {
+		t.Fatalf("z Z changed worktree:\n%s", got)
+	}
+	if got := r.git("stash", "list", "--format=%s"); !strings.Contains(got, "safe checkpoint") {
+		t.Fatalf("z Z did not store snapshot: %q", got)
+	}
+	patch := r.git("stash", "show", "--patch", "--no-color", "stash@{0}")
+	if !strings.Contains(patch, "+indexed checkpoint") || !strings.Contains(patch, "+worktree checkpoint") {
+		t.Fatalf("z Z snapshot omitted a layer: %q", patch)
+	}
+}
+
 func TestStashE2EBranchReviewBindsNormalizedName(t *testing.T) {
 	r := newUIE2ERepo(t)
 	r.write("file", "base\n")
