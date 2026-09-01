@@ -348,24 +348,36 @@ func (r *Repository) SetIndexFlag(ctx context.Context, flag IndexFlag, paths []s
 }
 
 func (r *Repository) ListIndexFlag(ctx context.Context, flag IndexFlag) ([]string, error) {
+	match, err := indexFlagMatcher(flag)
+	if err != nil {
+		return nil, err
+	}
 	out, err := r.output(ctx, "ls-files", "-v", "-z")
 	if err != nil {
 		return nil, err
 	}
 	var result []string
 	for _, record := range bytes.Split(out, []byte{0}) {
-		if len(record) < 3 || record[1] != ' ' {
-			continue
-		}
-		tag := record[0]
-		if flag == SkipWorktree && (tag == 'S' || tag == 's') || flag == AssumeUnchanged && tag >= 'a' && tag <= 'z' {
+		if indexFlagRecordMatches(record, match) {
 			result = append(result, string(record[2:]))
 		}
 	}
-	if flag != SkipWorktree && flag != AssumeUnchanged {
+	return result, nil
+}
+
+func indexFlagMatcher(flag IndexFlag) (func(byte) bool, error) {
+	switch flag {
+	case SkipWorktree:
+		return func(tag byte) bool { return tag == 'S' || tag == 's' }, nil
+	case AssumeUnchanged:
+		return func(tag byte) bool { return tag >= 'a' && tag <= 'z' }, nil
+	default:
 		return nil, errors.New("unknown index flag")
 	}
-	return result, nil
+}
+
+func indexFlagRecordMatches(record []byte, match func(byte) bool) bool {
+	return len(record) >= 3 && record[1] == ' ' && match(record[0])
 }
 
 // Untrack removes paths from the index while preserving all worktree files.
@@ -1018,35 +1030,27 @@ func boolCount(values ...bool) int {
 
 func submoduleUpdateArgs(o SubmoduleUpdateOptions) []string {
 	args := []string{"submodule", "update"}
-	if o.Init {
-		args = append(args, "--init")
+	for _, option := range []struct {
+		enabled bool
+		name    string
+	}{
+		{o.Init, "--init"}, {o.Recursive, "--recursive"},
+		{o.Remote, "--remote"}, {o.Rebase, "--rebase"},
+		{o.Merge, "--merge"}, {o.Checkout, "--checkout"},
+		{o.Force == Confirmed, "--force"}, {o.NoFetch, "--no-fetch"},
+	} {
+		if option.enabled {
+			args = append(args, option.name)
+		}
 	}
-	if o.Recursive {
-		args = append(args, "--recursive")
-	}
-	if o.Remote {
-		args = append(args, "--remote")
-	}
-	if o.Rebase {
-		args = append(args, "--rebase")
-	}
-	if o.Merge {
-		args = append(args, "--merge")
-	}
-	if o.Checkout {
-		args = append(args, "--checkout")
-	}
-	if o.Force == Confirmed {
-		args = append(args, "--force")
-	}
-	if o.NoFetch {
-		args = append(args, "--no-fetch")
-	}
-	if o.Depth > 0 {
-		args = append(args, "--depth", strconv.Itoa(o.Depth))
-	}
-	if o.Jobs > 0 {
-		args = append(args, "--jobs", strconv.Itoa(o.Jobs))
+	args = appendPositiveOption(args, "--depth", o.Depth)
+	args = appendPositiveOption(args, "--jobs", o.Jobs)
+	return args
+}
+
+func appendPositiveOption(args []string, name string, value int) []string {
+	if value > 0 {
+		return append(args, name, strconv.Itoa(value))
 	}
 	return args
 }
@@ -1092,36 +1096,73 @@ func (r *Repository) RemoveSubmodule(ctx context.Context, path string, confirm C
 	if confirm != Confirmed {
 		return ErrDestructiveConfirmationRequired
 	}
-	rel, err := validateRepoRelative(path, false)
+	rel, metadataName, err := r.resolveSubmoduleRemoval(ctx, path)
 	if err != nil {
 		return err
-	}
-	modules, err := r.Submodules(ctx)
-	if err != nil {
-		return err
-	}
-	moduleName := configuredSubmoduleName(modules, rel)
-	if moduleName == "" {
-		return fmt.Errorf("path %q is not a configured submodule", path)
-	}
-	metadataName, err := validateRepoRelative(moduleName, false)
-	if err != nil {
-		return fmt.Errorf("unsafe submodule metadata name: %w", err)
 	}
 	if err := ensureCleanInitializedSubmodule(ctx, filepath.Join(r.workTree, rel)); err != nil {
 		return err
 	}
+	if err := r.removeSubmoduleGitState(ctx, rel); err != nil {
+		return err
+	}
+	return removeSubmoduleMetadata(filepath.Join(r.gitDir, "modules"), metadataName)
+}
+
+func (r *Repository) resolveSubmoduleRemoval(ctx context.Context, path string) (string, string, error) {
+	rel, err := validateRepoRelative(path, false)
+	if err != nil {
+		return "", "", err
+	}
+	modules, err := r.Submodules(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	moduleName := configuredSubmoduleName(modules, rel)
+	if moduleName == "" {
+		return "", "", fmt.Errorf("path %q is not a configured submodule", path)
+	}
+	metadataName, err := validateRepoRelative(moduleName, false)
+	if err != nil {
+		return "", "", fmt.Errorf("unsafe submodule metadata name: %w", err)
+	}
+	return rel, metadataName, nil
+}
+
+func (r *Repository) removeSubmoduleGitState(ctx context.Context, rel string) error {
 	if err := r.managementRun(ctx, "submodule", "deinit", "--force", "--", filepath.ToSlash(rel)); err != nil {
 		return err
 	}
-	if err := r.managementRun(ctx, "rm", "-f", "--", filepath.ToSlash(rel)); err != nil {
-		return err
-	}
+	return r.managementRun(ctx, "rm", "-f", "--", filepath.ToSlash(rel))
+}
+
+func removeSubmoduleMetadata(modulesRoot, metadataName string) error {
 	// git rm intentionally keeps the private clone for easy recovery. A Magit
 	// remove operation is a full removal, so delete it only after confirmation
-	// and only when its configured name cannot escape $GIT_DIR/modules.
-	if err := os.RemoveAll(filepath.Join(r.gitDir, "modules", metadataName)); err != nil {
+	// and only when neither its configured name nor an intermediate symlink can
+	// escape $GIT_DIR/modules.
+	metadataPath := filepath.Join(modulesRoot, metadataName)
+	if err := rejectSymlinkComponents(modulesRoot, metadataPath); err != nil {
 		return fmt.Errorf("remove submodule metadata: %w", err)
+	}
+	if err := os.RemoveAll(metadataPath); err != nil {
+		return fmt.Errorf("remove submodule metadata: %w", err)
+	}
+	return nil
+}
+
+func rejectSymlinkComponents(root, target string) error {
+	for current := target; current != root; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: metadata path contains a symbolic link", ErrUnsafeDestination)
+		}
 	}
 	return nil
 }

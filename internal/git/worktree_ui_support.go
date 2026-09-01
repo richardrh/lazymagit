@@ -99,21 +99,11 @@ func (r *Repository) ReviewWorktreeMutation(ctx context.Context, path, destinati
 	if err != nil {
 		return ReviewedWorktreeMutation{}, err
 	}
-	if wt.Primary || wt.Bare {
-		return ReviewedWorktreeMutation{}, ErrPrimaryWorktree
+	if err := validateWorktreeMutationTarget(wt); err != nil {
+		return ReviewedWorktreeMutation{}, err
 	}
-	// The UI passes paths obtained from Worktrees. Reject aliases, roots and
-	// symlinks so review and execution name the same filesystem object.
-	if filepath.Clean(wt.Path) == string(filepath.Separator) {
-		return ReviewedWorktreeMutation{}, fmt.Errorf("%w: worktree path is filesystem root", ErrUnsafeDestination)
-	}
-	if info, err := os.Lstat(wt.Path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return ReviewedWorktreeMutation{}, fmt.Errorf("%w: worktree path is a symbolic link", ErrUnsafeDestination)
-	}
-	if destination != "" {
-		if err := safeNewDirectory(destination); err != nil {
-			return ReviewedWorktreeMutation{}, err
-		}
+	if err := validateOptionalWorktreeDestination(destination); err != nil {
+		return ReviewedWorktreeMutation{}, err
 	}
 	dirty, err := worktreeDirty(ctx, wt.Path)
 	if err != nil {
@@ -122,6 +112,28 @@ func (r *Repository) ReviewWorktreeMutation(ctx context.Context, path, destinati
 	p := ReviewedWorktreeMutation{Worktree: wt, Destination: destination, Force: force, Dirty: dirty}
 	p.Token = NewConfirmationToken(worktreeMutationIdentity(p))
 	return p, nil
+}
+
+func validateWorktreeMutationTarget(wt Worktree) error {
+	if wt.Primary || wt.Bare {
+		return ErrPrimaryWorktree
+	}
+	// The UI passes paths obtained from Worktrees. Reject aliases, roots and
+	// symlinks so review and execution name the same filesystem object.
+	if filepath.Clean(wt.Path) == string(filepath.Separator) {
+		return fmt.Errorf("%w: worktree path is filesystem root", ErrUnsafeDestination)
+	}
+	if info, err := os.Lstat(wt.Path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: worktree path is a symbolic link", ErrUnsafeDestination)
+	}
+	return nil
+}
+
+func validateOptionalWorktreeDestination(destination string) error {
+	if destination != "" {
+		return safeNewDirectory(destination)
+	}
+	return nil
 }
 
 func (r *Repository) reviewedWorktreeMutationCurrent(ctx context.Context, reviewed ReviewedWorktreeMutation) error {
