@@ -442,6 +442,10 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseWorktrees(out)
+}
+
+func parseWorktrees(out []byte) ([]Worktree, error) {
 	var result []Worktree
 	var current *Worktree
 	for _, raw := range bytes.Split(out, []byte{0}) {
@@ -458,20 +462,7 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 		if current == nil {
 			return nil, errors.New("malformed worktree listing")
 		}
-		switch key {
-		case "HEAD":
-			current.HEAD = value
-		case "branch":
-			current.Branch = strings.TrimPrefix(value, "refs/heads/")
-		case "bare":
-			current.Bare = true
-		case "detached":
-			current.Detached = true
-		case "locked":
-			current.Locked, current.LockReason = true, value
-		case "prunable":
-			current.Prunable, current.PruneReason = true, value
-		}
+		applyWorktreeField(current, key, value)
 	}
 	for i := range result {
 		// Git documents the first entry as the main worktree. This remains
@@ -479,6 +470,23 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 		result[i].Primary = i == 0
 	}
 	return result, nil
+}
+
+func applyWorktreeField(worktree *Worktree, key, value string) {
+	switch key {
+	case "HEAD":
+		worktree.HEAD = value
+	case "branch":
+		worktree.Branch = strings.TrimPrefix(value, "refs/heads/")
+	case "bare":
+		worktree.Bare = true
+	case "detached":
+		worktree.Detached = true
+	case "locked":
+		worktree.Locked, worktree.LockReason = true, value
+	case "prunable":
+		worktree.Prunable, worktree.PruneReason = true, value
+	}
 }
 
 func samePath(a, b string) bool {
@@ -766,23 +774,38 @@ func (r *Repository) WorktreePrunePreflight(ctx context.Context, expire string) 
 }
 
 func (r *Repository) PruneWorktrees(ctx context.Context, opts WorktreePruneOptions) error {
-	expire := opts.Expire
-	if opts.Force == Confirmed && expire == "" {
-		expire = "now"
-	}
+	expire := worktreePruneExpiration(opts)
 	if !opts.DryRun && expire != "" {
-		if opts.Plan == nil || opts.Plan.Expire != expire {
-			return &ConfirmationRequiredError{Operation: "prune worktrees with explicit expiration", Identity: expire}
-		}
-		current, err := r.WorktreePrunePreflight(ctx, expire)
-		if err != nil {
+		if err := r.validateWorktreePrunePlan(ctx, expire, opts); err != nil {
 			return err
 		}
-		identity := expire + "\x00" + current.Output
-		if current.Output != opts.Plan.Output || !opts.Token.validFor(identity) {
-			return ErrStalePlan
-		}
 	}
+	return r.managementRun(ctx, worktreePruneArgs(expire, opts)...)
+}
+
+func worktreePruneExpiration(opts WorktreePruneOptions) string {
+	if opts.Force == Confirmed && opts.Expire == "" {
+		return "now"
+	}
+	return opts.Expire
+}
+
+func (r *Repository) validateWorktreePrunePlan(ctx context.Context, expire string, opts WorktreePruneOptions) error {
+	if opts.Plan == nil || opts.Plan.Expire != expire {
+		return &ConfirmationRequiredError{Operation: "prune worktrees with explicit expiration", Identity: expire}
+	}
+	current, err := r.WorktreePrunePreflight(ctx, expire)
+	if err != nil {
+		return err
+	}
+	identity := expire + "\x00" + current.Output
+	if current.Output != opts.Plan.Output || !opts.Token.validFor(identity) {
+		return ErrStalePlan
+	}
+	return nil
+}
+
+func worktreePruneArgs(expire string, opts WorktreePruneOptions) []string {
 	args := []string{"worktree", "prune"}
 	if opts.DryRun {
 		args = append(args, "--dry-run")
@@ -793,7 +816,7 @@ func (r *Repository) PruneWorktrees(ctx context.Context, opts WorktreePruneOptio
 	if expire != "" {
 		args = append(args, "--expire", expire)
 	}
-	return r.managementRun(ctx, args...)
+	return args
 }
 
 type SparseCheckoutState struct {
@@ -803,40 +826,47 @@ type SparseCheckoutState struct {
 
 func (r *Repository) SparseCheckoutState(ctx context.Context) (SparseCheckoutState, error) {
 	var state SparseCheckoutState
-	v, ok, err := r.configValue(ctx, "core.sparseCheckout")
+	var err error
+	state.Enabled, err = r.configBool(ctx, "core.sparseCheckout")
 	if err != nil {
 		return state, err
 	}
-	state.Enabled = ok && strings.EqualFold(v, "true")
-	v, ok, err = r.configValue(ctx, "core.sparseCheckoutCone")
+	state.Cone, err = r.configBool(ctx, "core.sparseCheckoutCone")
 	if err != nil {
 		return state, err
 	}
-	state.Cone = ok && strings.EqualFold(v, "true")
-	v, ok, err = r.configValue(ctx, "index.sparse")
+	state.SparseIndex, err = r.configBool(ctx, "index.sparse")
 	if err != nil {
 		return state, err
 	}
-	state.SparseIndex = ok && strings.EqualFold(v, "true")
 	if !state.Enabled {
 		return state, nil
 	}
-	path := filepath.Join(r.gitDir, "info", "sparse-checkout")
+	state.Patterns, err = readSparseCheckoutPatterns(filepath.Join(r.gitDir, "info", "sparse-checkout"))
+	return state, err
+}
+
+func (r *Repository) configBool(ctx context.Context, key string) (bool, error) {
+	value, configured, err := r.configValue(ctx, key)
+	return configured && strings.EqualFold(value, "true"), err
+}
+
+func readSparseCheckoutPatterns(path string) ([]string, error) {
 	b, err := readFileLimited(path, 4<<20)
 	if errors.Is(err, os.ErrNotExist) {
-		return state, nil
+		return nil, nil
 	}
 	if err != nil {
-		return state, err
+		return nil, err
 	}
-	state.Patterns = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
-	if len(state.Patterns) > 100000 {
-		return SparseCheckoutState{}, &TooLargeError{Resource: "sparse-checkout pattern count"}
+	patterns := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	if len(patterns) > 100000 {
+		return nil, &TooLargeError{Resource: "sparse-checkout pattern count"}
 	}
-	if len(state.Patterns) == 1 && state.Patterns[0] == "" {
-		state.Patterns = nil
+	if len(patterns) == 1 && patterns[0] == "" {
+		return nil, nil
 	}
-	return state, nil
+	return patterns, nil
 }
 
 type SparseCheckoutInitOptions struct {

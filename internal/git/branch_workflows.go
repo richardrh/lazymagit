@@ -291,20 +291,34 @@ func (r *Repository) DeleteLocalBranchConfirmed(ctx context.Context, name string
 	err = r.run(ctx, "update-ref", "-d", "refs/heads/"+name, result.OID)
 	result.Deleted = err == nil
 	if err != nil {
-		if current, resolveErr := r.localBranchOID(ctx, name); resolveErr == nil && current != result.OID {
+		if r.localBranchMoved(ctx, name, result.OID) {
 			return result, fmt.Errorf("%w: local branch %s moved", ErrStalePlan, name)
 		}
 		return result, err
 	}
 	// Match git-branch's cleanup of branch-local configuration after the atomic
 	// ref deletion. Missing configuration is normal.
-	if err := r.run(ctx, "config", "--remove-section", "branch."+name); err != nil && commandExitCode(err) != 5 {
-		var commandErr *CommandError
-		if !errors.As(err, &commandErr) || !strings.Contains(commandErr.Stderr, "no such section") {
-			return result, err
-		}
+	if err := r.removeBranchConfiguration(ctx, name); err != nil {
+		return result, err
 	}
 	return result, nil
+}
+
+func (r *Repository) localBranchMoved(ctx context.Context, name, expectedOID string) bool {
+	current, err := r.localBranchOID(ctx, name)
+	return err == nil && current != expectedOID
+}
+
+func (r *Repository) removeBranchConfiguration(ctx context.Context, name string) error {
+	err := r.run(ctx, "config", "--remove-section", "branch."+name)
+	if err == nil || commandExitCode(err) == 5 {
+		return nil
+	}
+	var commandErr *CommandError
+	if errors.As(err, &commandErr) && strings.Contains(commandErr.Stderr, "no such section") {
+		return nil
+	}
+	return err
 }
 
 func (r *Repository) DeleteRemoteBranch(ctx context.Context, remote, branch string) error {

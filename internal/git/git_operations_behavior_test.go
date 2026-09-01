@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestCRAPFetchChoicesDirect(t *testing.T) {
+func TestFetchChoicesDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	oid := r.commitAll("base")
@@ -37,7 +37,7 @@ func TestCRAPFetchChoicesDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPExecuteReviewedBisectUIActionDirect(t *testing.T) {
+func TestReviewedBisectUIDispatchHandlesEveryAction(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -63,7 +63,7 @@ func TestCRAPExecuteReviewedBisectUIActionDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPRemoteFollowRemoteHEADStringDirect(t *testing.T) {
+func TestRemoteFollowRemoteHEADStringDirect(t *testing.T) {
 	for value, want := range map[RemoteFollowRemoteHEAD]string{
 		RemoteFollowRemoteHEADDefault: "default",
 		RemoteFollowRemoteHEADNever:   "never",
@@ -78,7 +78,7 @@ func TestCRAPRemoteFollowRemoteHEADStringDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPValidateRemoteConfigArgsDirect(t *testing.T) {
+func TestValidateRemoteConfigArgsDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -123,7 +123,7 @@ func TestCRAPValidateRemoteConfigArgsDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPReadMutatedHEADDirect(t *testing.T) {
+func TestReadMutatedHEADDirect(t *testing.T) {
 	oid := strings.Repeat("a", 40)
 	t.Run("detached", func(t *testing.T) {
 		dir := t.TempDir()
@@ -164,7 +164,7 @@ func TestCRAPReadMutatedHEADDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPRenameRemoteDirect(t *testing.T) {
+func TestRenameRemoteDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -190,7 +190,7 @@ func TestCRAPRenameRemoteDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPEnsurePathParentWithinDirect(t *testing.T) {
+func TestEnsurePathParentWithinDirect(t *testing.T) {
 	root := t.TempDir()
 	inside := filepath.Join(root, "new", "child")
 	if err := ensurePathParentWithin(root, inside); err != nil {
@@ -205,7 +205,7 @@ func TestCRAPEnsurePathParentWithinDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPRenamePathDirect(t *testing.T) {
+func TestRenamePathDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("tracked", "tracked\n")
 	r.commitAll("base")
@@ -229,7 +229,7 @@ func TestCRAPRenamePathDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPReviewPushDirect(t *testing.T) {
+func TestReviewPushDirect(t *testing.T) {
 	remote := newBareTestRepo(t)
 	r := newTestRepo(t)
 	r.write("base", "base\n")
@@ -248,7 +248,7 @@ func TestCRAPReviewPushDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPRebaseStartDirect(t *testing.T) {
+func TestRebaseStartDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -270,7 +270,7 @@ func TestCRAPRebaseStartDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPReviewGitCommandDirect(t *testing.T) {
+func TestReviewGitCommandDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -297,7 +297,7 @@ func TestCRAPReviewGitCommandDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPResetPreflightDirect(t *testing.T) {
+func TestResetPreflightDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	oid := r.commitAll("base")
@@ -323,7 +323,7 @@ func TestCRAPResetPreflightDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPValidateRefspecDirect(t *testing.T) {
+func TestValidateRefspecDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
@@ -352,7 +352,7 @@ func TestCRAPValidateRefspecDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPCloneRepositoryForUIDirect(t *testing.T) {
+func TestCloneRepositoryForUIDirect(t *testing.T) {
 	source := newTestRepo(t)
 	source.write("base", "base\n")
 	source.commitAll("base")
@@ -368,7 +368,7 @@ func TestCRAPCloneRepositoryForUIDirect(t *testing.T) {
 	}
 }
 
-func TestCRAPAddWorktreeDirect(t *testing.T) {
+func TestAddWorktreeDirect(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("base", "base\n")
 	r.commitAll("base")
