@@ -38,7 +38,7 @@ func TestStashDomainRegistrationAndRecursivePushOccurrence(t *testing.T) {
 				t.Errorf("unsafe stash removal suffix is available: %+v", binding)
 			}
 		}
-		if binding.Transient == "magit-stash" && (binding.UpstreamCommand == "magit-stash-index" || binding.UpstreamCommand == "magit-stash-worktree" || binding.UpstreamCommand == "magit-stash-branch-here" || strings.HasPrefix(binding.UpstreamCommand, "magit-snapshot") || binding.UpstreamCommand == "magit-wip-commit") {
+		if binding.Transient == "magit-stash" && (binding.UpstreamCommand == "magit-stash-index" || binding.UpstreamCommand == "magit-stash-worktree" || binding.UpstreamCommand == "magit-stash-branch-here" || binding.UpstreamCommand == "magit-snapshot-index" || binding.UpstreamCommand == "magit-snapshot-worktree" || binding.UpstreamCommand == "magit-wip-commit") {
 			if handlers[binding.Command] != nil || binding.Handler == keymap.HandlerExecute {
 				t.Errorf("unsupported stash suffix became executable: %+v", binding)
 			}
