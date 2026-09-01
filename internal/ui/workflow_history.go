@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
@@ -230,8 +231,8 @@ func openPickWorkflow(m *Model, revert, noCommit bool, command WorkflowCommand) 
 	if revert {
 		title, action = "Review revert", gitbackend.HistoryUIRevertStart
 	}
-	return openReviewedHistoryDialog(m, title, []WorkflowField{{Name: "revision", Label: "Commit revision", Kind: WorkflowText, Value: defaultRevision, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
-		return gitbackend.HistoryUIRequest{Action: action, Pick: opts, Revisions: []string{values["revision"]}}
+	return openReviewedHistoryDialog(m, title, []WorkflowField{{Name: "revision", Label: "Commit revisions (one per line)", Kind: WorkflowMultiline, Value: defaultRevision, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
+		return gitbackend.HistoryUIRequest{Action: action, Pick: opts, Revisions: strings.Fields(values["revision"])}
 	})
 }
 

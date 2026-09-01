@@ -136,7 +136,11 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 			for _, commit := range commits {
 				choices = append(choices, WorkflowChoice{Value: commit.ID, Label: commit.ShortID + " " + commit.Subject})
 			}
-			fields = append(fields, WorkflowField{Name: commitTargetField, Label: "Target", Kind: WorkflowSelect, Value: choices[0].Value, Choices: choices, Required: true})
+			selected := selectedHistoryRevision(m)
+			if selected == "HEAD" {
+				selected = choices[0].Value
+			}
+			fields = append(fields, WorkflowField{Name: commitTargetField, Label: "Target", Kind: WorkflowSelect, Value: selected, Choices: choices, AllowCustom: true, Required: true})
 		}
 		if spec.message || options.ReeditMessage != "" {
 			required := (spec.required || options.ReeditMessage != "") && options.ReuseMessage == ""
@@ -164,10 +168,30 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 				}
 				return nil
 			},
-			Submit: func(ctx context.Context, values WorkflowValues) error {
+		}
+		if spec.target {
+			dialog.ReviewPreflight = func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+				review, err := m.repo.ReviewCommitUI(ctx, gitbackend.CommitUIRequest{Variant: spec.variant, Target: values[commitTargetField], Message: values[commitMessageField], Options: options, SigningConsent: values[commitConsentField] == "true"})
+				if err != nil {
+					return WorkflowReview{}, err
+				}
+				plan := append([]string(nil), review.Plan...)
+				plan = append(plan, "HEAD "+review.State.HEAD, "Index "+review.State.Index, "Worktree "+review.State.Worktree)
+				return WorkflowReview{Plan: plan, Confirmation: "Execute only if the exact reviewed repository state is unchanged", Data: review}, nil
+			}
+			dialog.SubmitReview = func(ctx context.Context, _ WorkflowValues, transported WorkflowReview) error {
+				review, ok := transported.Data.(gitbackend.ReviewedCommitUI)
+				if !ok {
+					return errors.New("invalid reviewed commit token")
+				}
+				_, err := m.repo.ExecuteReviewedCommitUI(ctx, review)
+				return err
+			}
+		} else {
+			dialog.Submit = func(ctx context.Context, values WorkflowValues) error {
 				_, err := m.repo.ExecuteCommitUI(ctx, spec.variant, values[commitTargetField], values[commitMessageField], options, values[commitConsentField] == "true")
 				return err
-			},
+			}
 		}
 		return dialog, nil
 	})

@@ -82,7 +82,15 @@ func TestCommitWorkflowNineVariantsIntegration(t *testing.T) {
 			if spec.message {
 				values[commitMessageField] = "message for " + string(spec.variant)
 			}
-			if err := m.workflow.dialog.Submit(context.Background(), values); err != nil {
+			if spec.target {
+				review, err := m.workflow.dialog.ReviewPreflight(context.Background(), values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := m.workflow.dialog.SubmitReview(context.Background(), values, review); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := m.workflow.dialog.Submit(context.Background(), values); err != nil {
 				t.Fatal(err)
 			}
 			if head := r.git("rev-parse", "HEAD"); head == base {
@@ -97,5 +105,45 @@ func TestCommitWorkflowNineVariantsIntegration(t *testing.T) {
 				t.Fatal("commit message leaked into UI process history")
 			}
 		})
+	}
+}
+
+func TestCommitFixupDefaultsToSelectedGraphRevision(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("base", "base\n")
+	r.git("add", "base")
+	r.git("commit", "-m", "base")
+	target := r.git("rev-parse", "HEAD")
+	r.write("next", "next\n")
+	r.git("add", "next")
+	r.git("commit", "-m", "next")
+	r.write("fix", "fix\n")
+	r.git("add", "fix")
+	repo, err := gitbackend.Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := New(repo)
+	m.graphActive, m.graphCursor = true, 2
+	m.graphEntries = map[int]gitbackend.LogEntry{2: {ID: target}}
+	id, _ := commitCommandID("magit-commit-fixup")
+	load, handled := m.performWorkflow(WorkflowCommand{ID: id})
+	if !handled || load == nil {
+		t.Fatal("fixup workflow did not load")
+	}
+	_, _ = m.Update(load())
+	values := m.workflowValues()
+	if values[commitTargetField] != target {
+		t.Fatalf("selected target = %q, want %q", values[commitTargetField], target)
+	}
+	review, err := m.workflow.dialog.ReviewPreflight(context.Background(), values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.workflow.dialog.SubmitReview(context.Background(), values, review); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("log", "-1", "--format=%s"); got != "fixup! base" {
+		t.Fatalf("fixup subject = %q", got)
 	}
 }

@@ -147,3 +147,44 @@ func TestValidateStructuredFixupInvocationHelper(t *testing.T) {
 		t.Fatal("reuse-message was accepted")
 	}
 }
+
+func TestReviewedCommitUIRejectsStaleIndexAndExecutesExactFixup(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("base", "base\n")
+	r.commitAll("base")
+	target := r.git("rev-parse", "HEAD")
+	r.write("change", "change\n")
+	r.git("add", "--", "change")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CommitUIRequest{Variant: CommitUIFixup, Target: "HEAD"}
+	review, err := repo.ReviewCommitUI(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if review.Request.Target != target || len(review.Plan) < 2 {
+		t.Fatalf("canonical review = %#v", review)
+	}
+	r.write("later", "later\n")
+	r.git("add", "--", "later")
+	if _, err := repo.ExecuteReviewedCommitUI(ctx, review); !errors.Is(err, ErrStalePlan) {
+		t.Fatalf("stale reviewed fixup = %v", err)
+	}
+	r.git("reset", "--", "later")
+	if err := os.Remove(filepath.Join(r.dir, "later")); err != nil {
+		t.Fatal(err)
+	}
+	review, err = repo.ReviewCommitUI(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.ExecuteReviewedCommitUI(ctx, review); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.git("log", "-1", "--format=%s"); got != "fixup! base" {
+		t.Fatalf("fixup subject = %q", got)
+	}
+}
