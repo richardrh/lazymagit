@@ -781,6 +781,8 @@ func defaultResetPaths(paths []string) []string {
 
 type BisectStartOptions struct {
 	Bad, Good   string
+	TermOld     string
+	TermNew     string
 	Paths       []string
 	NoCheckout  bool
 	FirstParent bool
@@ -794,6 +796,15 @@ func (r *Repository) BisectStart(ctx context.Context, o BisectStartOptions) erro
 		return errors.New("bisect start cannot supply good without bad")
 	}
 	args := []string{"bisect", "start"}
+	if err := validateBisectTerms(o.TermOld, o.TermNew); err != nil {
+		return err
+	}
+	if o.TermOld != "" {
+		args = append(args, "--term-old="+o.TermOld)
+	}
+	if o.TermNew != "" {
+		args = append(args, "--term-new="+o.TermNew)
+	}
 	if o.NoCheckout {
 		args = append(args, "--no-checkout")
 	}
@@ -821,10 +832,10 @@ func (r *Repository) BisectStart(ctx context.Context, o BisectStartOptions) erro
 	return r.run(ctx, args...)
 }
 func (r *Repository) BisectGood(ctx context.Context, revision string) error {
-	return r.bisectMark(ctx, "good", revision)
+	return r.bisectMark(ctx, r.bisectTerm(false), revision)
 }
 func (r *Repository) BisectBad(ctx context.Context, revision string) error {
-	return r.bisectMark(ctx, "bad", revision)
+	return r.bisectMark(ctx, r.bisectTerm(true), revision)
 }
 func (r *Repository) BisectSkip(ctx context.Context, revisions ...string) error {
 	if !r.historyBisectActive() {
@@ -880,6 +891,47 @@ func (r *Repository) UnsafeBisectRun(ctx context.Context, capability AllowUnsafe
 
 func (r *Repository) historyBisectActive() bool {
 	return historyPathExists(filepath.Join(r.gitDir, "BISECT_START"))
+}
+
+func validateBisectTerms(old, new string) error {
+	if old == "" && new == "" {
+		return nil
+	}
+	if old == "" || new == "" {
+		return errors.New("custom bisect terms require both old and new terms")
+	}
+	if old == new {
+		return errors.New("custom bisect terms must differ")
+	}
+	reserved := map[string]bool{"help": true, "start": true, "skip": true, "next": true, "reset": true, "visualize": true, "view": true, "replay": true, "log": true, "run": true, "terms": true}
+	for label, term := range map[string]string{"old": old, "new": new} {
+		if strings.HasPrefix(term, "-") || strings.ContainsAny(term, " \t\r\n\x00") {
+			return fmt.Errorf("bisect %s term must be one non-option word", label)
+		}
+		if reserved[term] {
+			return fmt.Errorf("bisect %s term %q conflicts with a bisect control", label, term)
+		}
+	}
+	return nil
+}
+
+// BISECT_TERMS stores the new term followed by the old term. Falling back to
+// Git's defaults keeps marking usable for bisects started outside the TUI.
+func (r *Repository) bisectTerm(newTerm bool) string {
+	data, err := os.ReadFile(filepath.Join(r.gitDir, "BISECT_TERMS"))
+	if err == nil {
+		terms := strings.Fields(string(data))
+		if len(terms) == 2 {
+			if newTerm {
+				return terms[0]
+			}
+			return terms[1]
+		}
+	}
+	if newTerm {
+		return "bad"
+	}
+	return "good"
 }
 
 type NotesRemoveOptions struct {

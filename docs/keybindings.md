@@ -141,17 +141,17 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-n` | `transient:magit-bisect:--no-checkout` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `-p` | `transient:magit-bisect:--first-parent` | **infix** | Arguments | if-not: magit-bisect-in-progress-p; if: #[nil ((magit-git-version>= "2.29")) (t)] | `missing` | infix: argument editing is not implemented |
-| `=o` | `magit-bisect:--term-old` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `=n` | `magit-bisect:--term-new` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `missing` | infix: argument editing is not implemented |
-| `B` | `magit-bisect-start` | **suffix** | Actions | if-not: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
+| `-n` | `transient:magit-bisect:--no-checkout` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `implemented` | typed toggle used by reviewed start |
+| `-p` | `transient:magit-bisect:--first-parent` | **infix** | Arguments | if-not: magit-bisect-in-progress-p; if: #[nil ((magit-git-version>= "2.29")) (t)] | `implemented` | typed toggle used by reviewed start |
+| `=o` | `magit-bisect:--term-old` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `implemented` | paired, validated custom old term |
+| `=n` | `magit-bisect:--term-new` | **infix** | Arguments | if-not: magit-bisect-in-progress-p | `implemented` | paired, validated custom new term |
+| `B` | `magit-bisect-start` | **suffix** | Actions | if-not: magit-bisect-in-progress-p | `implemented` | stale-safe reviewed start |
 | `s` | `magit-bisect-run` | **suffix** | Actions | if-not: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
-| `B` | `magit-bisect-bad` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
-| `g` | `magit-bisect-good` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
-| `m` | `magit-bisect-mark` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
-| `k` | `magit-bisect-skip` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
-| `r` | `magit-bisect-reset` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
+| `B` | `magit-bisect-bad` | **suffix** | Actions | if: magit-bisect-in-progress-p | `implemented` | reviewed new/bad mark using active terms |
+| `g` | `magit-bisect-good` | **suffix** | Actions | if: magit-bisect-in-progress-p | `implemented` | reviewed old/good mark using active terms |
+| `m` | `magit-bisect-mark` | **suffix** | Actions | if: magit-bisect-in-progress-p | `implemented` | terminal-native old/new choice |
+| `k` | `magit-bisect-skip` | **suffix** | Actions | if: magit-bisect-in-progress-p | `implemented` | reviewed optional revision skip |
+| `r` | `magit-bisect-reset` | **suffix** | Actions | if: magit-bisect-in-progress-p | `implemented` | stale-safe reviewed reset |
 | `s` | `magit-bisect-run` | **suffix** | Actions | if: magit-bisect-in-progress-p | `missing` | suffix: not implemented |
 
 ### `b` — magit-branch (24 occurrences)

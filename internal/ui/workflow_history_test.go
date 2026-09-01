@@ -72,3 +72,31 @@ func TestRebaseOptionsMapEverySupportedInfix(t *testing.T) {
 		t.Fatal("unsupported rebase option was accepted")
 	}
 }
+
+func TestBisectOptionsMapSafeTypedInfixes(t *testing.T) {
+	option := func(upstream string) keymap.CommandID {
+		t.Helper()
+		for _, binding := range keymap.Registry() {
+			if binding.UpstreamCommand == upstream {
+				return binding.Command
+			}
+		}
+		t.Fatalf("missing bisect option %q", upstream)
+		return ""
+	}
+	options, err := bisectOptions(WorkflowCommand{Options: map[keymap.CommandID]OptionValue{
+		option("transient:magit-bisect:--no-checkout"):  {Enabled: true},
+		option("transient:magit-bisect:--first-parent"): {Enabled: true},
+		option("magit-bisect:--term-old"):               {Value: "working"},
+		option("magit-bisect:--term-new"):               {Value: "broken"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !options.NoCheckout || !options.FirstParent || options.TermOld != "working" || options.TermNew != "broken" {
+		t.Fatalf("bisect options = %#v", options)
+	}
+	if _, err := bisectOptions(WorkflowCommand{Options: map[keymap.CommandID]OptionValue{"unknown": {Enabled: true}}}); err == nil {
+		t.Fatal("unsupported bisect option was accepted")
+	}
+}

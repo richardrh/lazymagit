@@ -414,6 +414,12 @@ func (r *Repository) canonicalBisectStartHistoryUIRequest(ctx context.Context, q
 	if q.Bisect.FirstParent {
 		plan = append(plan, "Follow only first parents")
 	}
+	if err := validateBisectTerms(q.Bisect.TermOld, q.Bisect.TermNew); err != nil {
+		return q, nil, err
+	}
+	if q.Bisect.TermOld != "" {
+		plan = append(plan, "Old term "+q.Bisect.TermOld, "New term "+q.Bisect.TermNew)
+	}
 	return q, plan, nil
 }
 
@@ -510,7 +516,7 @@ func historyUIRequestIdentity(q HistoryUIRequest) string {
 		strconv.FormatBool(q.Rebase.Autostash), strconv.FormatBool(q.Rebase.ForceRebase), q.Rebase.Strategy, strconv.FormatBool(q.Rebase.Signoff),
 		strconv.Itoa(int(q.Reset.Mode)), q.Reset.Target, strings.Join(q.Reset.Paths, "\x01"),
 		strings.Join(q.Revisions, "\x01"), strconv.FormatBool(q.Pick.NoCommit), strconv.Itoa(q.Pick.Mainline), q.Pick.Strategy, strconv.FormatBool(q.Pick.Signoff), strconv.FormatBool(q.Pick.NoEdit), strconv.FormatBool(q.Pick.FastForward), strconv.FormatBool(q.Pick.RecordOrigin),
-		q.Bisect.Bad, q.Bisect.Good, strings.Join(q.Bisect.Paths, "\x01"), strconv.FormatBool(q.Bisect.NoCheckout), strconv.FormatBool(q.Bisect.FirstParent), q.Revision}, "\x00")
+		q.Bisect.Bad, q.Bisect.Good, q.Bisect.TermOld, q.Bisect.TermNew, strings.Join(q.Bisect.Paths, "\x01"), strconv.FormatBool(q.Bisect.NoCheckout), strconv.FormatBool(q.Bisect.FirstParent), q.Revision}, "\x00")
 }
 
 func (r *Repository) historyUIState(ctx context.Context) (HistoryUIState, error) {

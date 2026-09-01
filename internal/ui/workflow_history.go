@@ -17,7 +17,7 @@ import (
 func init() {
 	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff"}
 	rebaseOptions := []string{"transient:magit-rebase:--keep-empty", "transient:magit-rebase:--rebase-merges=", "transient:magit-rebase:--update-refs", "transient:magit-rebase:--autostash", "transient:magit-rebase:--force-rebase", "magit-merge:--strategy", "magit:--signoff"}
-	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent"}
+	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent", "magit-bisect:--term-old", "magit-bisect:--term-new"}
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-cherry-pick", map[string][]string{
 		"magit-cherry-copy":  pickOptions,
 		"magit-cherry-apply": pickOptions,
@@ -451,6 +451,10 @@ func bisectOptions(command WorkflowCommand) (gitbackend.BisectStartOptions, erro
 			opts.NoCheckout = true
 		case "transient:magit-bisect:--first-parent":
 			opts.FirstParent = true
+		case "magit-bisect:--term-old":
+			opts.TermOld = value.Value
+		case "magit-bisect:--term-new":
+			opts.TermNew = value.Value
 		default:
 			return opts, fmt.Errorf("%s is unavailable: no safe typed bisect option", historyOptionUpstream(id))
 		}
