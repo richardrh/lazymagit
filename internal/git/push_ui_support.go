@@ -83,13 +83,7 @@ func validatePushUIRequest(in PushUIArgs) error {
 	if in.Tags && in.AllTags {
 		return errors.New("push all-tags selectors are duplicated")
 	}
-	baseSelector := in.Refspec != "" || in.Source != "" || in.Destination != ""
-	selectors := 0
-	for _, set := range []bool{baseSelector, len(in.Refspecs) != 0, in.Matching, in.Tag != "", in.AllTags, in.Notes, in.NotesRef != ""} {
-		if set {
-			selectors++
-		}
-	}
+	selectors := pushUISelectorCount(in)
 	if selectors > 1 {
 		return errors.New("push selectors are mutually exclusive")
 	}
@@ -99,32 +93,40 @@ func validatePushUIRequest(in PushUIArgs) error {
 	return nil
 }
 
+func pushUISelectorCount(in PushUIArgs) int {
+	baseSelector := in.Refspec != "" || in.Source != "" || in.Destination != ""
+	selectors := 0
+	for _, set := range []bool{baseSelector, len(in.Refspecs) != 0, in.Matching, in.Tag != "", in.AllTags, in.Notes, in.NotesRef != ""} {
+		if set {
+			selectors++
+		}
+	}
+	return selectors
+}
+
 func appendPushUIFlags(args []string, in PushUIArgs) ([]string, error) {
-	switch in.Force {
-	case PushForceNone:
-	case PushForceWithLease:
-		args = append(args, "--force-with-lease")
-	case PushForceUnconditionally:
-		args = append(args, "--force")
-	default:
-		return nil, errors.New("invalid push force mode")
+	args, err := appendPushForce(args, in.Force)
+	if err != nil {
+		return nil, err
 	}
-	if in.NoVerify {
-		args = append(args, "--no-verify")
+	args = appendPushUIBooleans(args, in)
+	return appendPushUIOptions(args, in.PushOptions)
+}
+
+func appendPushUIBooleans(args []string, in PushUIArgs) []string {
+	for _, option := range []struct {
+		set  bool
+		flag string
+	}{{in.NoVerify, "--no-verify"}, {in.DryRun, "--dry-run"}, {in.SetUpstream, "--set-upstream"}, {in.Tags, "--tags"}, {in.FollowTags, "--follow-tags"}} {
+		if option.set {
+			args = append(args, option.flag)
+		}
 	}
-	if in.DryRun {
-		args = append(args, "--dry-run")
-	}
-	if in.SetUpstream {
-		args = append(args, "--set-upstream")
-	}
-	if in.Tags {
-		args = append(args, "--tags")
-	}
-	if in.FollowTags {
-		args = append(args, "--follow-tags")
-	}
-	for _, option := range in.PushOptions {
+	return args
+}
+
+func appendPushUIOptions(args, options []string) ([]string, error) {
+	for _, option := range options {
 		if option == "" {
 			return nil, errors.New("push option is empty")
 		}
