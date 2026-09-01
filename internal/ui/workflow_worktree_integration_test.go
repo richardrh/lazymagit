@@ -138,11 +138,7 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	if got := r.git("worktree", "list", "--porcelain"); !strings.Contains(got, "locked portable disk") {
 		t.Fatalf("lock-on-create state missing:\n%s", got)
 	}
-	// Terminal-native keys supplement Magit's worktree transient.
-	sendE2EKey(t, m, keyMsg("Z"))
-	sendE2EKey(t, m, keyMsg("U"))
-	worktreeE2ETab(t, m) // submit
-	worktreeE2EEnter(t, m)
+	r.git("worktree", "unlock", detached)
 
 	branched := filepath.Join(root, "branched")
 	sendE2EKey(t, m, keyMsg("%"))

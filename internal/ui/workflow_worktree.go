@@ -250,7 +250,7 @@ func worktreeListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			Help: []string{
 				"Each worktree is another folder checked out from this repository.",
 				"[current] is this UI; [main] is the original checkout; [linked] is an additional checkout.",
-				"From the Worktree menu: b add, c add with branch, m move, k remove, L lock, U unlock, p prune.",
+				"From the Worktree menu: b add, c add with branch, m move, k remove, L lock, U unlock.",
 			},
 			Fields: []WorkflowField{{Name: "worktree", Label: "Filter worktrees", Kind: WorkflowSearch, Value: choices[0].Value, Choices: choices, Required: true}},
 			Run:    func(WorkflowValues) tea.Cmd { return nil },

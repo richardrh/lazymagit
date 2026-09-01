@@ -13,12 +13,4 @@ The confirmation screen binds the destination, resolved commit, branch, and all 
 
 ## Manage
 
-The pinned Magit keys remain available: `g` lists and filters worktrees, `m` performs a reviewed move, and `k` performs a reviewed removal.
-
-Lazymagit also provides terminal-native keys in the same transient:
-
-- `L` locks an unlocked linked worktree and accepts an optional reason.
-- `U` unlocks a locked linked worktree.
-- `p` dry-runs pruning, shows the exact stale set, then requires confirmation before pruning.
-
-Primary and bare worktrees are excluded from destructive or lock-management choices. Reviewed move, removal, and prune operations reject changed state before execution.
+The pinned Magit keys remain available: `g` lists and filters worktrees, `m` performs a reviewed move, and `k` performs a reviewed removal. Primary and bare worktrees are excluded from destructive choices, and reviewed move and removal operations reject changed state before execution.
