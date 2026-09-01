@@ -135,7 +135,18 @@ func workflowCapabilitiesFor() map[keymap.CommandID]WorkflowCapability {
 }
 
 func (m *Model) hasInjectedBackend() bool {
-	return m.showCommit != nil || m.addRemote != nil || m.fetch != nil || m.fetchUpstream != nil || m.fetchPush != nil || m.pushRemote != nil || m.push != nil || m.pushSetUpstream != nil || m.setPushRemote != nil || m.fetchAll != nil || m.stageAll != nil || m.unstageAll != nil || m.snapshotLoader != nil
+	checks := []bool{
+		m.showCommit != nil, m.addRemote != nil, m.fetch != nil, m.fetchUpstream != nil,
+		m.fetchPush != nil, m.pushRemote != nil, m.push != nil, m.pushSetUpstream != nil,
+		m.setPushRemote != nil, m.fetchAll != nil, m.stageAll != nil, m.unstageAll != nil,
+		m.snapshotLoader != nil,
+	}
+	for _, injected := range checks {
+		if injected {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateUIHandlers checks the registry/UI integration boundary for a Model.
@@ -494,15 +505,8 @@ func (m *Model) handleWorkflowKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	key := msg.String()
-	if key == "esc" || key == "q" && len(w.dialog.Fields) == 0 {
-		return m, m.cancelWorkflow()
-	}
-	if w.busy {
-		return m, nil
-	}
-	if w.review != nil && key != "enter" {
-		w.error = "Review is locked; press Enter to execute or Esc to cancel"
-		return m, nil
+	if cmd, handled := m.handleWorkflowStateKey(w, key); handled {
+		return m, cmd
 	}
 	if handleWorkflowNavigation(w, key) {
 		return m, nil
@@ -519,6 +523,20 @@ func (m *Model) handleWorkflowKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	w.error = ""
 	return m, nil
+}
+
+func (m *Model) handleWorkflowStateKey(w *workflowState, key string) (tea.Cmd, bool) {
+	if key == "esc" || key == "q" && len(w.dialog.Fields) == 0 {
+		return m.cancelWorkflow(), true
+	}
+	if w.busy {
+		return nil, true
+	}
+	if w.review != nil && key != "enter" {
+		w.error = "Review is locked; press Enter to execute or Esc to cancel"
+		return nil, true
+	}
+	return nil, false
 }
 
 func (m *Model) cancelWorkflow() tea.Cmd {
@@ -552,20 +570,8 @@ func handleWorkflowNavigation(w *workflowState, key string) bool {
 		}
 		return false
 	}
-	field := &w.dialog.Fields[w.field]
-	if field.Kind == WorkflowSearch {
-		switch key {
-		case "down":
-			updateWorkflowSearch(field, 1)
-			return true
-		case "up":
-			updateWorkflowSearch(field, -1)
-			return true
-		case "enter":
-			w.field = len(w.dialog.Fields)
-			return false
-		}
-		return false
+	if field := &w.dialog.Fields[w.field]; field.Kind == WorkflowSearch {
+		return handleWorkflowSearchNavigation(w, field, key)
 	}
 	if key == "down" {
 		w.field = min(w.field+1, len(w.dialog.Fields))
@@ -576,6 +582,22 @@ func handleWorkflowNavigation(w *workflowState, key string) bool {
 		return true
 	}
 	return false
+}
+
+func handleWorkflowSearchNavigation(w *workflowState, field *WorkflowField, key string) bool {
+	switch key {
+	case "down":
+		updateWorkflowSearch(field, 1)
+		return true
+	case "up":
+		updateWorkflowSearch(field, -1)
+		return true
+	case "enter":
+		w.field = len(w.dialog.Fields)
+		return false
+	default:
+		return false
+	}
 }
 
 func (m *Model) activateWorkflow() tea.Cmd {
