@@ -349,40 +349,47 @@ func (r *Repository) MergeState(ctx context.Context) (MergeState, error) {
 	if err != nil {
 		return MergeState{}, err
 	}
+	state := mergeStateFromStatus(status)
+	state.Dirty = state.HasStaged || state.HasUnstaged
+	heads, err := r.mergeHeads(ctx)
+	if err != nil {
+		return state, err
+	}
+	state.Heads = heads
+	state.InProgress = len(heads) != 0
+	return state, nil
+}
+
+func mergeStateFromStatus(status Status) MergeState {
 	var state MergeState
 	for _, file := range status.Files {
-		if file.Staged != ChangeNone {
-			state.HasStaged = true
-		}
-		if file.Unstaged != ChangeNone {
-			state.HasUnstaged = true
-		}
-		if file.Unstaged == ChangeUntracked {
-			state.HasUntracked = true
-		}
+		state.HasStaged = state.HasStaged || file.Staged != ChangeNone
+		state.HasUnstaged = state.HasUnstaged || file.Unstaged != ChangeNone
+		state.HasUntracked = state.HasUntracked || file.Unstaged == ChangeUntracked
 		if file.Staged == ChangeUnmerged || file.Unstaged == ChangeUnmerged {
 			state.Conflicts = append(state.Conflicts, file.Path)
 		}
 	}
-	state.Dirty = state.HasStaged || state.HasUnstaged
+	return state
+}
+
+func (r *Repository) mergeHeads(ctx context.Context) ([]string, error) {
 	pathOut, err := r.output(ctx, "rev-parse", "--git-path", "MERGE_HEAD")
 	if err != nil {
-		return state, err
+		return nil, err
 	}
 	path := strings.TrimSpace(string(pathOut))
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(r.commandDir, path)
 	}
 	data, err := readFileLimited(path, 64<<10)
-	if err == nil {
-		for _, head := range strings.Fields(string(data)) {
-			state.Heads = append(state.Heads, head)
-		}
-		state.InProgress = len(state.Heads) != 0
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return state, fmt.Errorf("read merge state: %w", err)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
 	}
-	return state, nil
+	if err != nil {
+		return nil, fmt.Errorf("read merge state: %w", err)
+	}
+	return strings.Fields(string(data)), nil
 }
 
 type MergePreflight struct {

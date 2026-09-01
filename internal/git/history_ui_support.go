@@ -127,6 +127,13 @@ func (r *Repository) executeReviewedRebaseUIAction(ctx context.Context, q Histor
 }
 
 func (r *Repository) executeReviewedSequencerUIAction(ctx context.Context, q HistoryUIRequest) (bool, error) {
+	if handled, err := r.executeReviewedCherryPickUIAction(ctx, q); handled {
+		return true, err
+	}
+	return r.executeReviewedRevertUIAction(ctx, q)
+}
+
+func (r *Repository) executeReviewedCherryPickUIAction(ctx context.Context, q HistoryUIRequest) (bool, error) {
 	switch q.Action {
 	case HistoryUICherryStart:
 		return true, r.CherryPickStart(ctx, q.Revisions, q.Pick)
@@ -136,6 +143,13 @@ func (r *Repository) executeReviewedSequencerUIAction(ctx context.Context, q His
 		return true, r.CherryPickSkip(ctx)
 	case HistoryUICherryAbort:
 		return true, r.CherryPickAbort(ctx)
+	default:
+		return false, nil
+	}
+}
+
+func (r *Repository) executeReviewedRevertUIAction(ctx context.Context, q HistoryUIRequest) (bool, error) {
+	switch q.Action {
 	case HistoryUIRevertStart:
 		return true, r.RevertStart(ctx, q.Revisions, q.Pick)
 	case HistoryUIRevertContinue:
@@ -248,32 +262,42 @@ func (r *Repository) canonicalRebaseHistoryUIRequest(ctx context.Context, q Hist
 
 func (r *Repository) canonicalRebaseStartHistoryUIRequest(ctx context.Context, q HistoryUIRequest) (HistoryUIRequest, []string, error) {
 	interactive := q.Action == HistoryUIRebaseInteractive
-	if q.Rebase.Branch != "" {
-		return q, nil, errors.New("reviewed UI rebase of a non-current branch is unavailable")
-	}
-	if interactive && q.Rebase.RebaseMerges {
-		return q, nil, errors.New("interactive todo editor does not support merge topology commands")
-	}
-	if err := validateHistoryStrategy(q.Rebase.Strategy); err != nil {
+	if err := validateReviewedRebaseStart(q.Rebase, interactive); err != nil {
 		return q, nil, err
 	}
-	var err error
-	q.Rebase.Upstream, err = r.resolveOptionalHistoryCommit(ctx, "rebase upstream", q.Rebase.Upstream)
+	canonical, err := r.resolveReviewedRebaseStart(ctx, q.Rebase)
 	if err != nil {
 		return q, nil, err
 	}
-	if q.Rebase.Upstream == "" {
-		return q, nil, errors.New("rebase upstream is empty")
-	}
-	q.Rebase.Onto, err = r.resolveOptionalHistoryCommit(ctx, "rebase onto", q.Rebase.Onto)
-	if err != nil {
-		return q, nil, err
-	}
+	q.Rebase = canonical
 	if interactive {
 		return r.canonicalInteractiveRebasePlan(ctx, q)
 	}
 	plan := []string{"Rebase current branch", "Upstream " + q.Rebase.Upstream, optionalPlan("Onto ", q.Rebase.Onto)}
 	return q, append(plan, rebaseOptionPlan(q.Rebase)...), nil
+}
+
+func validateReviewedRebaseStart(options RebaseOptions, interactive bool) error {
+	if options.Branch != "" {
+		return errors.New("reviewed UI rebase of a non-current branch is unavailable")
+	}
+	if interactive && options.RebaseMerges {
+		return errors.New("interactive todo editor does not support merge topology commands")
+	}
+	return validateHistoryStrategy(options.Strategy)
+}
+
+func (r *Repository) resolveReviewedRebaseStart(ctx context.Context, options RebaseOptions) (RebaseOptions, error) {
+	var err error
+	options.Upstream, err = r.resolveOptionalHistoryCommit(ctx, "rebase upstream", options.Upstream)
+	if err != nil {
+		return options, err
+	}
+	if options.Upstream == "" {
+		return options, errors.New("rebase upstream is empty")
+	}
+	options.Onto, err = r.resolveOptionalHistoryCommit(ctx, "rebase onto", options.Onto)
+	return options, err
 }
 
 func (r *Repository) canonicalInteractiveRebasePlan(ctx context.Context, q HistoryUIRequest) (HistoryUIRequest, []string, error) {
@@ -642,53 +666,60 @@ func (r *Repository) historyUIOperationFingerprint(state OperationState) (string
 	if err != nil {
 		return "", err
 	}
-	var roots []string
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "sequencer" || name == "rebase-merge" || name == "rebase-apply" ||
-			name == "CHERRY_PICK_HEAD" || name == "REVERT_HEAD" || name == "MERGE_HEAD" ||
-			strings.HasPrefix(name, "BISECT_") {
-			roots = append(roots, filepath.Join(r.gitDir, name))
-		}
-	}
+	roots := historyUIOperationRoots(r.gitDir, entries)
 	sort.Strings(roots)
 	var total int64
 	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			if entry.Type()&os.ModeSymlink != 0 {
-				return errors.New("operation state contains a symbolic link")
-			}
-			info, err := entry.Info()
-			if err != nil {
-				return err
-			}
-			total += info.Size()
-			if info.Size() > 2<<20 || total > 8<<20 {
-				return &TooLargeError{Resource: "reviewed operation state"}
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(r.gitDir, path)
-			if err != nil {
-				return err
-			}
-			h.Write([]byte("\x00" + filepath.ToSlash(rel) + "\x00"))
-			h.Write(content)
-			return nil
-		})
+		err := filepath.WalkDir(root, historyUIOperationHasher(r.gitDir, h, &total))
 		if err != nil {
 			return "", err
 		}
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func historyUIOperationRoots(gitDir string, entries []os.DirEntry) []string {
+	var roots []string
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "sequencer" || name == "rebase-merge" || name == "rebase-apply" || name == "CHERRY_PICK_HEAD" || name == "REVERT_HEAD" || name == "MERGE_HEAD" || strings.HasPrefix(name, "BISECT_") {
+			roots = append(roots, filepath.Join(gitDir, name))
+		}
+	}
+	return roots
+}
+
+func historyUIOperationHasher(gitDir string, h interface{ Write([]byte) (int, error) }, total *int64) func(string, os.DirEntry, error) error {
+	return func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("operation state contains a symbolic link")
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		*total += info.Size()
+		if info.Size() > 2<<20 || *total > 8<<20 {
+			return &TooLargeError{Resource: "reviewed operation state"}
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(gitDir, path)
+		if err != nil {
+			return err
+		}
+		h.Write([]byte("\x00" + filepath.ToSlash(rel) + "\x00"))
+		h.Write(content)
+		return nil
+	}
 }
 
 func hashHistoryBytes(value []byte) string {

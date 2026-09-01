@@ -147,11 +147,15 @@ func validateHistoryStrategy(strategy string) error {
 		return fmt.Errorf("invalid merge strategy %q", strategy)
 	}
 	for _, c := range strategy {
-		if !(c == '-' || c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
+		if !isHistoryStrategyRune(c) {
 			return fmt.Errorf("invalid merge strategy %q", strategy)
 		}
 	}
 	return nil
+}
+
+func isHistoryStrategyRune(c rune) bool {
+	return c == '-' || c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 func (r *Repository) CherryPickContinue(ctx context.Context) error {
@@ -789,47 +793,61 @@ type BisectStartOptions struct {
 }
 
 func (r *Repository) BisectStart(ctx context.Context, o BisectStartOptions) error {
+	if err := r.validateBisectStart(o); err != nil {
+		return err
+	}
+	args := bisectStartOptionArgs(o)
+	bad, err := r.resolveOptionalBisectCommit(ctx, "bad", o.Bad)
+	if err != nil {
+		return err
+	}
+	good, err := r.resolveOptionalBisectCommit(ctx, "good", o.Good)
+	if err != nil {
+		return err
+	}
+	args = append(args, bad...)
+	args = append(args, good...)
+	if len(o.Paths) > 0 {
+		args = pathsArgs(args, o.Paths)
+	}
+	return r.run(ctx, args...)
+}
+
+func (r *Repository) validateBisectStart(o BisectStartOptions) error {
 	if r.historyBisectActive() {
 		return errors.New("bisect is already active")
 	}
 	if o.Good != "" && o.Bad == "" {
 		return errors.New("bisect start cannot supply good without bad")
 	}
+	return validateBisectTerms(o.TermOld, o.TermNew)
+}
+
+func bisectStartOptionArgs(o BisectStartOptions) []string {
 	args := []string{"bisect", "start"}
-	if err := validateBisectTerms(o.TermOld, o.TermNew); err != nil {
-		return err
-	}
-	if o.TermOld != "" {
-		args = append(args, "--term-old="+o.TermOld)
-	}
-	if o.TermNew != "" {
-		args = append(args, "--term-new="+o.TermNew)
-	}
-	if o.NoCheckout {
-		args = append(args, "--no-checkout")
-	}
-	if o.FirstParent {
-		args = append(args, "--first-parent")
-	}
-	if o.Bad != "" {
-		bad, err := r.resolveHistoryCommit(ctx, o.Bad)
-		if err != nil {
-			return fmt.Errorf("bisect bad: %w", err)
+	for _, option := range []struct {
+		include bool
+		value   string
+	}{
+		{o.TermOld != "", "--term-old=" + o.TermOld}, {o.TermNew != "", "--term-new=" + o.TermNew},
+		{o.NoCheckout, "--no-checkout"}, {o.FirstParent, "--first-parent"},
+	} {
+		if option.include {
+			args = append(args, option.value)
 		}
-		args = append(args, bad)
 	}
-	if o.Good != "" {
-		good, err := r.resolveHistoryCommit(ctx, o.Good)
-		if err != nil {
-			return fmt.Errorf("bisect good: %w", err)
-		}
-		args = append(args, good)
+	return args
+}
+
+func (r *Repository) resolveOptionalBisectCommit(ctx context.Context, label, revision string) ([]string, error) {
+	if revision == "" {
+		return nil, nil
 	}
-	if len(o.Paths) > 0 {
-		args = append(args, "--")
-		args = append(args, o.Paths...)
+	oid, err := r.resolveHistoryCommit(ctx, revision)
+	if err != nil {
+		return nil, fmt.Errorf("bisect %s: %w", label, err)
 	}
-	return r.run(ctx, args...)
+	return []string{oid}, nil
 }
 func (r *Repository) BisectGood(ctx context.Context, revision string) error {
 	return r.bisectMark(ctx, r.bisectTerm(false), revision)
@@ -878,15 +896,20 @@ func (r *Repository) UnsafeBisectRun(ctx context.Context, capability AllowUnsafe
 	if !r.historyBisectActive() {
 		return fmt.Errorf("%w: bisect", ErrWorkflowNotActive)
 	}
+	if err := validateBisectRunArgv(argv); err != nil {
+		return err
+	}
+	return r.run(ctx, append([]string{"bisect", "run"}, argv...)...)
+}
+
+func validateBisectRunArgv(argv []string) error {
 	if len(argv) == 0 || argv[0] == "" {
 		return errors.New("bisect run requires explicit command argv")
 	}
-	for _, arg := range argv {
-		if strings.ContainsRune(arg, '\x00') {
-			return errors.New("bisect run argv contains NUL")
-		}
+	if strings.ContainsRune(strings.Join(argv, "\x01"), '\x00') {
+		return errors.New("bisect run argv contains NUL")
 	}
-	return r.run(ctx, append([]string{"bisect", "run"}, argv...)...)
+	return nil
 }
 
 func (r *Repository) historyBisectActive() bool {
