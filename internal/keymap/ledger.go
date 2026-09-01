@@ -54,36 +54,53 @@ func renderTopLedger(out *strings.Builder, m manifest) int {
 
 func renderTransientLedger(out *strings.Builder, m manifest) {
 	routes := transientRoutes(m)
+	bindings := transientLedgerBindings()
+	for _, tr := range m.Transients {
+		prefix := strings.Join(routes[tr.Name], " ")
+		fmt.Fprintf(out, "\n### `%s` — %s (%d occurrences)\n\n| Key | Command | Kind | Group | Conditions | Classification | Current status |\n|---|---|---|---|---|---|---|\n", prefix, tr.Name, len(tr.Entries))
+		for index, row := range tr.Entries {
+			binding := bindings[fmt.Sprintf("%s:%02d", tr.Name, index)]
+			fmt.Fprintf(out, "| `%s` | `%s` | **%s** | %s | %s | `%s` | %s |\n", ledgerEscape(row.Key), ledgerEscape(row.Command), row.Kind, ledgerEscape(transientLedgerGroup(row)), ledgerEscape(transientLedgerConditions(row)), binding.Parity, ledgerEscape(transientLedgerStatus(prefix, binding)))
+		}
+	}
+}
+
+func transientLedgerBindings() map[string]Binding {
 	bindings := map[string]Binding{}
 	for _, binding := range Registry() {
 		if binding.Scheme == SchemeMagit && binding.Occurrence != "" {
 			bindings[binding.Occurrence] = binding
 		}
 	}
-	for _, tr := range m.Transients {
-		prefix := strings.Join(routes[tr.Name], " ")
-		fmt.Fprintf(out, "\n### `%s` — %s (%d occurrences)\n\n| Key | Command | Kind | Group | Conditions | Classification | Current status |\n|---|---|---|---|---|---|---|\n", prefix, tr.Name, len(tr.Entries))
-		for index, row := range tr.Entries {
-			group := ""
-			if len(row.Groups) > 0 {
-				group = row.Groups[0]
-			}
-			conditions := make([]string, len(row.Conditions))
-			for i, c := range row.Conditions {
-				conditions[i] = c.Type + ": " + c.Expression
-			}
-			binding := bindings[fmt.Sprintf("%s:%02d", tr.Name, index)]
-			status := binding.Unavailable
-			if binding.Handler == HandlerExecute {
-				status = "TUI workflow handler (startup-validated)"
-			} else if binding.Kind == KindInfix && len(OptionConsumerCommands(prefix, binding.UpstreamCommand)) > 0 {
-				status = "actionable TUI option"
-			} else if binding.Kind == KindInfix && strings.Contains(strings.Join(binding.Conditions, " "), "direct-configure") {
-				status = "actionable in corresponding Configure dialog"
-			}
-			fmt.Fprintf(out, "| `%s` | `%s` | **%s** | %s | %s | `%s` | %s |\n", ledgerEscape(row.Key), ledgerEscape(row.Command), row.Kind, ledgerEscape(group), ledgerEscape(strings.Join(conditions, "; ")), binding.Parity, ledgerEscape(status))
-		}
+	return bindings
+}
+
+func transientLedgerGroup(row manifestEntry) string {
+	if len(row.Groups) > 0 {
+		return row.Groups[0]
 	}
+	return ""
+}
+
+func transientLedgerConditions(row manifestEntry) string {
+	conditions := make([]string, len(row.Conditions))
+	for i, condition := range row.Conditions {
+		conditions[i] = condition.Type + ": " + condition.Expression
+	}
+	return strings.Join(conditions, "; ")
+}
+
+func transientLedgerStatus(prefix string, binding Binding) string {
+	if binding.Handler == HandlerExecute {
+		return "TUI workflow handler (startup-validated)"
+	}
+	if binding.Kind == KindInfix && len(OptionConsumerCommands(prefix, binding.UpstreamCommand)) > 0 {
+		return "actionable TUI option"
+	}
+	if binding.Kind == KindInfix && strings.Contains(strings.Join(binding.Conditions, " "), "direct-configure") {
+		return "actionable in corresponding Configure dialog"
+	}
+	return binding.Unavailable
 }
 
 func ledgerEscape(s string) string { return strings.ReplaceAll(s, "|", "\\|") }

@@ -2,12 +2,14 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	gitbackend "github.com/richardrh/lazymagit/internal/git"
 	"github.com/richardrh/lazymagit/internal/keymap"
 	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
@@ -84,44 +86,64 @@ func (m *Model) renderCompactMainBody(bodyHeight int) string {
 }
 
 func (m *Model) renderCompactStatus(width, height int) string {
-	ids := m.tree.VisibleSectionIDs()
-	cursor := 0
-	for i, id := range ids {
-		if id == m.tree.Cursor() {
-			cursor = i
-			break
-		}
-	}
+	ids, cursor := m.visibleStatusCursor()
 	start := min(max(0, cursor-height+1), max(0, len(ids)-height))
 	var lines []string
 	for _, id := range ids[start:min(len(ids), start+height)] {
 		section, row := m.tree.Section(id), m.rows[id]
-		prefix := "  "
-		if row.kind == rowHeading {
-			prefix = map[bool]string{true: "▸ ", false: "▾ "}[m.tree.IsFolded(id)]
-		} else if m.rowMarked(row) {
-			prefix = "● "
-		}
-		style := lipgloss.NewStyle()
-		switch {
-		case row.kind == rowHeading:
-			style = style.Foreground(colorGold).Bold(true)
-		case row.kind == rowStaged:
-			style = style.Foreground(colorGreen)
-		case row.kind == rowUntracked || row.kind == rowUnstaged:
-			style = style.Foreground(colorPurple)
-		default:
-			style = style.Foreground(colorText)
-		}
-		if m.statusSearchMatch(id) {
-			style = style.Underline(true).Foreground(colorCyan)
-		}
-		if id == m.tree.Cursor() {
-			style = style.Reverse(true).Bold(true)
-		}
-		lines = append(lines, style.Render(truncate(prefix+section.Title(), width)))
+		lines = append(lines, m.compactStatusStyle(id, row).Render(truncate(m.compactStatusPrefix(id, row)+section.Title(), width)))
 	}
 	return fitBlock(strings.Join(lines, "\n"), width, height)
+}
+
+func (m *Model) visibleStatusCursor() ([]sectionmodel.SectionID, int) {
+	ids := m.tree.VisibleSectionIDs()
+	for i, id := range ids {
+		if id == m.tree.Cursor() {
+			return ids, i
+		}
+	}
+	return ids, 0
+}
+
+func (m *Model) compactStatusPrefix(id sectionmodel.SectionID, row row) string {
+	if row.kind == rowHeading {
+		if m.tree.IsFolded(id) {
+			return "▸ "
+		}
+		return "▾ "
+	}
+	if m.rowMarked(row) {
+		return "● "
+	}
+	return "  "
+}
+
+func (m *Model) compactStatusStyle(id sectionmodel.SectionID, row row) lipgloss.Style {
+	style := lipgloss.NewStyle().Foreground(compactStatusColor(row.kind))
+	if row.kind == rowHeading {
+		style = style.Bold(true)
+	}
+	if m.statusSearchMatch(id) {
+		style = style.Underline(true).Foreground(colorCyan)
+	}
+	if id == m.tree.Cursor() {
+		style = style.Reverse(true).Bold(true)
+	}
+	return style
+}
+
+func compactStatusColor(kind rowKind) color.Color {
+	switch kind {
+	case rowHeading:
+		return colorGold
+	case rowStaged:
+		return colorGreen
+	case rowUntracked, rowUnstaged:
+		return colorPurple
+	default:
+		return colorText
+	}
 }
 
 func (m *Model) renderCompactDetail(width, height int) string {
@@ -142,20 +164,23 @@ func (m *Model) renderCompactDetail(width, height int) string {
 
 func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) lipgloss.Style {
 	style := lipgloss.NewStyle().Foreground(colorText)
-	switch {
-	case m.graphActive && index == m.graphCursor:
+	if m.compactDetailCursorSelected(index) {
 		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-	case m.blameActive && index == m.blameCursor:
-		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-	case rangeLow >= 0 && index >= rangeLow && index <= rangeHigh:
-		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
-	case index == m.detailHunk && strings.HasPrefix(line, "@@"):
-		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
-	case strings.HasPrefix(line, "@@") && m.detailHunkSelected(index):
-		return style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
-	default:
-		return compactDiffLineStyle(style, line)
 	}
+	if rangeLow >= 0 && index >= rangeLow && index <= rangeHigh {
+		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
+	}
+	if index == m.detailHunk && strings.HasPrefix(line, "@@") {
+		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	}
+	if strings.HasPrefix(line, "@@") && m.detailHunkSelected(index) {
+		return style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
+	}
+	return compactDiffLineStyle(style, line)
+}
+
+func (m *Model) compactDetailCursorSelected(index int) bool {
+	return (m.graphActive && index == m.graphCursor) || (m.blameActive && index == m.blameCursor)
 }
 
 func compactDiffLineStyle(style lipgloss.Style, line string) lipgloss.Style {
@@ -693,18 +718,8 @@ func renderWorkflowAction(label string, selected, busy bool) string {
 }
 
 func (m *Model) renderRemoteOverlay(height int) string {
-	title, hint := " Fetch elsewhere ", "Enter fetch"
-	if m.remotePurpose == remoteConfigurePush {
-		title, hint = " Configure push remote ", "Enter configure and fetch"
-	} else if m.remotePurpose == remoteConfigureAndPush {
-		title, hint = " Push and set upstream ", "Enter choose destination"
-	}
-	selected := "No remotes"
-	cursor := 0
-	if len(m.snapshot.remotes) > 0 {
-		cursor = min(max(0, m.remoteCursor), len(m.snapshot.remotes)-1)
-		selected = sanitizeSingleLine(m.snapshot.remotes[cursor].Name)
-	}
+	title, hint := remoteOverlayLabels(m.remotePurpose)
+	selected, cursor := selectedRemote(m.snapshot.remotes, m.remoteCursor)
 	compact := lipgloss.NewStyle().Reverse(true).Bold(true).Render(selected) + "  •  " + hint
 	if m.width < 4 || height < 3 {
 		return fitBlock(compact, m.width, height)
@@ -714,33 +729,60 @@ func (m *Model) renderRemoteOverlay(height int) string {
 	if innerH < 5 {
 		text = fitBlock(compact, innerW, innerH)
 	} else {
-		available := max(1, innerH-4)
-		start := max(0, cursor-available/2)
-		start = min(start, max(0, len(m.snapshot.remotes)-available))
-		end := min(len(m.snapshot.remotes), start+available)
-		lines := make([]string, 0, available)
-		for i := start; i < end; i++ {
-			remote := m.snapshot.remotes[i]
-			line := "  " + sanitizeSingleLine(remote.Name)
-			if remote.FetchURL != "" {
-				line += "  fetch: " + sanitizeSingleLine(remote.FetchURL)
-			}
-			if remote.PushURL != "" && remote.PushURL != remote.FetchURL {
-				line += "  push: " + sanitizeSingleLine(remote.PushURL)
-			}
-			if i == cursor {
-				line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) == 0 {
-			lines = append(lines, "No remotes")
-		}
+		lines := remoteOverlayLines(m.snapshot.remotes, cursor, innerW, innerH)
 		heading := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(title)
 		text = fitBlock(heading+"\n"+strings.Join(lines, "\n")+"\n\n"+hint+"  •  q back", innerW, innerH)
 	}
 	return lipgloss.NewStyle().Width(m.width).Height(height).Padding(0, 1).
 		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func remoteOverlayLabels(purpose remotePurpose) (string, string) {
+	switch purpose {
+	case remoteConfigurePush:
+		return " Configure push remote ", "Enter configure and fetch"
+	case remoteConfigureAndPush:
+		return " Push and set upstream ", "Enter choose destination"
+	default:
+		return " Fetch elsewhere ", "Enter fetch"
+	}
+}
+
+func selectedRemote(remotes []gitbackend.Remote, requested int) (string, int) {
+	if len(remotes) == 0 {
+		return "No remotes", 0
+	}
+	cursor := min(max(0, requested), len(remotes)-1)
+	return sanitizeSingleLine(remotes[cursor].Name), cursor
+}
+
+func remoteOverlayLines(remotes []gitbackend.Remote, cursor, width, height int) []string {
+	available := max(1, height-4)
+	start := min(max(0, cursor-available/2), max(0, len(remotes)-available))
+	end := min(len(remotes), start+available)
+	lines := make([]string, 0, available)
+	for i := start; i < end; i++ {
+		line := remoteOverlayLine(remotes[i])
+		if i == cursor {
+			line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, width))
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) == 0 {
+		return []string{"No remotes"}
+	}
+	return lines
+}
+
+func remoteOverlayLine(remote gitbackend.Remote) string {
+	line := "  " + sanitizeSingleLine(remote.Name)
+	if remote.FetchURL != "" {
+		line += "  fetch: " + sanitizeSingleLine(remote.FetchURL)
+	}
+	if remote.PushURL != "" && remote.PushURL != remote.FetchURL {
+		line += "  push: " + sanitizeSingleLine(remote.PushURL)
+	}
+	return line
 }
 
 func shortID(id string) string {

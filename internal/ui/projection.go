@@ -52,8 +52,14 @@ func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]ro
 	s = normalizeUpstreamSnapshot(s)
 	children := make(map[string][]*sectionmodel.Section, len(sectionIDs))
 	rows := make(map[sectionmodel.SectionID]row)
+	projectFiles(s.status.Files, children, rows)
+	projectCommits(s, children, rows)
+	projectStashes(s.stashes, children, rows)
+	return projectSections(s, children, rows), rows
+}
 
-	files := append([]gitbackend.FileStatus(nil), s.status.Files...)
+func projectFiles(statusFiles []gitbackend.FileStatus, children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row) {
+	files := append([]gitbackend.FileStatus(nil), statusFiles...)
 	sort.SliceStable(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	for _, f := range files {
 		if f.Unstaged == gitbackend.ChangeUntracked {
@@ -65,29 +71,37 @@ func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]ro
 			addFile(children, rows, "staged", rowStaged, f.Path, f.Staged)
 		}
 	}
-	addCommits := func(section string, commits []gitbackend.Commit) {
+}
+
+func projectCommits(s snapshot, children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row) {
+	add := func(section string, commits []gitbackend.Commit) {
 		for _, c := range commits {
 			id := sectionmodel.SectionID("status/" + section + "/commit/" + c.ID)
 			children[section] = append(children[section], sectionmodel.NewSection(id, commitTitle(c)))
 			rows[id] = row{id: id, kind: rowCommit, commit: c, depth: 2, section: section}
 		}
 	}
-	addCommits("unpushed", s.upstream.Ahead)
-	addCommits("unpulled", s.upstream.Behind)
-	seenStashes := make(map[string]bool, len(s.stashes))
-	for _, stash := range s.stashes {
-		if seenStashes[stash.ID] {
+	add("unpushed", s.upstream.Ahead)
+	add("unpulled", s.upstream.Behind)
+	if len(s.upstream.Ahead) == 0 {
+		add("recent", s.recent)
+	}
+}
+
+func projectStashes(stashes []gitbackend.Stash, children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row) {
+	seen := make(map[string]bool, len(stashes))
+	for _, stash := range stashes {
+		if seen[stash.ID] {
 			continue
 		}
-		seenStashes[stash.ID] = true
+		seen[stash.ID] = true
 		id := sectionmodel.SectionID("status/stashes/stash/" + stash.ID)
 		children["stashes"] = append(children["stashes"], sectionmodel.NewSection(id, stashTitle(stash)))
 		rows[id] = row{id: id, kind: rowStash, stash: stash, depth: 2, section: "stashes"}
 	}
-	if len(s.upstream.Ahead) == 0 {
-		addCommits("recent", s.recent)
-	}
+}
 
+func projectSections(s snapshot, children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row) []*sectionmodel.Section {
 	titles := map[string]string{
 		"untracked": "Untracked files", "unstaged": "Unstaged changes", "staged": "Staged changes", "stashes": "Stashes",
 		"unpushed": "Unmerged into " + sanitizeSingleLine(s.summary.Upstream),
@@ -111,7 +125,7 @@ func project(s snapshot) ([]*sectionmodel.Section, map[sectionmodel.SectionID]ro
 		roots = append(roots, sectionmodel.NewSection(id, title, children[section]...))
 		rows[id] = row{id: id, kind: rowHeading, depth: 1, section: section}
 	}
-	return roots, rows
+	return roots
 }
 
 func addFile(children map[string][]*sectionmodel.Section, rows map[sectionmodel.SectionID]row, section string, kind rowKind, path string, change gitbackend.Change) {
