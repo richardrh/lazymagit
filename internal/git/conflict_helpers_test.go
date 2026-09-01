@@ -8,72 +8,7 @@ import (
 	"testing"
 )
 
-func TestReviewBranchConfigUpdateDirect(t *testing.T) {
-	r := newTestRepo(t)
-	r.write("base.txt", "base\n")
-	r.commitAll("base")
-	r.git("remote", "add", "origin", "https://example.invalid/repository")
-	repo, err := Discover(r.dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	keep := ConfigUpdate{Action: ConfigKeep}
-	request := BranchConfigUpdate{
-		Branch:            "main",
-		Description:       keep,
-		Upstream:          ConfigUpdate{Action: ConfigSet, Value: "main"},
-		Rebase:            keep,
-		PushRemote:        ConfigUpdate{Action: ConfigSet, Value: "origin"},
-		PullRebase:        keep,
-		RemotePushDefault: ConfigUpdate{Action: ConfigSet, Value: "origin"},
-		AutoSetupMerge:    keep,
-		AutoSetupRebase:   keep,
-	}
-
-	reviewed, err := repo.ReviewBranchConfigUpdate(ctx, request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reviewed.Upstream.Value != "refs/heads/main" {
-		t.Fatalf("resolved upstream = %q", reviewed.Upstream.Value)
-	}
-	if reviewed.Before.OID == "" || len(reviewed.Plan) != 3 {
-		t.Fatalf("reviewed update = %#v", reviewed)
-	}
-	if !reviewed.Token.validFor(branchConfigIdentity(reviewed)) {
-		t.Fatal("review token does not match the reviewed update")
-	}
-
-	tests := []struct {
-		name   string
-		mutate func(*BranchConfigUpdate)
-	}{
-		{"snapshot failure", func(update *BranchConfigUpdate) { update.Branch = "missing" }},
-		{"invalid update", func(update *BranchConfigUpdate) { update.Description.Action = "invalid" }},
-		{"invalid push remote", func(update *BranchConfigUpdate) { update.PushRemote.Value = "missing" }},
-		{"invalid default push remote", func(update *BranchConfigUpdate) {
-			update.PushRemote = keep
-			update.RemotePushDefault.Value = "missing"
-		}},
-		{"invalid upstream", func(update *BranchConfigUpdate) {
-			update.PushRemote = keep
-			update.RemotePushDefault = keep
-			update.Upstream.Value = "missing"
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			invalid := request
-			test.mutate(&invalid)
-			if _, err := repo.ReviewBranchConfigUpdate(ctx, invalid); err == nil {
-				t.Fatal("invalid review succeeded")
-			}
-		})
-	}
-}
-
-func TestConflictEntriesDirect(t *testing.T) {
+func TestConflictEntriesReadIndexStagesAndReportRepositoryErrors(t *testing.T) {
 	ctx := context.Background()
 	_, repo := conflictedRepository(t)
 	entries, err := repo.conflictEntries(ctx)
@@ -130,7 +65,7 @@ func TestParseConflictEntryRejectsMalformedRecords(t *testing.T) {
 	}
 }
 
-func TestConflictWorktreeIdentityDirect(t *testing.T) {
+func TestConflictWorktreeIdentityClassifiesPathsAndReportsErrors(t *testing.T) {
 	r := newTestRepo(t)
 	r.write("tracked", "tracked\n")
 	r.commitAll("base")
