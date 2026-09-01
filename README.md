@@ -27,7 +27,7 @@ prefixes with an optional Vim navigation layer.
 - Three-stage conflict inspection with direct reviewed ours/theirs resolution
 - Marked multi-file and reviewed file/hunk/multi-hunk/disjoint-region stage, unstage, and discard
 - Stale-safe interactive patch reviews that revalidate the exact source diff before mutation and reject unresolved conflicts
-- Commit creation, revision inspection, searchable branch switching, remote add, fetch, and push
+- Commit creation, revision inspection, searchable branch switching, multi-remote browsing, and reviewed remote-branch publishing/deletion
 - Reviewed merge, non-interactive rebase, cherry-pick/revert, reset, and bisect workflows with stale-state rejection
 - Standard side-by-side and optional compact borderless status/diff layouts
 - Universal status-row search with `/`, then `n` / `N` navigation
@@ -119,6 +119,9 @@ Magit scheme. This explicit mode is necessary because Vim's `k` (move up) and
 | Confirmed discard | `x` | `k` |
 | Commit | `c c` | `c c` |
 | Switch branch | `b b` | `b b` |
+| Checkout remote branch as local tracking branch | `b l` | `b l` |
+| Create local branch or publish reviewed remote branch | `b c` | `b c` |
+| Delete reviewed local or remote branch | `b k` | `b k` |
 | Fetch upstream / push remote | `f u` / `f p` | `f u` / `f p` |
 | Fetch chosen remote / all remotes | `f e` / `f a` | `f e` / `f a` |
 | Add remote (`M -f` to fetch) | `M a` | `M a` |
@@ -160,12 +163,24 @@ human representation of arguments, not a claim that a shell was used.
 
 `M a` opens separate name and URL fields and adds without fetching. Enable
 `M -f` (or `Ctrl-f` in the modal) to explicitly request `git remote add -f`.
+The command remains available after each add, so repositories can configure any
+number of remotes. Remote choosers show each remote's effective fetch URL and a
+distinct push URL when configured, rather than presenting ambiguous names only.
 The URL is passed to Git exactly as entered; the remote name is trimmed.
 `f u` fetches the upstream remote. `f p` fetches the configured push remote, or
 opens a distinct chooser when none is configured; choosing one records
 `branch.<current>.pushRemote` and then fetches it. `f e` is the fetch-only
 remote chooser and `f a` runs `git fetch --all`. `f f` is intentionally unbound
 to match Magit 4.7's exact sequences.
+
+`b l` selects an exact remote-tracking ref, asks for a local branch name, then
+creates and checks out a tracking branch. `b c` keeps local-only branch creation
+and also offers a publish mode: choose an existing local branch, destination
+remote, and remote branch name, review the exact local commit and observed
+remote destination, then push with upstream configuration. `b k` includes both
+non-current local branches and fetched remote-tracking branches. Remote deletion
+reviews the server-advertised commit again immediately before `git push --delete`.
+Remote rename, removal, configuration, and prune remain reviewed `M` workflows.
 
 `P p` uses ordinary `git push` when the current branch already has an upstream.
 Without an upstream, it pushes with `--set-upstream` to the configured push

@@ -720,7 +720,14 @@ func (m *Model) renderRemoteOverlay(height int) string {
 		end := min(len(m.snapshot.remotes), start+available)
 		lines := make([]string, 0, available)
 		for i := start; i < end; i++ {
-			line := "  " + sanitizeSingleLine(m.snapshot.remotes[i].Name)
+			remote := m.snapshot.remotes[i]
+			line := "  " + sanitizeSingleLine(remote.Name)
+			if remote.FetchURL != "" {
+				line += "  fetch: " + sanitizeSingleLine(remote.FetchURL)
+			}
+			if remote.PushURL != "" && remote.PushURL != remote.FetchURL {
+				line += "  push: " + sanitizeSingleLine(remote.PushURL)
+			}
 			if i == cursor {
 				line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
 			}

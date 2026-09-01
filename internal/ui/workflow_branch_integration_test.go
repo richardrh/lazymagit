@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -8,6 +9,16 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
+
+func branchTestGitAt(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
 
 func TestBranchCheckoutSearchFiltersAndSwitchesByKeys(t *testing.T) {
 	r := newUIE2ERepo(t)
@@ -123,12 +134,16 @@ func TestBranchRemoteCheckoutAndDefaultBranchAliases(t *testing.T) {
 
 	openBranchWorkflow(t, m, "magit-checkout-remote-ref")
 	setBranchWorkflowValue(t, m, "revision", "origin/topic")
+	setBranchWorkflowValue(t, m, "local", "remote-topic")
 	executeBranchWorkflow(t, m)
 	if got := local.git("rev-parse", "HEAD"); got != topic {
 		t.Fatalf("remote checkout HEAD = %q, want %q", got, topic)
 	}
-	if got := local.git("branch", "--show-current"); got != "" {
+	if got := local.git("branch", "--show-current"); got != "remote-topic" {
 		t.Fatalf("remote checkout created/selected local branch %q", got)
+	}
+	if got := local.git("rev-parse", "--abbrev-ref", "@{upstream}"); got != "origin/topic" {
+		t.Fatalf("remote checkout upstream = %q", got)
 	}
 
 	local.git("switch", "-C", "main", "origin/main")
@@ -138,6 +153,37 @@ func TestBranchRemoteCheckoutAndDefaultBranchAliases(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("B"))
 	if m.workflow == nil {
 		t.Fatalf("branch default-branch alias did not open: %q", m.message)
+	}
+}
+
+func TestBranchWorkflowIntegrationReviewedPublishAndRemoteDelete(t *testing.T) {
+	local := newUIE2ERepo(t)
+	local.write("base.txt", "base\n")
+	local.git("add", ".")
+	local.git("commit", "-m", "base")
+	bare := newUIBareRemote(t)
+	local.git("remote", "add", "origin", bare)
+	m := newE2EModel(t, local)
+
+	openBranchWorkflow(t, m, "magit-branch-create")
+	setBranchWorkflowValue(t, m, "kind", "publish")
+	setBranchWorkflowValue(t, m, "source", "main")
+	setBranchWorkflowValue(t, m, "remote", "origin")
+	setBranchWorkflowValue(t, m, "remote_branch", "topic")
+	reviewAndSubmitRemoteWorkflow(t, m)
+	if got, want := branchTestGitAt(t, bare, "rev-parse", "refs/heads/topic"), local.git("rev-parse", "main"); got != want {
+		t.Fatalf("published topic = %q, want %q", got, want)
+	}
+	if got := local.git("rev-parse", "--abbrev-ref", "main@{upstream}"); got != "origin/topic" {
+		t.Fatalf("published upstream = %q", got)
+	}
+
+	local.git("fetch", "origin")
+	openBranchWorkflow(t, m, "magit-branch-delete")
+	setBranchWorkflowValue(t, m, "branch", "origin/topic")
+	reviewAndSubmitRemoteWorkflow(t, m)
+	if got := branchTestGitAt(t, bare, "for-each-ref", "--format=%(refname)", "refs/heads/topic"); got != "" {
+		t.Fatalf("remote branch remained: %q", got)
 	}
 }
 

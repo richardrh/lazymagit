@@ -77,7 +77,14 @@ func remoteChoices(ctx context.Context, m *Model) ([]WorkflowChoice, error) {
 	}
 	choices := make([]WorkflowChoice, 0, len(remotes))
 	for _, remote := range remotes {
-		choices = append(choices, WorkflowChoice{Value: remote.Name, Label: remote.Name})
+		label := remote.Name
+		if remote.FetchURL != "" {
+			label += "  fetch: " + remote.FetchURL
+		}
+		if remote.PushURL != "" && remote.PushURL != remote.FetchURL {
+			label += "  push: " + remote.PushURL
+		}
+		choices = append(choices, WorkflowChoice{Value: remote.Name, Label: label})
 	}
 	return choices, nil
 }
