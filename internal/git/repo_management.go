@@ -774,8 +774,8 @@ func (r *Repository) PruneWorktrees(ctx context.Context, opts WorktreePruneOptio
 }
 
 type SparseCheckoutState struct {
-	Enabled, Cone bool
-	Patterns      []string
+	Enabled, Cone, SparseIndex bool
+	Patterns                   []string
 }
 
 func (r *Repository) SparseCheckoutState(ctx context.Context) (SparseCheckoutState, error) {
@@ -790,6 +790,11 @@ func (r *Repository) SparseCheckoutState(ctx context.Context) (SparseCheckoutSta
 		return state, err
 	}
 	state.Cone = ok && strings.EqualFold(v, "true")
+	v, ok, err = r.configValue(ctx, "index.sparse")
+	if err != nil {
+		return state, err
+	}
+	state.SparseIndex = ok && strings.EqualFold(v, "true")
 	if !state.Enabled {
 		return state, nil
 	}
@@ -811,8 +816,28 @@ func (r *Repository) SparseCheckoutState(ctx context.Context) (SparseCheckoutSta
 	return state, nil
 }
 
+type SparseCheckoutInitOptions struct {
+	Cone        bool
+	SparseIndex bool
+}
+
+func (r *Repository) EnableSparseCheckout(ctx context.Context, opts SparseCheckoutInitOptions) error {
+	args := []string{"sparse-checkout", "init"}
+	if opts.Cone {
+		args = append(args, "--cone")
+	} else {
+		args = append(args, "--no-cone")
+	}
+	if opts.SparseIndex {
+		args = append(args, "--sparse-index")
+	} else {
+		args = append(args, "--no-sparse-index")
+	}
+	return r.managementRun(ctx, args...)
+}
+
 func (r *Repository) EnableSparseCheckoutCone(ctx context.Context) error {
-	return r.managementRun(ctx, "sparse-checkout", "init", "--cone")
+	return r.EnableSparseCheckout(ctx, SparseCheckoutInitOptions{Cone: true})
 }
 func (r *Repository) DisableSparseCheckout(ctx context.Context) error {
 	return r.managementRun(ctx, "sparse-checkout", "disable")

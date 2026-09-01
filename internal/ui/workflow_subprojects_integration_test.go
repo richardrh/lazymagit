@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/richardrh/lazymagit/internal/keymap"
 )
 
 func openSubprojectDialog(t *testing.T, m *Model, handler WorkflowHandler, command WorkflowCommand) {
@@ -130,6 +131,37 @@ func TestSparseCheckoutKeyDrivenInitSetAddDisable(t *testing.T) {
 	executeSubprojectDialog(t, m, true)
 	if got := r.git("config", "--bool", "core.sparseCheckout"); got != "false" {
 		t.Fatalf("sparse checkout remains enabled: %q", got)
+	}
+}
+
+func TestSparseCheckoutEnableSupportsNonConeSparseIndex(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("one/file.txt", "one\n")
+	r.git("add", ".")
+	r.git("commit", "-m", "tree")
+	m := newE2EModel(t, r)
+	var sparseIndex keymap.CommandID
+	for _, binding := range keymap.Registry() {
+		if binding.Context == keymap.ContextTransient+sparsePrefix && binding.UpstreamCommand == "transient:magit-sparse-checkout:--sparse-index" {
+			sparseIndex = binding.Command
+			break
+		}
+	}
+	if sparseIndex == "" {
+		t.Fatal("sparse-index manifest infix is absent")
+	}
+	command := WorkflowCommand{Prefix: sparsePrefix, Options: map[keymap.CommandID]OptionValue{sparseIndex: {Enabled: true}}}
+	openSubprojectDialog(t, m, sparseEnableWorkflow, command)
+	if got := m.workflow.dialog.Fields[0].Label; got != "Pattern mode" {
+		t.Fatalf("mode field label = %q", got)
+	}
+	m.workflow.dialog.Fields[0].Value = "non-cone"
+	executeSubprojectDialog(t, m, true)
+	if got := r.git("config", "--bool", "core.sparseCheckoutCone"); got != "false" {
+		t.Fatalf("cone mode = %q", got)
+	}
+	if got := r.git("config", "--bool", "index.sparse"); got != "true" {
+		t.Fatalf("sparse index = %q", got)
 	}
 }
 

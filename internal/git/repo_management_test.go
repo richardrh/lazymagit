@@ -250,6 +250,16 @@ func TestWorktreePreflightAndSparseCheckout(t *testing.T) {
 	if err := repo.DisableSparseCheckout(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.EnableSparseCheckout(ctx, SparseCheckoutInitOptions{SparseIndex: true}); err != nil {
+		t.Fatal(err)
+	}
+	state, err = repo.SparseCheckoutState(ctx)
+	if err != nil || !state.Enabled || state.Cone || !state.SparseIndex {
+		t.Fatalf("non-cone sparse-index state = %#v, %v", state, err)
+	}
+	if err := repo.DisableSparseCheckout(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCloneRawArgvCaptureAndRedaction(t *testing.T) {

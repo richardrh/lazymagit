@@ -753,12 +753,12 @@ All manifest transients are generated from effective status bindings and transie
 
 | Key | Command | Kind | Group | Conditions | Classification | Current status |
 |---|---|---|---|---|---|---|
-| `-i` | `transient:magit-sparse-checkout:--sparse-index` | **infix** | Arguments for enabling | if-not: magit-sparse-checkout-enabled-p | `missing` | infix: argument editing is not implemented |
-| `e` | `magit-sparse-checkout-enable` | **suffix** | Actions | if-not: magit-sparse-checkout-enabled-p | `missing` | suffix: not implemented |
-| `d` | `magit-sparse-checkout-disable` | **suffix** | Actions | if: magit-sparse-checkout-enabled-p | `missing` | suffix: not implemented |
-| `r` | `magit-sparse-checkout-reapply` | **suffix** | Actions | if: magit-sparse-checkout-enabled-p | `missing` | suffix: not implemented |
-| `s` | `magit-sparse-checkout-set` | **suffix** | Actions |  | `missing` | suffix: not implemented |
-| `a` | `magit-sparse-checkout-add` | **suffix** | Actions |  | `missing` | suffix: not implemented |
+| `-i` | `transient:magit-sparse-checkout:--sparse-index` | **infix** | Arguments for enabling | if-not: magit-sparse-checkout-enabled-p | `partial` | actionable sparse-index option for enable |
+| `e` | `magit-sparse-checkout-enable` | **suffix** | Actions | if-not: magit-sparse-checkout-enabled-p | `partial` | reviewed cone/non-cone enable workflow |
+| `d` | `magit-sparse-checkout-disable` | **suffix** | Actions | if: magit-sparse-checkout-enabled-p | `partial` | reviewed disable with tracked-file restoration warning |
+| `r` | `magit-sparse-checkout-reapply` | **suffix** | Actions | if: magit-sparse-checkout-enabled-p | `partial` | reviewed reapply workflow |
+| `s` | `magit-sparse-checkout-set` | **suffix** | Actions |  | `partial` | reviewed replacement of sparse paths/patterns |
+| `a` | `magit-sparse-checkout-add` | **suffix** | Actions |  | `partial` | reviewed addition of sparse paths/patterns |
 
 ### `z` — magit-stash (19 occurrences)
 
