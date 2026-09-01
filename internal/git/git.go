@@ -474,30 +474,18 @@ type Status struct {
 	Files []FileStatus
 }
 
-func change(code byte) Change {
-	switch code {
-	case '.', ' ':
-		return ChangeNone
-	case 'M':
-		return ChangeModified
-	case 'A':
-		return ChangeAdded
-	case 'D':
-		return ChangeDeleted
-	case 'R':
-		return ChangeRenamed
-	case 'C':
-		return ChangeCopied
-	case 'T':
-		return ChangeTypeChanged
-	case 'U':
-		return ChangeUnmerged
-	case '?':
-		return ChangeUntracked
-	default:
-		return ChangeNone
-	}
+var porcelainChanges = [256]Change{
+	'M': ChangeModified,
+	'A': ChangeAdded,
+	'D': ChangeDeleted,
+	'R': ChangeRenamed,
+	'C': ChangeCopied,
+	'T': ChangeTypeChanged,
+	'U': ChangeUnmerged,
+	'?': ChangeUntracked,
 }
+
+func change(code byte) Change { return porcelainChanges[code] }
 
 // Status parses porcelain v2's NUL-delimited form; paths are never split on
 // whitespace or interpreted as quoted strings.
@@ -783,30 +771,32 @@ func (p *discardPlan) add(file FileStatus) {
 
 func (r *Repository) executeDiscard(ctx context.Context, plan discardPlan) error {
 	// Planning inspects every requested path before any command mutates the tree.
-	if len(plan.stagedTracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"restore", "--source=HEAD", "--staged", "--worktree"}, plan.stagedTracked)...); err != nil {
-			return err
-		}
-	}
-	if len(plan.tracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"restore", "--worktree"}, plan.tracked)...); err != nil {
-			return err
-		}
-	}
-	if len(plan.stagedAdded) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"rm", "--cached", "-f", "--ignore-unmatch"}, plan.stagedAdded)...); err != nil {
-			return err
-		}
-		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d", "-x"}, plan.stagedAdded)...); err != nil {
-			return err
-		}
-	}
-	if len(plan.untracked) > 0 {
-		if err := r.run(ctx, pathsArgs([]string{"clean", "-f", "-d"}, plan.untracked)...); err != nil {
+	for _, command := range discardCommands(plan) {
+		if err := r.run(ctx, pathsArgs(command.args, command.paths)...); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type discardCommand struct {
+	args, paths []string
+}
+
+func discardCommands(plan discardPlan) []discardCommand {
+	commands := make([]discardCommand, 0, 5)
+	commands = appendDiscardCommand(commands, []string{"restore", "--source=HEAD", "--staged", "--worktree"}, plan.stagedTracked)
+	commands = appendDiscardCommand(commands, []string{"restore", "--worktree"}, plan.tracked)
+	commands = appendDiscardCommand(commands, []string{"rm", "--cached", "-f", "--ignore-unmatch"}, plan.stagedAdded)
+	commands = appendDiscardCommand(commands, []string{"clean", "-f", "-d", "-x"}, plan.stagedAdded)
+	return appendDiscardCommand(commands, []string{"clean", "-f", "-d"}, plan.untracked)
+}
+
+func appendDiscardCommand(commands []discardCommand, args, paths []string) []discardCommand {
+	if len(paths) == 0 {
+		return commands
+	}
+	return append(commands, discardCommand{args: args, paths: paths})
 }
 
 type Commit struct {

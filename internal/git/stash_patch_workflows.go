@@ -467,17 +467,24 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if err != nil {
 		return nil, err
 	}
+	if err := customizeFormatPatchSeries(created, options); err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func customizeFormatPatchSeries(created []string, options FormatPatchOptions) error {
 	if options.CoverLetter && options.From != "" {
 		if err := replaceFormatPatchCoverFrom(created, options.From); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if options.CoverLetterBody != "" {
 		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	return created, nil
+	return nil
 }
 
 func validateFormatPatchRequest(revisionRange string, options FormatPatchOptions) error {
