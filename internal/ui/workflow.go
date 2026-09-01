@@ -280,6 +280,7 @@ type WorkflowLoader func(context.Context) (WorkflowDialog, error)
 type WorkflowDialog struct {
 	Title, Confirmation string
 	ActionLabel         string
+	Help                []string
 	Plan                []string
 	Fields              []WorkflowField
 	Validate            func(WorkflowValues) error
@@ -377,6 +378,7 @@ func (m *Model) cancelWorkflowLoad() {
 
 func cloneWorkflowDialog(dialog WorkflowDialog) WorkflowDialog {
 	dialog.Fields = append([]WorkflowField(nil), dialog.Fields...)
+	dialog.Help = append([]string(nil), dialog.Help...)
 	dialog.Plan = append([]string(nil), dialog.Plan...)
 	for i := range dialog.Fields {
 		dialog.Fields[i].Choices = append([]WorkflowChoice(nil), dialog.Fields[i].Choices...)

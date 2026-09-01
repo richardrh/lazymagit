@@ -535,6 +535,13 @@ func (m *Model) renderWorkflowOverlay(width, height int) string {
 	innerW, innerH := width-4, height-2
 	w := m.workflow
 	lines := []string{lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" " + sanitizeSingleLine(w.dialog.Title) + " ")}
+	if len(w.dialog.Help) > 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(colorMuted).Render(sanitizeSingleLine(w.dialog.Help[0])))
+		for _, help := range w.dialog.Help[1:] {
+			lines = append(lines, lipgloss.NewStyle().Foreground(colorMuted).Render("  "+sanitizeSingleLine(help)))
+		}
+		lines = append(lines, "")
+	}
 	lines = append(lines, renderWorkflowFields(w)...)
 	lines = append(lines, renderWorkflowReview(w)...)
 	lines = append(lines, "", renderWorkflowAction(workflowActionLabel(w), w.field >= len(w.dialog.Fields), w.busy), "", "Tab field  •  ↑/↓ choose  •  Enter select/submit  •  Ctrl-J todo line  •  Esc cancel")

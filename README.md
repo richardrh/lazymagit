@@ -129,9 +129,11 @@ Magit scheme. This explicit mode is necessary because Vim's `k` (move up) and
 
 Pressing `b`, `c`, `f`, `P`, or `M` opens a grouped command transient. The
 layout uses multiple columns when space permits and one vertically scrollable
-column on narrow terminals; use arrows or `PageUp`/`PageDown`. Actions shown as
-unavailable are catalogued for discoverability but are never executed. `q` or
-`Esc` closes a transient, and `?` opens the columnar command dispatcher.
+column on narrow terminals; use arrows or `PageUp`/`PageDown`. Commands that
+are not implemented are omitted from the interactive sheets instead of filling
+them with grey placeholders. Actions that exist but cannot run in the current
+repository context remain visible with an explicit marker. `q` or `Esc` closes
+a transient, and `?` opens the columnar command dispatcher.
 
 In Magit mode, `x` is recognized as Magit's quick-reset command and reports its
 explicit `missing` status; it never falls through to Vim discard behavior.

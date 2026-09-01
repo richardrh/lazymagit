@@ -26,9 +26,11 @@ upstream sections, branch listing and switching, fetch, and push. Branch
 creation is implemented and integration-tested in the backend but is not yet
 exposed by the TUI. The interface uses Magit's familiar command prefixes and
 offers separate Vim and Magit key schemes where their single-key bindings
-conflict. Prefixes and help use responsive, grouped Magit-style transients.
-Important Magit suffixes outside the implemented compatibility boundary remain
-visible with an explicit unavailable marker; selecting one has no Git effect.
+conflict. Prefixes and help use responsive, grouped Magit-style transients. Incomplete
+Magit commands remain documented in this compatibility matrix but are omitted
+from interactive command sheets. Implemented commands that are unavailable only
+in the current repository context remain visible with an explicit marker and
+have no Git effect when selected.
 
 Aggregate `S` stages tracked modifications and deletions but excludes untracked
 files; aggregate `U` clears index changes without changing worktree content.

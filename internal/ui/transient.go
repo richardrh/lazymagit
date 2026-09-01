@@ -576,7 +576,30 @@ func (m *Model) dispatcherCatalog() []dispatcherSection {
 			}
 		}
 	}
-	return sections
+	return availableDispatcherCatalog(sections)
+}
+
+func availableDispatcherCatalog(sections []dispatcherSection) []dispatcherSection {
+	visible := make([]dispatcherSection, 0, len(sections))
+	for _, section := range sections {
+		filtered := dispatcherSection{Title: section.Title}
+		for _, column := range section.Columns {
+			entries := make([]menuEntry, 0, len(column))
+			for _, entry := range column {
+				if entry.Category == menuEntryMissing || entry.Category == menuEntryPresentation {
+					continue
+				}
+				entries = append(entries, entry)
+			}
+			if len(entries) > 0 {
+				filtered.Columns = append(filtered.Columns, entries)
+			}
+		}
+		if len(filtered.Columns) > 0 {
+			visible = append(visible, filtered)
+		}
+	}
+	return visible
 }
 
 func dispatcherEntry(sections []dispatcherSection, key string) (menuEntry, bool) {
@@ -775,6 +798,9 @@ func visibleTransientCatalog(catalog menuCatalog) menuCatalog {
 	for _, group := range catalog.Groups {
 		filtered := menuGroup{Title: group.Title}
 		for _, entry := range group.Entries {
+			if entry.Category == menuEntryMissing || entry.Category == menuEntryPresentation {
+				continue
+			}
 			if !entry.Active && hasDirectConfigureCondition(entry.Conditions) {
 				continue
 			}
@@ -846,7 +872,7 @@ func transientViewportHeight(catalog menuCatalog, width, height int) int {
 }
 
 func transientHintLines(width int, clipped bool, first, end, total int) []string {
-	components := []string{"Esc/q close", "× unavailable"}
+	components := []string{"Esc/q close", "! unavailable here"}
 	if clipped {
 		components = append(components, "↑/↓ PgUp/PgDn", strconv.Itoa(first)+"-"+strconv.Itoa(end)+"/"+strconv.Itoa(total))
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -194,31 +195,55 @@ func worktreeListWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {
 			return WorkflowDialog{}, err
 		}
 		choices := make([]WorkflowChoice, 0, len(all))
+		current := filepath.Clean(m.repo.WorkTree())
 		for _, wt := range all {
+			kind := "linked"
+			if filepath.Clean(wt.Path) == current {
+				kind = "current"
+			} else if wt.Primary {
+				kind = "main"
+			}
 			state := wt.Branch
 			if state == "" {
-				state = "detached " + wt.HEAD
-			}
-			if wt.Primary {
-				state += "; primary"
+				state = "detached @ " + shortWorktreeHEAD(wt.HEAD)
 			}
 			if wt.Locked {
-				state += "; locked: " + wt.LockReason
+				state += "  🔒 " + worktreeLockLabel(wt.LockReason)
 			}
 			if wt.Prunable {
-				state += "; prunable: " + wt.PruneReason
+				state += "  ⚠ stale: " + wt.PruneReason
 			}
-			choices = append(choices, WorkflowChoice{Value: wt.Path, Label: state + " — " + wt.Path})
+			choices = append(choices, WorkflowChoice{Value: wt.Path, Label: "[" + kind + "] " + state + "  •  " + wt.Path})
 		}
 		if len(choices) == 0 {
 			return WorkflowDialog{}, errors.New("no worktrees available")
 		}
 		return WorkflowDialog{
-			Title: "Worktrees", ActionLabel: "Close",
-			Fields: []WorkflowField{{Name: "worktree", Label: "Search", Kind: WorkflowSearch, Value: choices[0].Value, Choices: choices, Required: true}},
+			Title: "Worktrees — separate checkouts", ActionLabel: "Close",
+			Help: []string{
+				"Each worktree is another folder checked out from this repository.",
+				"[current] is this UI; [main] is the original checkout; [linked] is an additional checkout.",
+				"From the Worktree menu: b add, c add with branch, m move, k remove, L lock, U unlock.",
+			},
+			Fields: []WorkflowField{{Name: "worktree", Label: "Filter worktrees", Kind: WorkflowSearch, Value: choices[0].Value, Choices: choices, Required: true}},
 			Run:    func(WorkflowValues) tea.Cmd { return nil },
 		}, nil
 	})
+}
+
+func shortWorktreeHEAD(head string) string {
+	if len(head) > 8 {
+		return head[:8]
+	}
+	return head
+}
+
+func worktreeLockLabel(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "locked"
+	}
+	return reason
 }
 
 func worktreeLockWorkflow(m *Model, _ WorkflowCommand) tea.Cmd {

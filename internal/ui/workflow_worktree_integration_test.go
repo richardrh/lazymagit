@@ -41,7 +41,7 @@ func TestWorktreeBrowserShowsAndFiltersLinkedWorktrees(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("Z"))
 	sendE2EKey(t, m, keyMsg("g"))
 	plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
-	for _, want := range []string{"primary", "listed-topic", "Close"} {
+	for _, want := range []string{"separate checkouts", "Each worktree is another folder", "[current]", "[linked]", "listed-topic", "Filter worktrees", "Close"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("worktree browser omitted %q:\n%s", want, plain)
 		}
@@ -82,14 +82,14 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 			t.Fatalf("%s did not enter worktree transient: %q", prefix, m.resolver.ActiveTransient())
 		}
 		sendE2EKey(t, m, keyMsg("g"))
-		if m.mode != modeWorkflow || m.workflow == nil || m.workflow.dialog.Title != "Worktrees" {
+		if m.mode != modeWorkflow || m.workflow == nil || m.workflow.dialog.Title != "Worktrees — separate checkouts" {
 			t.Fatalf("%s g did not list worktrees", prefix)
 		}
 		if len(m.workflow.dialog.Fields) != 1 || m.workflow.dialog.Fields[0].Kind != WorkflowSearch {
 			t.Fatalf("%s g did not open searchable worktrees: %+v", prefix, m.workflow.dialog.Fields)
 		}
 		plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
-		for _, want := range []string{"primary", "Close"} {
+		for _, want := range []string{"[current]", "separate checkouts", "Filter worktrees", "Close"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("%s g omitted %q:\n%s", prefix, want, plain)
 			}

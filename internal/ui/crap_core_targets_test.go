@@ -142,27 +142,19 @@ func TestHandleHelpKeyDirectRoutes(t *testing.T) {
 		t.Fatalf("available dispatcher entry left mode=%v", dispatch.mode)
 	}
 
-	unavailable := New(nil)
-	unavailable.mode = modeHelp
-	unavailable.loading = false
-	unavailableKey := ""
-	for _, section := range unavailable.dispatcherCatalog() {
+	visible := New(nil)
+	visible.mode = modeHelp
+	visible.loading = false
+	for _, section := range visible.dispatcherCatalog() {
 		for _, column := range section.Columns {
 			for _, entry := range column {
-				if _, prefix := prefixCatalogs[entry.Key]; !entry.Available && !prefix {
-					unavailableKey = entry.Key
-					break
+				if entry.Category == menuEntryMissing || entry.Category == menuEntryPresentation {
+					t.Fatalf("dispatcher exposed unavailable catalog entry %+v", entry)
 				}
 			}
 		}
 	}
-	if unavailableKey == "" {
-		t.Fatal("dispatcher fixture has no unavailable non-prefix entry")
-	}
-	if cmd := unavailable.handleHelpKey(unavailableKey); cmd != nil || !strings.Contains(unavailable.message, "unavailable") {
-		t.Fatalf("unavailable help entry cmd=%v message=%q", cmd, unavailable.message)
-	}
-	if cmd := unavailable.handleHelpKey("~"); cmd != nil {
+	if cmd := visible.handleHelpKey("~"); cmd != nil {
 		t.Fatalf("unknown help key returned command %v", cmd)
 	}
 }
