@@ -123,25 +123,39 @@ func (p *argumentParser) consume(args []string) (int, error) {
 	if p.optionsEnded {
 		return 1, p.setPath(arg)
 	}
-	switch {
-	case arg == "--":
+	if arg == "--" {
 		p.optionsEnded = true
 		return 1, nil
-	case arg == "--init" && !p.pathSet && !p.opts.init:
-		p.opts.init = true
-		return 1, nil
-	case arg == "--theme" && !p.pathSet:
-		return p.consumeTheme(args)
-	case strings.HasPrefix(arg, "--theme=") && !p.pathSet:
-		return 1, p.setTheme(strings.TrimPrefix(arg, "--theme="))
-	case arg == "--layout" && !p.pathSet:
-		return p.consumeLayout(args)
-	case strings.HasPrefix(arg, "--layout=") && !p.pathSet:
-		return 1, p.setLayout(strings.TrimPrefix(arg, "--layout="))
-	case strings.HasPrefix(arg, "-"):
+	}
+	if !p.pathSet {
+		if consumed, matched, err := p.consumeOption(args); matched {
+			return consumed, err
+		}
+	}
+	if strings.HasPrefix(arg, "-") {
 		return 0, fmt.Errorf("%s", usage)
+	}
+	return 1, p.setPath(arg)
+}
+
+func (p *argumentParser) consumeOption(args []string) (consumed int, matched bool, err error) {
+	arg := args[0]
+	switch {
+	case arg == "--init" && !p.opts.init:
+		p.opts.init = true
+		return 1, true, nil
+	case arg == "--theme":
+		consumed, err = p.consumeTheme(args)
+		return consumed, true, err
+	case strings.HasPrefix(arg, "--theme="):
+		return 1, true, p.setTheme(strings.TrimPrefix(arg, "--theme="))
+	case arg == "--layout":
+		consumed, err = p.consumeLayout(args)
+		return consumed, true, err
+	case strings.HasPrefix(arg, "--layout="):
+		return 1, true, p.setLayout(strings.TrimPrefix(arg, "--layout="))
 	default:
-		return 1, p.setPath(arg)
+		return 0, false, nil
 	}
 }
 
