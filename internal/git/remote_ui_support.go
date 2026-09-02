@@ -291,31 +291,28 @@ func validateRemoteOptions(in RemoteConfigArgs) error {
 
 func cloneRemoteConfigArgs(in RemoteConfigArgs) RemoteConfigArgs {
 	out := in
-	if in.FetchURL != nil {
-		v := *in.FetchURL
-		out.FetchURL = &v
-	}
-	if in.PushURL != nil {
-		v := *in.PushURL
-		out.PushURL = &v
-	}
-	out.FetchRefspecs = append([]string(nil), in.FetchRefspecs...)
-	if in.FetchRefspecs != nil && out.FetchRefspecs == nil {
-		out.FetchRefspecs = []string{}
-	}
-	out.PushRefspecs = append([]string(nil), in.PushRefspecs...)
-	if in.PushRefspecs != nil && out.PushRefspecs == nil {
-		out.PushRefspecs = []string{}
-	}
-	if in.TagOpt != nil {
-		v := *in.TagOpt
-		out.TagOpt = &v
-	}
-	if in.FollowRemoteHEAD != nil {
-		v := *in.FollowRemoteHEAD
-		out.FollowRemoteHEAD = &v
-	}
+	out.FetchURL = cloneValue(in.FetchURL)
+	out.PushURL = cloneValue(in.PushURL)
+	out.FetchRefspecs = cloneSlice(in.FetchRefspecs)
+	out.PushRefspecs = cloneSlice(in.PushRefspecs)
+	out.TagOpt = cloneValue(in.TagOpt)
+	out.FollowRemoteHEAD = cloneValue(in.FollowRemoteHEAD)
 	return out
+}
+
+func cloneValue[T any](in *T) *T {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneSlice[T any](in []T) []T {
+	if in == nil {
+		return nil
+	}
+	return append([]T{}, in...)
 }
 
 func cloneRemoteConfiguration(in RemoteConfiguration) RemoteConfiguration {

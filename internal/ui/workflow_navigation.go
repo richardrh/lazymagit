@@ -89,6 +89,16 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 }
 
 func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	if cmd, handled := m.performCursorNavigation(command); handled {
+		return cmd, true
+	}
+	if cmd, handled := m.performDetailNavigation(command); handled {
+		return cmd, true
+	}
+	return m.performStatusNavigation(command)
+}
+
+func (m *Model) performCursorNavigation(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandSectionParent:
 		return m.finishNavigationMove(m.tree.MoveToParent()), true
@@ -98,6 +108,13 @@ func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool)
 		return m.finishNavigationMove(m.tree.MoveToNextSibling()), true
 	case keymap.CommandVisitThing:
 		return m.visitSelectedThing(), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) performDetailNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandCycleDiffs:
 		return m.cycleSelectedDetail(), true
 	case keymap.CommandDetailBackward:
@@ -109,6 +126,13 @@ func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool)
 		return m.adjustDiffContext(3, "Showing more diff context"), true
 	case keymap.CommandDiffDefaultContext:
 		return m.resetDiffContext(), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) performStatusNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
 	case keymap.CommandDescribeSection:
 		m.describeSelectedSection()
 		return nil, true

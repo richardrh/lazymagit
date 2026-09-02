@@ -348,24 +348,36 @@ func (r *Repository) SetIndexFlag(ctx context.Context, flag IndexFlag, paths []s
 }
 
 func (r *Repository) ListIndexFlag(ctx context.Context, flag IndexFlag) ([]string, error) {
+	match, err := indexFlagMatcher(flag)
+	if err != nil {
+		return nil, err
+	}
 	out, err := r.output(ctx, "ls-files", "-v", "-z")
 	if err != nil {
 		return nil, err
 	}
 	var result []string
 	for _, record := range bytes.Split(out, []byte{0}) {
-		if len(record) < 3 || record[1] != ' ' {
-			continue
-		}
-		tag := record[0]
-		if flag == SkipWorktree && (tag == 'S' || tag == 's') || flag == AssumeUnchanged && tag >= 'a' && tag <= 'z' {
+		if indexFlagRecordMatches(record, match) {
 			result = append(result, string(record[2:]))
 		}
 	}
-	if flag != SkipWorktree && flag != AssumeUnchanged {
+	return result, nil
+}
+
+func indexFlagMatcher(flag IndexFlag) (func(byte) bool, error) {
+	switch flag {
+	case SkipWorktree:
+		return func(tag byte) bool { return tag == 'S' || tag == 's' }, nil
+	case AssumeUnchanged:
+		return func(tag byte) bool { return tag >= 'a' && tag <= 'z' }, nil
+	default:
 		return nil, errors.New("unknown index flag")
 	}
-	return result, nil
+}
+
+func indexFlagRecordMatches(record []byte, match func(byte) bool) bool {
+	return len(record) >= 3 && record[1] == ' ' && match(record[0])
 }
 
 // Untrack removes paths from the index while preserving all worktree files.
@@ -442,6 +454,10 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseWorktrees(out)
+}
+
+func parseWorktrees(out []byte) ([]Worktree, error) {
 	var result []Worktree
 	var current *Worktree
 	for _, raw := range bytes.Split(out, []byte{0}) {
@@ -458,20 +474,7 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 		if current == nil {
 			return nil, errors.New("malformed worktree listing")
 		}
-		switch key {
-		case "HEAD":
-			current.HEAD = value
-		case "branch":
-			current.Branch = strings.TrimPrefix(value, "refs/heads/")
-		case "bare":
-			current.Bare = true
-		case "detached":
-			current.Detached = true
-		case "locked":
-			current.Locked, current.LockReason = true, value
-		case "prunable":
-			current.Prunable, current.PruneReason = true, value
-		}
+		applyWorktreeField(current, key, value)
 	}
 	for i := range result {
 		// Git documents the first entry as the main worktree. This remains
@@ -479,6 +482,23 @@ func (r *Repository) Worktrees(ctx context.Context) ([]Worktree, error) {
 		result[i].Primary = i == 0
 	}
 	return result, nil
+}
+
+func applyWorktreeField(worktree *Worktree, key, value string) {
+	switch key {
+	case "HEAD":
+		worktree.HEAD = value
+	case "branch":
+		worktree.Branch = strings.TrimPrefix(value, "refs/heads/")
+	case "bare":
+		worktree.Bare = true
+	case "detached":
+		worktree.Detached = true
+	case "locked":
+		worktree.Locked, worktree.LockReason = true, value
+	case "prunable":
+		worktree.Prunable, worktree.PruneReason = true, value
+	}
 }
 
 func samePath(a, b string) bool {
@@ -536,15 +556,38 @@ func (r *Repository) AddWorktree(ctx context.Context, path, revision string, opt
 }
 
 func (r *Repository) AddWorktreeWithBranch(ctx context.Context, path, branch, startPoint string, force ConfirmedForce) error {
+	return r.AddWorktreeWithBranchOptions(ctx, path, branch, startPoint, WorktreeAddOptions{Force: force})
+}
+
+// AddWorktreeWithBranchOptions creates a new branch worktree while preserving
+// the advanced add options supported by git-worktree. Detaching is inherently
+// incompatible with creating and checking out a named branch.
+func (r *Repository) AddWorktreeWithBranchOptions(ctx context.Context, path, branch, startPoint string, opts WorktreeAddOptions) error {
 	if branch == "" {
 		return errors.New("branch name is empty")
+	}
+	if opts.Detach {
+		return errors.New("new-branch worktree cannot be detached")
 	}
 	if err := safeNewDirectory(path); err != nil {
 		return err
 	}
 	args := []string{"worktree", "add", "-b", branch}
-	if force == Confirmed {
+	if opts.Force == Confirmed {
 		args = append(args, "--force")
+	}
+	if opts.Checkout != nil {
+		if *opts.Checkout {
+			args = append(args, "--checkout")
+		} else {
+			args = append(args, "--no-checkout")
+		}
+	}
+	if opts.Lock {
+		args = append(args, "--lock")
+		if opts.LockReason != "" {
+			args = append(args, "--reason", opts.LockReason)
+		}
 	}
 	args = append(args, "--", path)
 	if startPoint != "" {
@@ -743,23 +786,38 @@ func (r *Repository) WorktreePrunePreflight(ctx context.Context, expire string) 
 }
 
 func (r *Repository) PruneWorktrees(ctx context.Context, opts WorktreePruneOptions) error {
-	expire := opts.Expire
-	if opts.Force == Confirmed && expire == "" {
-		expire = "now"
-	}
+	expire := worktreePruneExpiration(opts)
 	if !opts.DryRun && expire != "" {
-		if opts.Plan == nil || opts.Plan.Expire != expire {
-			return &ConfirmationRequiredError{Operation: "prune worktrees with explicit expiration", Identity: expire}
-		}
-		current, err := r.WorktreePrunePreflight(ctx, expire)
-		if err != nil {
+		if err := r.validateWorktreePrunePlan(ctx, expire, opts); err != nil {
 			return err
 		}
-		identity := expire + "\x00" + current.Output
-		if current.Output != opts.Plan.Output || !opts.Token.validFor(identity) {
-			return ErrStalePlan
-		}
 	}
+	return r.managementRun(ctx, worktreePruneArgs(expire, opts)...)
+}
+
+func worktreePruneExpiration(opts WorktreePruneOptions) string {
+	if opts.Force == Confirmed && opts.Expire == "" {
+		return "now"
+	}
+	return opts.Expire
+}
+
+func (r *Repository) validateWorktreePrunePlan(ctx context.Context, expire string, opts WorktreePruneOptions) error {
+	if opts.Plan == nil || opts.Plan.Expire != expire {
+		return &ConfirmationRequiredError{Operation: "prune worktrees with explicit expiration", Identity: expire}
+	}
+	current, err := r.WorktreePrunePreflight(ctx, expire)
+	if err != nil {
+		return err
+	}
+	identity := expire + "\x00" + current.Output
+	if current.Output != opts.Plan.Output || !opts.Token.validFor(identity) {
+		return ErrStalePlan
+	}
+	return nil
+}
+
+func worktreePruneArgs(expire string, opts WorktreePruneOptions) []string {
 	args := []string{"worktree", "prune"}
 	if opts.DryRun {
 		args = append(args, "--dry-run")
@@ -770,49 +828,81 @@ func (r *Repository) PruneWorktrees(ctx context.Context, opts WorktreePruneOptio
 	if expire != "" {
 		args = append(args, "--expire", expire)
 	}
-	return r.managementRun(ctx, args...)
+	return args
 }
 
 type SparseCheckoutState struct {
-	Enabled, Cone bool
-	Patterns      []string
+	Enabled, Cone, SparseIndex bool
+	Patterns                   []string
 }
 
 func (r *Repository) SparseCheckoutState(ctx context.Context) (SparseCheckoutState, error) {
 	var state SparseCheckoutState
-	v, ok, err := r.configValue(ctx, "core.sparseCheckout")
+	var err error
+	state.Enabled, err = r.configBool(ctx, "core.sparseCheckout")
 	if err != nil {
 		return state, err
 	}
-	state.Enabled = ok && strings.EqualFold(v, "true")
-	v, ok, err = r.configValue(ctx, "core.sparseCheckoutCone")
+	state.Cone, err = r.configBool(ctx, "core.sparseCheckoutCone")
 	if err != nil {
 		return state, err
 	}
-	state.Cone = ok && strings.EqualFold(v, "true")
+	state.SparseIndex, err = r.configBool(ctx, "index.sparse")
+	if err != nil {
+		return state, err
+	}
 	if !state.Enabled {
 		return state, nil
 	}
-	path := filepath.Join(r.gitDir, "info", "sparse-checkout")
+	state.Patterns, err = readSparseCheckoutPatterns(filepath.Join(r.gitDir, "info", "sparse-checkout"))
+	return state, err
+}
+
+func (r *Repository) configBool(ctx context.Context, key string) (bool, error) {
+	value, configured, err := r.configValue(ctx, key)
+	return configured && strings.EqualFold(value, "true"), err
+}
+
+func readSparseCheckoutPatterns(path string) ([]string, error) {
 	b, err := readFileLimited(path, 4<<20)
 	if errors.Is(err, os.ErrNotExist) {
-		return state, nil
+		return nil, nil
 	}
 	if err != nil {
-		return state, err
+		return nil, err
 	}
-	state.Patterns = strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
-	if len(state.Patterns) > 100000 {
-		return SparseCheckoutState{}, &TooLargeError{Resource: "sparse-checkout pattern count"}
+	patterns := strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	if len(patterns) > 100000 {
+		return nil, &TooLargeError{Resource: "sparse-checkout pattern count"}
 	}
-	if len(state.Patterns) == 1 && state.Patterns[0] == "" {
-		state.Patterns = nil
+	if len(patterns) == 1 && patterns[0] == "" {
+		return nil, nil
 	}
-	return state, nil
+	return patterns, nil
+}
+
+type SparseCheckoutInitOptions struct {
+	Cone        bool
+	SparseIndex bool
+}
+
+func (r *Repository) EnableSparseCheckout(ctx context.Context, opts SparseCheckoutInitOptions) error {
+	args := []string{"sparse-checkout", "init"}
+	if opts.Cone {
+		args = append(args, "--cone")
+	} else {
+		args = append(args, "--no-cone")
+	}
+	if opts.SparseIndex {
+		args = append(args, "--sparse-index")
+	} else {
+		args = append(args, "--no-sparse-index")
+	}
+	return r.managementRun(ctx, args...)
 }
 
 func (r *Repository) EnableSparseCheckoutCone(ctx context.Context) error {
-	return r.managementRun(ctx, "sparse-checkout", "init", "--cone")
+	return r.EnableSparseCheckout(ctx, SparseCheckoutInitOptions{Cone: true})
 }
 func (r *Repository) DisableSparseCheckout(ctx context.Context) error {
 	return r.managementRun(ctx, "sparse-checkout", "disable")
@@ -940,35 +1030,27 @@ func boolCount(values ...bool) int {
 
 func submoduleUpdateArgs(o SubmoduleUpdateOptions) []string {
 	args := []string{"submodule", "update"}
-	if o.Init {
-		args = append(args, "--init")
+	for _, option := range []struct {
+		enabled bool
+		name    string
+	}{
+		{o.Init, "--init"}, {o.Recursive, "--recursive"},
+		{o.Remote, "--remote"}, {o.Rebase, "--rebase"},
+		{o.Merge, "--merge"}, {o.Checkout, "--checkout"},
+		{o.Force == Confirmed, "--force"}, {o.NoFetch, "--no-fetch"},
+	} {
+		if option.enabled {
+			args = append(args, option.name)
+		}
 	}
-	if o.Recursive {
-		args = append(args, "--recursive")
-	}
-	if o.Remote {
-		args = append(args, "--remote")
-	}
-	if o.Rebase {
-		args = append(args, "--rebase")
-	}
-	if o.Merge {
-		args = append(args, "--merge")
-	}
-	if o.Checkout {
-		args = append(args, "--checkout")
-	}
-	if o.Force == Confirmed {
-		args = append(args, "--force")
-	}
-	if o.NoFetch {
-		args = append(args, "--no-fetch")
-	}
-	if o.Depth > 0 {
-		args = append(args, "--depth", strconv.Itoa(o.Depth))
-	}
-	if o.Jobs > 0 {
-		args = append(args, "--jobs", strconv.Itoa(o.Jobs))
+	args = appendPositiveOption(args, "--depth", o.Depth)
+	args = appendPositiveOption(args, "--jobs", o.Jobs)
+	return args
+}
+
+func appendPositiveOption(args []string, name string, value int) []string {
+	if value > 0 {
+		return append(args, name, strconv.Itoa(value))
 	}
 	return args
 }
@@ -1014,36 +1096,73 @@ func (r *Repository) RemoveSubmodule(ctx context.Context, path string, confirm C
 	if confirm != Confirmed {
 		return ErrDestructiveConfirmationRequired
 	}
-	rel, err := validateRepoRelative(path, false)
+	rel, metadataName, err := r.resolveSubmoduleRemoval(ctx, path)
 	if err != nil {
 		return err
-	}
-	modules, err := r.Submodules(ctx)
-	if err != nil {
-		return err
-	}
-	moduleName := configuredSubmoduleName(modules, rel)
-	if moduleName == "" {
-		return fmt.Errorf("path %q is not a configured submodule", path)
-	}
-	metadataName, err := validateRepoRelative(moduleName, false)
-	if err != nil {
-		return fmt.Errorf("unsafe submodule metadata name: %w", err)
 	}
 	if err := ensureCleanInitializedSubmodule(ctx, filepath.Join(r.workTree, rel)); err != nil {
 		return err
 	}
+	if err := r.removeSubmoduleGitState(ctx, rel); err != nil {
+		return err
+	}
+	return removeSubmoduleMetadata(filepath.Join(r.gitDir, "modules"), metadataName)
+}
+
+func (r *Repository) resolveSubmoduleRemoval(ctx context.Context, path string) (string, string, error) {
+	rel, err := validateRepoRelative(path, false)
+	if err != nil {
+		return "", "", err
+	}
+	modules, err := r.Submodules(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	moduleName := configuredSubmoduleName(modules, rel)
+	if moduleName == "" {
+		return "", "", fmt.Errorf("path %q is not a configured submodule", path)
+	}
+	metadataName, err := validateRepoRelative(moduleName, false)
+	if err != nil {
+		return "", "", fmt.Errorf("unsafe submodule metadata name: %w", err)
+	}
+	return rel, metadataName, nil
+}
+
+func (r *Repository) removeSubmoduleGitState(ctx context.Context, rel string) error {
 	if err := r.managementRun(ctx, "submodule", "deinit", "--force", "--", filepath.ToSlash(rel)); err != nil {
 		return err
 	}
-	if err := r.managementRun(ctx, "rm", "-f", "--", filepath.ToSlash(rel)); err != nil {
-		return err
-	}
+	return r.managementRun(ctx, "rm", "-f", "--", filepath.ToSlash(rel))
+}
+
+func removeSubmoduleMetadata(modulesRoot, metadataName string) error {
 	// git rm intentionally keeps the private clone for easy recovery. A Magit
 	// remove operation is a full removal, so delete it only after confirmation
-	// and only when its configured name cannot escape $GIT_DIR/modules.
-	if err := os.RemoveAll(filepath.Join(r.gitDir, "modules", metadataName)); err != nil {
+	// and only when neither its configured name nor an intermediate symlink can
+	// escape $GIT_DIR/modules.
+	metadataPath := filepath.Join(modulesRoot, metadataName)
+	if err := rejectSymlinkComponents(modulesRoot, metadataPath); err != nil {
 		return fmt.Errorf("remove submodule metadata: %w", err)
+	}
+	if err := os.RemoveAll(metadataPath); err != nil {
+		return fmt.Errorf("remove submodule metadata: %w", err)
+	}
+	return nil
+}
+
+func rejectSymlinkComponents(root, target string) error {
+	for current := target; current != root; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: metadata path contains a symbolic link", ErrUnsafeDestination)
+		}
 	}
 	return nil
 }

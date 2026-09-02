@@ -361,24 +361,44 @@ func subtreeWorkflow(action string) WorkflowHandler {
 type reviewedSparseChange struct {
 	action   string
 	patterns []string
+	init     gitbackend.SparseCheckoutInitOptions
 }
 
-func sparseReview(state gitbackend.SparseCheckoutState, action string, patterns []string) WorkflowReview {
+func sparseModeLabel(cone, sparseIndex bool) string {
+	mode := "non-cone patterns"
+	if cone {
+		mode = "cone directories"
+	}
+	if sparseIndex {
+		mode += ", sparse index"
+	} else {
+		mode += ", full index"
+	}
+	return mode
+}
+
+func sparseReview(state gitbackend.SparseCheckoutState, action string, patterns []string, init gitbackend.SparseCheckoutInitOptions) WorkflowReview {
 	mode := "disabled"
 	if state.Enabled {
-		mode = "enabled"
-		if state.Cone {
-			mode += " (cone)"
-		}
+		mode = "enabled (" + sparseModeLabel(state.Cone, state.SparseIndex) + ")"
 	}
 	plan := []string{"Current sparse checkout: " + mode, "Action: " + action}
+	if action == "enable" {
+		plan = append(plan, "New mode: "+sparseModeLabel(init.Cone, init.SparseIndex))
+	}
 	if len(state.Patterns) > 0 {
 		plan = append(plan, "Current bounded pattern set: "+strings.Join(state.Patterns, ", "))
 	}
 	if len(patterns) > 0 {
 		plan = append(plan, "Patterns: "+strings.Join(patterns, ", "))
 	}
-	return WorkflowReview{Plan: plan, Confirmation: "Apply exactly this reviewed sparse-checkout change?", Data: reviewedSparseChange{action: action, patterns: append([]string(nil), patterns...)}}
+	confirmation := "Apply exactly this reviewed sparse-checkout change?"
+	if action == "disable" {
+		confirmation = "Disable sparse checkout and restore all tracked files?"
+	} else if action == "set" {
+		confirmation = "Replace the current sparse selection with exactly these reviewed paths?"
+	}
+	return WorkflowReview{Plan: plan, Confirmation: confirmation, Data: reviewedSparseChange{action: action, patterns: append([]string(nil), patterns...), init: init}}
 }
 
 func submitSparseReview(ctx context.Context, repo *gitbackend.Repository, review WorkflowReview) error {
@@ -387,8 +407,8 @@ func submitSparseReview(ctx context.Context, repo *gitbackend.Repository, review
 		return errors.New("invalid sparse-checkout review")
 	}
 	switch plan.action {
-	case "enable cone mode":
-		return repo.EnableSparseCheckoutCone(ctx)
+	case "enable":
+		return repo.EnableSparseCheckout(ctx, plan.init)
 	case "disable":
 		return repo.DisableSparseCheckout(ctx)
 	case "reapply":
@@ -403,17 +423,13 @@ func submitSparseReview(ctx context.Context, repo *gitbackend.Repository, review
 }
 
 func sparseSimpleWorkflow(m *Model, command WorkflowCommand, action string) tea.Cmd {
-	if boolOption(command, "transient:magit-sparse-checkout:--sparse-index") {
-		m.setError(errors.New("sparse index is unsupported by the typed sparse-checkout API"))
-		return nil
-	}
 	return m.LoadWorkflow("sparse-checkout state", func(ctx context.Context) (WorkflowDialog, error) {
 		state, err := m.repo.SparseCheckoutState(ctx)
 		if err != nil {
 			return WorkflowDialog{}, err
 		}
 		return WorkflowDialog{Title: "Sparse checkout: " + action, Operation: "sparse checkout " + action, ReviewPreflight: func(context.Context, WorkflowValues) (WorkflowReview, error) {
-			return sparseReview(state, action, nil), nil
+			return sparseReview(state, action, nil, gitbackend.SparseCheckoutInitOptions{}), nil
 		}, SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
 			return submitSparseReview(ctx, m.repo, review)
 		}}, nil
@@ -421,7 +437,19 @@ func sparseSimpleWorkflow(m *Model, command WorkflowCommand, action string) tea.
 }
 
 func sparseEnableWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
-	return sparseSimpleWorkflow(m, command, "enable cone mode")
+	sparseIndex := boolOption(command, "transient:magit-sparse-checkout:--sparse-index")
+	return m.LoadWorkflow("sparse-checkout state", func(ctx context.Context) (WorkflowDialog, error) {
+		state, err := m.repo.SparseCheckoutState(ctx)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		return WorkflowDialog{Title: "Enable sparse checkout", Operation: "enable sparse checkout", Plan: []string{"Cone mode selects repository-relative directories", "Non-cone mode accepts Git ignore-style patterns", "Sparse index can improve performance in large repositories"}, Fields: []WorkflowField{{Name: "mode", Label: "Pattern mode", Kind: WorkflowSelect, Value: "cone", Choices: []WorkflowChoice{{Value: "cone", Label: "Cone directories (recommended)"}, {Value: "non-cone", Label: "Non-cone Git patterns (advanced)"}}}}, ReviewPreflight: func(_ context.Context, values WorkflowValues) (WorkflowReview, error) {
+			opts := gitbackend.SparseCheckoutInitOptions{Cone: values["mode"] != "non-cone", SparseIndex: sparseIndex}
+			return sparseReview(state, "enable", nil, opts), nil
+		}, SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
+			return submitSparseReview(ctx, m.repo, review)
+		}}, nil
+	})
 }
 func sparseDisableWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
 	return sparseSimpleWorkflow(m, command, "disable")
@@ -456,10 +484,7 @@ func parseSparsePatterns(value string) ([]string, error) {
 }
 
 func sparsePatternWorkflow(m *Model, command WorkflowCommand, action string) tea.Cmd {
-	if boolOption(command, "transient:magit-sparse-checkout:--sparse-index") {
-		m.setError(errors.New("sparse index is unsupported by the typed sparse-checkout API"))
-		return nil
-	}
+	_ = command
 	return m.LoadWorkflow("sparse-checkout patterns", func(ctx context.Context) (WorkflowDialog, error) {
 		state, err := m.repo.SparseCheckoutState(ctx)
 		if err != nil {
@@ -470,7 +495,7 @@ func sparsePatternWorkflow(m *Model, command WorkflowCommand, action string) tea
 			if err != nil {
 				return WorkflowReview{}, err
 			}
-			return sparseReview(state, action, patterns), nil
+			return sparseReview(state, action, patterns, gitbackend.SparseCheckoutInitOptions{}), nil
 		}, SubmitReview: func(ctx context.Context, _ WorkflowValues, review WorkflowReview) error {
 			return submitSparseReview(ctx, m.repo, review)
 		}}, nil

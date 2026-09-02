@@ -86,8 +86,19 @@ func TestRemoteWorkflowIntegrationAddConfigureRenamePruneRemoveAndCancel(t *test
 	if got := local.git("remote"); got != "origin" {
 		t.Fatalf("add remote = %q", got)
 	}
+	backup := newUIBareRemote(t)
+	remoteAddWorkflow(m, WorkflowCommand{ID: keymap.CommandAddRemote, Options: map[keymap.CommandID]OptionValue{commandRemoteFetchAfterAdd: {Enabled: false}}})
+	setRemoteWorkflowValue(t, m, "name", "backup")
+	setRemoteWorkflowValue(t, m, "url", backup)
+	m.workflow.field = len(m.workflow.dialog.Fields)
+	_, cmd = m.handleWorkflowKey(keyMsg("enter"))
+	runE2ECmd(t, m, cmd)
+	if got := local.git("remote"); got != "backup\norigin" {
+		t.Fatalf("repeated add remotes = %q", got)
+	}
 
 	loadRemoteWorkflow(t, m, commandRemoteConfigure)
+	setRemoteWorkflowValue(t, m, "remote", "origin")
 	setRemoteWorkflowValue(t, m, "U-mode", "replace")
 	setRemoteWorkflowValue(t, m, "U", `["+refs/heads/*:refs/remotes/origin/*"]`)
 	setRemoteWorkflowValue(t, m, "S-mode", "clear")
@@ -102,19 +113,21 @@ func TestRemoteWorkflowIntegrationAddConfigureRenamePruneRemoveAndCancel(t *test
 	}
 
 	loadRemoteWorkflow(t, m, commandRemoteRename)
+	setRemoteWorkflowValue(t, m, "remote", "origin")
 	setRemoteWorkflowValue(t, m, "new", "upstream")
 	// Cancelling a reviewed destructive workflow must not mutate anything.
 	m.workflow.field = len(m.workflow.dialog.Fields)
 	_, cmd = m.handleWorkflowKey(keyMsg("enter"))
 	runE2ECmd(t, m, cmd)
 	_, _ = m.handleWorkflowKey(keyMsg("esc"))
-	if got := local.git("remote"); got != "origin" {
+	if got := local.git("remote"); got != "backup\norigin" {
 		t.Fatalf("cancelled rename = %q", got)
 	}
 	loadRemoteWorkflow(t, m, commandRemoteRename)
+	setRemoteWorkflowValue(t, m, "remote", "origin")
 	setRemoteWorkflowValue(t, m, "new", "upstream")
 	reviewAndSubmitRemoteWorkflow(t, m)
-	if got := local.git("remote"); got != "upstream" {
+	if got := local.git("remote"); got != "backup\nupstream" {
 		t.Fatalf("rename = %q", got)
 	}
 
@@ -126,14 +139,16 @@ func TestRemoteWorkflowIntegrationAddConfigureRenamePruneRemoveAndCancel(t *test
 		t.Fatalf("delete remote ref: %v\n%s", err, out)
 	}
 	loadRemoteWorkflow(t, m, commandRemotePrune)
+	setRemoteWorkflowValue(t, m, "remote", "upstream")
 	reviewAndSubmitRemoteWorkflow(t, m)
 	if got := local.git("for-each-ref", "--format=%(refname)", "refs/remotes/upstream/stale"); got != "" {
 		t.Fatalf("prune left %q", got)
 	}
 
 	loadRemoteWorkflow(t, m, commandRemoteRemove)
+	setRemoteWorkflowValue(t, m, "remote", "upstream")
 	reviewAndSubmitRemoteWorkflow(t, m)
-	if got := local.git("remote"); got != "" {
+	if got := local.git("remote"); got != "backup" {
 		t.Fatalf("remove left %q", got)
 	}
 }

@@ -179,14 +179,24 @@ func branchCheckoutRemote(m *Model, command WorkflowCommand) tea.Cmd {
 			return WorkflowDialog{}, err
 		}
 		return WorkflowDialog{
-			Title: "Checkout remote ref", Operation: "checkout remote ref",
-			Plan:   []string{"Checkout the exact selected remote-tracking ref with detached HEAD"},
-			Fields: []WorkflowField{{Name: "revision", Label: "Remote ref", Kind: WorkflowSelect, Value: remoteChoices[0].Value, Choices: remoteChoices, Required: true}},
+			Title: "Checkout remote branch locally", Operation: "checkout tracking branch",
+			Plan: []string{"Create a local branch that tracks the exact selected remote-tracking ref"},
+			Fields: []WorkflowField{
+				{Name: "revision", Label: "Remote branch", Kind: WorkflowSelect, Value: remoteChoices[0].Value, Choices: remoteChoices, Required: true},
+				{Name: "local", Label: "New local branch", Kind: WorkflowText, Value: remoteBranchLeaf(remoteChoices[0].Value), Required: true},
+			},
 			Submit: func(ctx context.Context, values WorkflowValues) error {
-				return m.repo.CheckoutRevisionWithOptions(ctx, values["revision"], checkoutOptions(command))
+				return m.repo.CheckoutRemoteTrackingBranch(ctx, values["revision"], values["local"], checkoutOptions(command))
 			},
 		}, nil
 	})
+}
+
+func remoteBranchLeaf(ref string) string {
+	if _, branch, ok := strings.Cut(ref, "/"); ok {
+		return branch
+	}
+	return ref
 }
 
 func branchCheckoutLocal(m *Model, command WorkflowCommand) tea.Cmd {
@@ -279,7 +289,65 @@ func branchCreateAndCheckout(m *Model, _ WorkflowCommand) tea.Cmd {
 }
 
 func branchCreateOnly(m *Model, _ WorkflowCommand) tea.Cmd {
-	return loadBranchWorkflow(m, "branch creation", createBranchDialog(m, false))
+	return loadBranchWorkflow(m, "local or remote branch creation", func(ctx context.Context) (WorkflowDialog, error) {
+		locals, current, err := branchChoices(ctx, m.repo, false, true)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		if err := requireChoices(locals, "local branches"); err != nil {
+			return WorkflowDialog{}, err
+		}
+		configuredRemotes, err := m.repo.Remotes(ctx)
+		if err != nil {
+			return WorkflowDialog{}, err
+		}
+		remotes := make([]WorkflowChoice, 0, len(configuredRemotes))
+		for _, remote := range configuredRemotes {
+			remotes = append(remotes, WorkflowChoice{Value: remote.Name, Label: remote.Name})
+		}
+		start := choiceDefault(locals, current)
+		return WorkflowDialog{
+			Title: "Create local or remote branch", Operation: "create branch",
+			Plan: []string{"Choose local to create a branch without checkout", "Choose publish to review and create a remote branch from an existing local branch"},
+			Fields: []WorkflowField{
+				{Name: "kind", Label: "Creation kind", Kind: WorkflowEnum, Value: "local", Choices: []WorkflowChoice{{Value: "local", Label: "Create local branch"}, {Value: "publish", Label: "Publish local branch to remote"}}},
+				{Name: "branch", Label: "New local branch", Kind: WorkflowText},
+				{Name: "start", Label: "Local start point", Kind: WorkflowText, Value: start},
+				{Name: "source", Label: "Local branch to publish", Kind: WorkflowSelect, Value: start, Choices: locals},
+				{Name: "remote", Label: "Remote", Kind: WorkflowSelect, Value: choiceDefault(remotes, "origin"), Choices: remotes},
+				{Name: "remote_branch", Label: "Remote branch name", Kind: WorkflowText, Value: start},
+			},
+			ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+				if values["kind"] == "local" {
+					if strings.TrimSpace(values["branch"]) == "" || strings.TrimSpace(values["start"]) == "" {
+						return WorkflowReview{}, errors.New("new local branch and start point are required")
+					}
+					return WorkflowReview{Plan: []string{"create local branch: " + values["branch"], "start point: " + values["start"]}, Confirmation: "Create this local branch?", Data: "local"}, nil
+				}
+				if values["remote"] == "" {
+					return WorkflowReview{}, errors.New("no remote configured for publishing")
+				}
+				plan, err := m.repo.ReviewRemoteBranchPush(ctx, values["source"], values["remote"], values["remote_branch"], true)
+				if err != nil {
+					return WorkflowReview{}, err
+				}
+				return WorkflowReview{Plan: gitbackend.RemoteBranchPushPlanLines(plan), Confirmation: "Push exactly this reviewed commit and set its upstream?", Data: plan}, nil
+			},
+			SubmitReview: func(ctx context.Context, values WorkflowValues, review WorkflowReview) error {
+				if values["kind"] == "local" {
+					if review.Data != "local" {
+						return errors.New("invalid local branch creation review")
+					}
+					return m.repo.CreateBranchOnly(ctx, values["branch"], values["start"])
+				}
+				plan, ok := review.Data.(gitbackend.ReviewedRemoteBranchPush)
+				if !ok {
+					return errors.New("invalid remote branch push review")
+				}
+				return m.repo.PushRemoteBranchReviewed(ctx, plan)
+			},
+		}, nil
+	})
 }
 
 func branchWorktreeExisting(m *Model, _ WorkflowCommand) tea.Cmd {
@@ -552,17 +620,26 @@ func branchReset(m *Model, _ WorkflowCommand) tea.Cmd {
 
 func branchDelete(m *Model, _ WorkflowCommand) tea.Cmd {
 	return loadBranchWorkflow(m, "branches to delete", func(ctx context.Context) (WorkflowDialog, error) {
-		choices, _, err := branchChoices(ctx, m.repo, false, false)
+		choices, _, err := branchChoices(ctx, m.repo, true, false)
 		if err != nil {
 			return WorkflowDialog{}, err
 		}
-		if err := requireChoices(choices, "non-current local branches"); err != nil {
+		if err := requireChoices(choices, "non-current local or remote branches"); err != nil {
 			return WorkflowDialog{}, err
 		}
 		return WorkflowDialog{
-			Title: "Delete one non-current local branch", Operation: "delete local branch",
-			Fields: []WorkflowField{{Name: "branch", Label: "Non-current local branch", Kind: WorkflowSelect, Value: choices[0].Value, Choices: choices, Required: true}},
+			Title: "Delete local or remote branch", Operation: "delete branch",
+			Fields: []WorkflowField{{Name: "branch", Label: "Branch", Kind: WorkflowSelect, Value: choices[0].Value, Choices: choices, Required: true}},
 			ReviewPreflight: func(ctx context.Context, values WorkflowValues) (WorkflowReview, error) {
+				if remote, branch, ok, err := resolveRemoteBranchSelection(ctx, m.repo, values["branch"]); err != nil {
+					return WorkflowReview{}, err
+				} else if ok {
+					plan, err := m.repo.ReviewRemoteBranchDelete(ctx, remote, branch)
+					if err != nil {
+						return WorkflowReview{}, err
+					}
+					return WorkflowReview{Plan: gitbackend.RemoteBranchDeletePlanLines(plan), Confirmation: "Delete exactly this reviewed remote branch?", Data: plan}, nil
+				}
 				result, err := m.repo.LocalBranchDeletePreflight(ctx, values["branch"])
 				if err != nil {
 					return WorkflowReview{}, err
@@ -581,6 +658,9 @@ func branchDelete(m *Model, _ WorkflowCommand) tea.Cmd {
 				}, nil
 			},
 			SubmitReview: func(ctx context.Context, values WorkflowValues, review WorkflowReview) error {
+				if plan, ok := review.Data.(gitbackend.ReviewedRemoteBranchDelete); ok {
+					return m.repo.DeleteRemoteBranchReviewed(ctx, plan)
+				}
 				result, ok := review.Data.(gitbackend.LocalBranchDeleteResult)
 				if !ok || result.Name == "" || result.Name != values["branch"] {
 					return errors.New("invalid branch deletion review token")
@@ -590,4 +670,35 @@ func branchDelete(m *Model, _ WorkflowCommand) tea.Cmd {
 			},
 		}, nil
 	})
+}
+
+func resolveRemoteBranchSelection(ctx context.Context, repo *gitbackend.Repository, ref string) (string, string, bool, error) {
+	branches, err := repo.Branches(ctx)
+	if err != nil {
+		return "", "", false, err
+	}
+	isRemote := false
+	for _, candidate := range branches {
+		if candidate.Name == ref {
+			isRemote = candidate.Remote
+			break
+		}
+	}
+	if !isRemote {
+		return "", "", false, nil
+	}
+	remotes, err := repo.Remotes(ctx)
+	if err != nil {
+		return "", "", false, err
+	}
+	remote := ""
+	for _, candidate := range remotes {
+		if strings.HasPrefix(ref, candidate.Name+"/") && len(candidate.Name) > len(remote) {
+			remote = candidate.Name
+		}
+	}
+	if remote == "" {
+		return "", "", false, errors.New("remote-tracking branch has no configured remote")
+	}
+	return remote, strings.TrimPrefix(ref, remote+"/"), true, nil
 }

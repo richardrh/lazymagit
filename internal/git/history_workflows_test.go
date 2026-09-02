@@ -391,15 +391,40 @@ func TestBisectStartTypedOptionsAndLifecycle(t *testing.T) {
 	var records []ProcessRecord
 	ctx := WithProcessRecorder(context.Background(), func(record ProcessRecord) { records = append(records, record) })
 
-	if err := repo.BisectStart(ctx, BisectStartOptions{Bad: bad, Good: good, NoCheckout: true, FirstParent: true}); err != nil {
+	if err := repo.BisectStart(ctx, BisectStartOptions{Bad: bad, Good: good, TermOld: "working", TermNew: "broken", NoCheckout: true, FirstParent: true}); err != nil {
 		t.Fatalf("BisectStart: %v", err)
 	}
-	want := []string{"bisect", "start", "--no-checkout", "--first-parent", bad, good}
+	want := []string{"bisect", "start", "--term-old=working", "--term-new=broken", "--no-checkout", "--first-parent", bad, good}
 	if len(records) != 1 || !reflect.DeepEqual(records[0].Args, want) {
 		t.Fatalf("process records = %#v, want args %#v", records, want)
 	}
+	if err := repo.BisectGood(ctx, ""); err != nil {
+		t.Fatalf("BisectGood with custom term: %v", err)
+	}
+	if got := records[len(records)-1].Args; !reflect.DeepEqual(got, []string{"bisect", "working"}) {
+		t.Fatalf("custom old mark args = %#v", got)
+	}
 	if err := repo.BisectReset(context.Background()); err != nil {
 		t.Fatalf("BisectReset: %v", err)
+	}
+}
+
+func TestBisectCustomTermsRequireSafePair(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("n", "0\n")
+	good := r.commitAll("good")
+	r.write("n", "1\n")
+	bad := r.commitAll("bad")
+	repo, _ := Discover(r.dir)
+	for _, options := range []BisectStartOptions{
+		{Bad: bad, Good: good, TermOld: "working"},
+		{Bad: bad, Good: good, TermOld: "same", TermNew: "same"},
+		{Bad: bad, Good: good, TermOld: "working", TermNew: "--exec"},
+		{Bad: bad, Good: good, TermOld: "working", TermNew: "run"},
+	} {
+		if err := repo.BisectStart(context.Background(), options); err == nil {
+			t.Fatalf("unsafe custom terms accepted: %#v", options)
+		}
 	}
 }
 

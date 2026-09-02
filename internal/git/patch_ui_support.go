@@ -287,6 +287,13 @@ func reviewStagedFormatPatchFile(path string, before []string) (ReviewedPatchFil
 // the review and leaves the destination untouched.
 func (r *Repository) ExecuteReviewedFormatPatch(ctx context.Context, review ReviewedFormatPatch) error {
 	defer r.DiscardReviewedFormatPatch(review)
+	if err := r.validateReviewedFormatPatch(ctx, review); err != nil {
+		return err
+	}
+	return publishReviewedFormatPatch(review)
+}
+
+func (r *Repository) validateReviewedFormatPatch(ctx context.Context, review ReviewedFormatPatch) error {
 	revisions, err := r.formatPatchRevisions(ctx, review.Range)
 	if err != nil {
 		return err
@@ -317,6 +324,10 @@ func (r *Repository) ExecuteReviewedFormatPatch(ctx context.Context, review Revi
 	if !review.Token.validFor(formatPatchReviewIdentity(current)) {
 		return fmt.Errorf("format-patch review changed after review: %w", ErrStalePlan)
 	}
+	return nil
+}
+
+func publishReviewedFormatPatch(review ReviewedFormatPatch) error {
 	var installed []string
 	for _, file := range review.Files {
 		source, destination := filepath.Join(review.StagingDir, file.Name), filepath.Join(review.Directory, file.Name)

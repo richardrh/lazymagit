@@ -771,7 +771,7 @@ All manifest transients are generated from effective status bindings and transie
 | `w` | `magit-stash-worktree` | **suffix** | Stash |  | `missing` | suffix: not implemented |
 | `x` | `magit-stash-keep-index` | **suffix** | Stash |  | `partial` | TUI workflow handler (startup-validated) |
 | `P` | `magit-stash-push` | **suffix** | Stash |  | `partial` |  |
-| `Z` | `magit-snapshot-both` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
+| `Z` | `magit-snapshot-both` | **suffix** | Snapshot |  | `partial` | TUI workflow handler (startup-validated) |
 | `I` | `magit-snapshot-index` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
 | `W` | `magit-snapshot-worktree` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |
 | `r` | `magit-wip-commit` | **suffix** | Snapshot |  | `missing` | suffix: not implemented |

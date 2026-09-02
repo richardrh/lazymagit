@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 )
 
 // CommitUIVariant identifies the non-interactive commit operation selected by
@@ -27,6 +29,87 @@ var ErrCommitSigningConsentRequired = errors.New("commit signing requires explic
 type commitUIInvocation struct {
 	args          []string
 	editorMessage string
+}
+
+// CommitUIRequest is the complete typed input reviewed before a UI commit
+// mutation. Target is canonicalized to an object ID for target-based variants.
+type CommitUIRequest struct {
+	Variant        CommitUIVariant
+	Target         string
+	Message        string
+	Options        CommitOptions
+	SigningConsent bool
+}
+
+// ReviewedCommitUI binds an exact commit request to HEAD, index, worktree, and
+// in-progress operation state. It cannot be reused after repository mutation.
+type ReviewedCommitUI struct {
+	Request CommitUIRequest
+	State   HistoryUIState
+	Plan    []string
+	Token   ConfirmationToken
+}
+
+func (r *Repository) ReviewCommitUI(ctx context.Context, request CommitUIRequest) (ReviewedCommitUI, error) {
+	options := request.Options
+	if _, err := prepareCommitUIOptions(request.Variant, &options, request.SigningConsent); err != nil {
+		return ReviewedCommitUI{}, err
+	}
+	_, err := r.commitUIInvocation(ctx, request.Variant, request.Target, request.Message, options)
+	if err != nil {
+		return ReviewedCommitUI{}, err
+	}
+	if commitUIVariantTargetsRevision(request.Variant) {
+		request.Target, err = r.resolveCommitForCommitWorkflow(ctx, request.Target)
+		if err != nil {
+			return ReviewedCommitUI{}, err
+		}
+	}
+	state, err := r.historyUIState(ctx)
+	if err != nil {
+		return ReviewedCommitUI{}, err
+	}
+	plan := []string{"Create " + string(request.Variant) + " commit"}
+	if request.Target != "" {
+		plan = append(plan, "Target "+request.Target)
+	}
+	plan = append(plan, "Validated typed commit options without invoking an editor")
+	review := ReviewedCommitUI{Request: request, State: state, Plan: plan}
+	review.Token = NewConfirmationToken(commitUIIdentity(review))
+	return review, nil
+}
+
+func (r *Repository) ExecuteReviewedCommitUI(ctx context.Context, reviewed ReviewedCommitUI) (Commit, error) {
+	current, err := r.ReviewCommitUI(ctx, reviewed.Request)
+	if err != nil {
+		return Commit{}, err
+	}
+	if !reviewed.Token.validFor(commitUIIdentity(current)) || reviewed.State != current.State || commitUIRequestIdentity(reviewed.Request) != commitUIRequestIdentity(current.Request) {
+		return Commit{}, ErrStalePlan
+	}
+	q := reviewed.Request
+	return r.ExecuteCommitUI(ctx, q.Variant, q.Target, q.Message, q.Options, q.SigningConsent)
+}
+
+func commitUIVariantTargetsRevision(variant CommitUIVariant) bool {
+	switch variant {
+	case CommitUIFixup, CommitUISquash, CommitUIAlter, CommitUIAugment, CommitUIRevise:
+		return true
+	default:
+		return false
+	}
+}
+
+func commitUIIdentity(review ReviewedCommitUI) string {
+	return commitUIRequestIdentity(review.Request) + "\x00" + review.State.HEAD + "\x00" + review.State.Index + "\x00" + review.State.Worktree + "\x00" + review.State.Operation
+}
+
+func commitUIRequestIdentity(q CommitUIRequest) string {
+	o := q.Options
+	return strings.Join([]string{string(q.Variant), q.Target, q.Message,
+		strconv.FormatBool(o.All), strconv.FormatBool(o.AllowEmpty), strconv.FormatBool(o.NoVerify), strconv.FormatBool(o.ResetAuthor),
+		o.Author, o.Date, strconv.FormatBool(o.Signoff), o.ReuseMessage, o.ReeditMessage, strconv.FormatBool(o.Sign), o.SigningKey,
+		strconv.FormatBool(q.SigningConsent)}, "\x00")
 }
 
 // ExecuteCommitUI is the safe UI boundary for commit workflows. In particular,

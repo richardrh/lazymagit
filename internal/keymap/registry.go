@@ -791,7 +791,7 @@ var transientCapability = map[string]map[string]bool{
 	"magit-rebase":        setOf("magit-rebase-branch", "magit-rebase-subset", "magit-rebase-onto-upstream", "magit-rebase-onto-pushremote", "magit-rebase-interactive", "magit-rebase-edit-commit", "magit-rebase-reword-commit", "magit-rebase-remove-commit", "magit-rebase-edit", "magit-rebase-continue", "magit-rebase-skip", "magit-rebase-abort"),
 	"magit-tag":           setOf("magit-tag-create", "magit-tag-release", "magit-tag-delete", "magit-tag-prune"),
 	"magit-notes":         setOf("magit-notes-edit", "magit-notes-remove", "magit-notes-merge", "magit-notes-prune", "magit-notes-merge-commit", "magit-notes-merge-abort"),
-	"magit-stash":         setOf("magit-stash-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),
+	"magit-stash":         setOf("magit-stash-both", "magit-snapshot-both", "magit-stash-keep-index", "magit-stash-apply", "magit-stash-list", "magit-stash-show", "magit-stash-branch", "magit-stash-format-patch"),
 	"magit-stash-push":    setOf("magit-stash-push"),
 	"magit-status-jump":   setOf("magit-jump-to-stashes", "magit-jump-to-untracked", "magit-jump-to-unstaged", "magit-jump-to-staged", "magit-jump-to-unpulled-from-upstream", "magit-jump-to-unpushed-to-upstream"),
 }

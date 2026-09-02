@@ -32,9 +32,12 @@ func (r *Repository) ReviewWorktreeAdd(ctx context.Context, path, revision, bran
 	if err := safeNewDirectory(path); err != nil {
 		return ReviewedWorktreeAdd{}, err
 	}
+	if opts.LockReason != "" && !opts.Lock {
+		return ReviewedWorktreeAdd{}, errors.New("worktree lock reason requires lock-on-create")
+	}
 	if branch != "" {
-		if opts.Detach || opts.Checkout != nil || opts.Lock || opts.LockReason != "" {
-			return ReviewedWorktreeAdd{}, errors.New("new-branch worktree does not support detached, checkout, or lock options")
+		if opts.Detach {
+			return ReviewedWorktreeAdd{}, errors.New("new-branch worktree cannot be detached")
 		}
 		if err := r.validateBranchName(ctx, branch); err != nil {
 			return ReviewedWorktreeAdd{}, err
@@ -67,7 +70,7 @@ func (r *Repository) AddWorktreeReviewed(ctx context.Context, reviewed ReviewedW
 		if err := r.validateBranchName(ctx, reviewed.Branch); err != nil {
 			return err
 		}
-		return r.AddWorktreeWithBranch(ctx, reviewed.Path, reviewed.Branch, reviewed.OID, reviewed.Options.Force)
+		return r.AddWorktreeWithBranchOptions(ctx, reviewed.Path, reviewed.Branch, reviewed.OID, reviewed.Options)
 	}
 	return r.AddWorktree(ctx, reviewed.Path, reviewed.OID, reviewed.Options)
 }
@@ -96,21 +99,11 @@ func (r *Repository) ReviewWorktreeMutation(ctx context.Context, path, destinati
 	if err != nil {
 		return ReviewedWorktreeMutation{}, err
 	}
-	if wt.Primary || wt.Bare {
-		return ReviewedWorktreeMutation{}, ErrPrimaryWorktree
+	if err := validateWorktreeMutationTarget(wt); err != nil {
+		return ReviewedWorktreeMutation{}, err
 	}
-	// The UI passes paths obtained from Worktrees. Reject aliases, roots and
-	// symlinks so review and execution name the same filesystem object.
-	if filepath.Clean(wt.Path) == string(filepath.Separator) {
-		return ReviewedWorktreeMutation{}, fmt.Errorf("%w: worktree path is filesystem root", ErrUnsafeDestination)
-	}
-	if info, err := os.Lstat(wt.Path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return ReviewedWorktreeMutation{}, fmt.Errorf("%w: worktree path is a symbolic link", ErrUnsafeDestination)
-	}
-	if destination != "" {
-		if err := safeNewDirectory(destination); err != nil {
-			return ReviewedWorktreeMutation{}, err
-		}
+	if err := validateOptionalWorktreeDestination(destination); err != nil {
+		return ReviewedWorktreeMutation{}, err
 	}
 	dirty, err := worktreeDirty(ctx, wt.Path)
 	if err != nil {
@@ -119,6 +112,28 @@ func (r *Repository) ReviewWorktreeMutation(ctx context.Context, path, destinati
 	p := ReviewedWorktreeMutation{Worktree: wt, Destination: destination, Force: force, Dirty: dirty}
 	p.Token = NewConfirmationToken(worktreeMutationIdentity(p))
 	return p, nil
+}
+
+func validateWorktreeMutationTarget(wt Worktree) error {
+	if wt.Primary || wt.Bare {
+		return ErrPrimaryWorktree
+	}
+	// The UI passes paths obtained from Worktrees. Reject aliases, roots and
+	// symlinks so review and execution name the same filesystem object.
+	if filepath.Clean(wt.Path) == string(filepath.Separator) {
+		return fmt.Errorf("%w: worktree path is filesystem root", ErrUnsafeDestination)
+	}
+	if info, err := os.Lstat(wt.Path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: worktree path is a symbolic link", ErrUnsafeDestination)
+	}
+	return nil
+}
+
+func validateOptionalWorktreeDestination(destination string) error {
+	if destination != "" {
+		return safeNewDirectory(destination)
+	}
+	return nil
 }
 
 func (r *Repository) reviewedWorktreeMutationCurrent(ctx context.Context, reviewed ReviewedWorktreeMutation) error {

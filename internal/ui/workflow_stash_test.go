@@ -10,7 +10,7 @@ import (
 func TestStashDomainRegistrationAndRecursivePushOccurrence(t *testing.T) {
 	handlers := workflowHandlersFor(&Model{})
 	capabilities := workflowCapabilitiesFor()
-	for _, id := range []keymap.CommandID{stashBothID, stashKeepIndexID, stashPushID, stashApplyID, stashListID, stashBranchID, stashFormatPatchID} {
+	for _, id := range []keymap.CommandID{stashBothID, stashSnapshotBothID, stashKeepIndexID, stashPushID, stashApplyID, stashListID, stashBranchID, stashFormatPatchID} {
 		if handlers[id] == nil {
 			t.Errorf("stash handler %s is not registered", id)
 		}
@@ -38,7 +38,7 @@ func TestStashDomainRegistrationAndRecursivePushOccurrence(t *testing.T) {
 				t.Errorf("unsafe stash removal suffix is available: %+v", binding)
 			}
 		}
-		if binding.Transient == "magit-stash" && (binding.UpstreamCommand == "magit-stash-index" || binding.UpstreamCommand == "magit-stash-worktree" || binding.UpstreamCommand == "magit-stash-branch-here" || strings.HasPrefix(binding.UpstreamCommand, "magit-snapshot") || binding.UpstreamCommand == "magit-wip-commit") {
+		if binding.Transient == "magit-stash" && (binding.UpstreamCommand == "magit-stash-index" || binding.UpstreamCommand == "magit-stash-worktree" || binding.UpstreamCommand == "magit-stash-branch-here" || binding.UpstreamCommand == "magit-snapshot-index" || binding.UpstreamCommand == "magit-snapshot-worktree" || binding.UpstreamCommand == "magit-wip-commit") {
 			if handlers[binding.Command] != nil || binding.Handler == keymap.HandlerExecute {
 				t.Errorf("unsupported stash suffix became executable: %+v", binding)
 			}
@@ -56,7 +56,7 @@ func TestStashSuffixesAndInfixesAreAvailableAtRuntime(t *testing.T) {
 		for _, group := range catalog.Groups {
 			for _, entry := range group.Entries {
 				supported := name == "magit-stash-push" || map[string]bool{
-					"magit-stash-both": true, "magit-stash-keep-index": true, "magit-stash-apply": true,
+					"magit-stash-both": true, "magit-snapshot-both": true, "magit-stash-keep-index": true, "magit-stash-apply": true,
 					"magit-stash-list": true,
 					"magit-stash-show": true, "magit-stash-branch": true, "magit-stash-format-patch": true,
 				}[entry.UpstreamCommand]

@@ -344,29 +344,41 @@ func (r *Repository) readMutatedHEAD() (string, error) {
 	}
 	value := strings.TrimSpace(string(head))
 	if strings.HasPrefix(value, "ref: ") {
-		ref := strings.TrimPrefix(value, "ref: ")
-		if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
-			return "", errors.New("HEAD contains an unsafe symbolic ref")
-		}
-		data, err := readFileLimited(filepath.Join(r.gitDir, filepath.FromSlash(ref)), 4<<10)
-		if errors.Is(err, os.ErrNotExist) {
-			if common, commonErr := readFileLimited(filepath.Join(r.gitDir, "commondir"), 4<<10); commonErr == nil {
-				commonDir := strings.TrimSpace(string(common))
-				if !filepath.IsAbs(commonDir) {
-					commonDir = filepath.Join(r.gitDir, commonDir)
-				}
-				data, err = readFileLimited(filepath.Join(filepath.Clean(commonDir), filepath.FromSlash(ref)), 4<<10)
-			}
-		}
+		value, err = r.readSymbolicHEAD(strings.TrimPrefix(value, "ref: "))
 		if err != nil {
 			return "", err
 		}
-		value = strings.TrimSpace(string(data))
 	}
 	if !isCommitWorkflowOID(value) {
 		return "", errors.New("HEAD contains an invalid object ID")
 	}
 	return value, nil
+}
+
+func (r *Repository) readSymbolicHEAD(ref string) (string, error) {
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") {
+		return "", errors.New("HEAD contains an unsafe symbolic ref")
+	}
+	data, err := readFileLimited(filepath.Join(r.gitDir, filepath.FromSlash(ref)), 4<<10)
+	if errors.Is(err, os.ErrNotExist) {
+		data, err = r.readCommonRef(ref)
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func (r *Repository) readCommonRef(ref string) ([]byte, error) {
+	common, err := readFileLimited(filepath.Join(r.gitDir, "commondir"), 4<<10)
+	if err != nil {
+		return nil, err
+	}
+	commonDir := strings.TrimSpace(string(common))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(r.gitDir, commonDir)
+	}
+	return readFileLimited(filepath.Join(filepath.Clean(commonDir), filepath.FromSlash(ref)), 4<<10)
 }
 
 func (r *Repository) structuredFixup(ctx context.Context, operation, mode, revision, message string, options CommitOptions) (Commit, error) {

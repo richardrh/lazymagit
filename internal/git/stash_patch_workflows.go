@@ -114,6 +114,31 @@ type StashPushOptions struct {
 	Paths            []string
 }
 
+// StashSnapshot creates an ordinary stash entry without changing either the
+// index or the worktree. Git first writes the stash commit, then stores that
+// immutable commit in the stash reflog. If there are no tracked changes, no
+// reflog entry is created.
+func (r *Repository) StashSnapshot(ctx context.Context, message string) error {
+	args := []string{"stash", "create"}
+	if message != "" {
+		args = append(args, message)
+	}
+	out, err := r.output(ctx, args...)
+	if err != nil {
+		return err
+	}
+	oid := strings.TrimSpace(string(out))
+	if oid == "" {
+		return errors.New("no tracked changes to snapshot")
+	}
+	store := []string{"stash", "store"}
+	if message != "" {
+		store = append(store, "--message", message)
+	}
+	store = append(store, oid)
+	return r.run(ctx, store...)
+}
+
 func (r *Repository) StashPush(ctx context.Context, options StashPushOptions) error {
 	args := []string{"stash", "push"}
 	if options.All {
@@ -424,10 +449,7 @@ type FormatPatchOptions struct {
 // FormatPatch writes a revision range into an existing output directory and
 // returns the patch files created there. Existing files are not reported.
 func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, options FormatPatchOptions) ([]string, error) {
-	if err := safeRevisionArgument(revisionRange); err != nil {
-		return nil, err
-	}
-	if err := validateFormatPatchOptions(options); err != nil {
+	if err := validateFormatPatchRequest(revisionRange, options); err != nil {
 		return nil, err
 	}
 	if options.CoverLetterBody != "" {
@@ -445,12 +467,31 @@ func (r *Repository) FormatPatch(ctx context.Context, revisionRange string, opti
 	if err != nil {
 		return nil, err
 	}
-	if options.CoverLetterBody != "" {
-		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
-			return nil, err
-		}
+	if err := customizeFormatPatchSeries(created, options); err != nil {
+		return nil, err
 	}
 	return created, nil
+}
+
+func customizeFormatPatchSeries(created []string, options FormatPatchOptions) error {
+	if options.CoverLetter && options.From != "" {
+		if err := replaceFormatPatchCoverFrom(created, options.From); err != nil {
+			return err
+		}
+	}
+	if options.CoverLetterBody != "" {
+		if err := replaceFormatPatchCoverLetter(created, options.CoverLetterBody); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateFormatPatchRequest(revisionRange string, options FormatPatchOptions) error {
+	if err := safeRevisionArgument(revisionRange); err != nil {
+		return err
+	}
+	return validateFormatPatchOptions(options)
 }
 
 func formatPatchArgs(dir, revisionRange string, options FormatPatchOptions) []string {
@@ -645,6 +686,25 @@ func replaceFormatPatchCoverLetter(paths []string, body string) error {
 	}
 	updated := bytes.Replace(data, []byte("*** BLURB HERE ***"), []byte(body), 1)
 	return installFormatPatchCoverLetter(cover, updated, info.Mode().Perm())
+}
+
+func replaceFormatPatchCoverFrom(paths []string, from string) error {
+	cover, info, err := editableFormatPatchCoverLetter(paths)
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(cover)
+	if err != nil {
+		return fmt.Errorf("read generated cover letter: %w", err)
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	for i, line := range lines {
+		if bytes.HasPrefix(line, []byte("From: ")) {
+			lines[i] = []byte("From: " + from)
+			return installFormatPatchCoverLetter(cover, bytes.Join(lines, []byte("\n")), info.Mode().Perm())
+		}
+	}
+	return errors.New("generated cover letter has no From header")
 }
 
 func editableFormatPatchCoverLetter(paths []string) (string, os.FileInfo, error) {

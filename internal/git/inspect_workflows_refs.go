@@ -102,23 +102,13 @@ func (r *Repository) QueryRefs(ctx context.Context, q RefQuery) (RefResult, erro
 }
 
 func (r *Repository) compileRefQuery(ctx context.Context, q RefQuery) ([]string, int, int, bool, error) {
-	if q.Limit < 0 {
-		return nil, 0, 0, false, errors.New("ref limit cannot be negative")
+	limit, truncated, err := refItemLimit(q.Limit)
+	if err != nil {
+		return nil, 0, 0, false, err
 	}
-	limit := q.Limit
-	if limit == 0 {
-		limit = 1000
-	}
-	truncated := false
-	if limit > inspectionItemLimit {
-		limit, truncated = inspectionItemLimit, true
-	}
-	byteLimit := q.OutputLimit
-	if byteLimit == 0 {
-		byteLimit = inspectionOutputLimit
-	}
-	if byteLimit < 0 || byteLimit > inspectionOutputLimit {
-		return nil, 0, 0, false, fmt.Errorf("ref output limit must be between 0 and %d", inspectionOutputLimit)
+	byteLimit, err := inspectionByteLimit("ref", q.OutputLimit)
+	if err != nil {
+		return nil, 0, 0, false, err
 	}
 	sort, err := q.Sort.gitOption()
 	if err != nil {
@@ -126,29 +116,46 @@ func (r *Repository) compileRefQuery(ctx context.Context, q RefQuery) ([]string,
 	}
 	format := "%00%(HEAD)%00%(refname)%00%(refname:short)%00%(objectname)%00%(*objectname)%00%(upstream:short)%00%(push:short)%00%(symref)%00%(subject)%00"
 	args := []string{"for-each-ref", "--count=" + strconv.Itoa(limit+1), "--sort=" + sort, "--format=" + format}
-	if q.Contains != "" {
-		oid, resolveErr := r.resolveCommitOID(ctx, q.Contains)
-		if resolveErr != nil {
-			return nil, 0, 0, false, resolveErr
-		}
-		args = append(args, "--contains="+oid)
+	filters, err := r.refQueryFilters(ctx, q)
+	if err != nil {
+		return nil, 0, 0, false, err
 	}
-	if q.MergedTo != "" {
-		oid, resolveErr := r.resolveCommitOID(ctx, q.MergedTo)
-		if resolveErr != nil {
-			return nil, 0, 0, false, resolveErr
-		}
-		args = append(args, "--merged="+oid)
-	}
-	if q.NoMergedTo != "" {
-		oid, resolveErr := r.resolveCommitOID(ctx, q.NoMergedTo)
-		if resolveErr != nil {
-			return nil, 0, 0, false, resolveErr
-		}
-		args = append(args, "--no-merged="+oid)
-	}
+	args = append(args, filters...)
 	args = append(args, "refs/heads", "refs/remotes", "refs/tags")
 	return args, limit, byteLimit, truncated, nil
+}
+
+func refItemLimit(limit int) (int, bool, error) {
+	if limit < 0 {
+		return 0, false, errors.New("ref limit cannot be negative")
+	}
+	if limit == 0 {
+		limit = 1000
+	}
+	if limit > inspectionItemLimit {
+		return inspectionItemLimit, true, nil
+	}
+	return limit, false, nil
+}
+
+func (r *Repository) refQueryFilters(ctx context.Context, q RefQuery) ([]string, error) {
+	filters := []struct{ revision, option string }{
+		{q.Contains, "--contains="},
+		{q.MergedTo, "--merged="},
+		{q.NoMergedTo, "--no-merged="},
+	}
+	var args []string
+	for _, filter := range filters {
+		if filter.revision == "" {
+			continue
+		}
+		oid, err := r.resolveCommitOID(ctx, filter.revision)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, filter.option+oid)
+	}
+	return args, nil
 }
 
 func (r *Repository) buildRefResult(ctx context.Context, q RefQuery, refs []Ref, truncated bool) (RefResult, error) {

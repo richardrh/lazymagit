@@ -32,6 +32,10 @@ func (r *Repository) ListTags(ctx context.Context) ([]TagInfo, error) {
 	if truncated {
 		return nil, &TooLargeError{Resource: "tag listing"}
 	}
+	return r.parseTagListing(ctx, out)
+}
+
+func (r *Repository) parseTagListing(ctx context.Context, out []byte) ([]TagInfo, error) {
 	var tags []TagInfo
 	for _, line := range bytes.Split(out, []byte{'\n'}) {
 		line = bytes.TrimSuffix(line, []byte{0})
@@ -45,29 +49,46 @@ func (r *Repository) ListTags(ctx context.Context) ([]TagInfo, error) {
 		if len(fields) != 6 {
 			return nil, errors.New("malformed tag listing")
 		}
-		tag := TagInfo{Name: string(fields[0]), ObjectID: string(fields[1]), TargetID: string(fields[2]), Subject: string(fields[3]), Tagger: string(fields[4])}
-		tag.Annotated = tag.TargetID != ""
-		if tag.TargetID == "" {
-			tag.TargetID = tag.ObjectID
-		} else {
-			raw, truncated, err := r.outputLimited(ctx, 1<<20, "cat-file", "tag", tag.ObjectID)
-			if err != nil {
-				return nil, err
-			}
-			if truncated {
-				return nil, &TooLargeError{Resource: "annotated tag object"}
-			}
-			tag.Signed = bytes.Contains(raw, []byte("-----BEGIN PGP SIGNATURE-----")) || bytes.Contains(raw, []byte("-----BEGIN SSH SIGNATURE-----"))
-		}
-		if len(fields[5]) != 0 {
-			tag.TaggerDate, err = time.Parse(time.RFC3339, string(fields[5]))
-			if err != nil {
-				return nil, fmt.Errorf("parse tag date: %w", err)
-			}
+		tag, err := r.tagInfoFromFields(ctx, fields)
+		if err != nil {
+			return nil, err
 		}
 		tags = append(tags, tag)
 	}
 	return tags, nil
+}
+
+func (r *Repository) tagInfoFromFields(ctx context.Context, fields [][]byte) (TagInfo, error) {
+	tag := TagInfo{Name: string(fields[0]), ObjectID: string(fields[1]), TargetID: string(fields[2]), Subject: string(fields[3]), Tagger: string(fields[4])}
+	tag.Annotated = tag.TargetID != ""
+	if !tag.Annotated {
+		tag.TargetID = tag.ObjectID
+	} else {
+		signed, err := r.annotatedTagSigned(ctx, tag.ObjectID)
+		if err != nil {
+			return TagInfo{}, err
+		}
+		tag.Signed = signed
+	}
+	if len(fields[5]) != 0 {
+		date, err := time.Parse(time.RFC3339, string(fields[5]))
+		if err != nil {
+			return TagInfo{}, fmt.Errorf("parse tag date: %w", err)
+		}
+		tag.TaggerDate = date
+	}
+	return tag, nil
+}
+
+func (r *Repository) annotatedTagSigned(ctx context.Context, objectID string) (bool, error) {
+	raw, truncated, err := r.outputLimited(ctx, 1<<20, "cat-file", "tag", objectID)
+	if err != nil {
+		return false, err
+	}
+	if truncated {
+		return false, &TooLargeError{Resource: "annotated tag object"}
+	}
+	return bytes.Contains(raw, []byte("-----BEGIN PGP SIGNATURE-----")) || bytes.Contains(raw, []byte("-----BEGIN SSH SIGNATURE-----")), nil
 }
 
 type CreateTagArgs struct {
@@ -125,11 +146,11 @@ func (r *Repository) CreateTagWithArgs(ctx context.Context, in CreateTagArgs) (T
 }
 
 func normalizeCreateTagArgs(p TagCreatePreflight, in CreateTagArgs) (CreateTagArgs, error) {
-	if p.Exists && (!in.Force || !in.ConfirmReplace) {
-		return in, errors.New("replacing a tag requires force and confirmation")
+	if err := validateCreateTagReplacement(p, in); err != nil {
+		return in, err
 	}
-	if strings.ContainsAny(in.LocalUser, "\x00\r\n") {
-		return in, errors.New("tag signing identity contains a control character")
+	if err := validateTagSigningIdentity(in.LocalUser); err != nil {
+		return in, err
 	}
 	if in.LocalUser != "" {
 		in.Sign = true
@@ -137,16 +158,37 @@ func normalizeCreateTagArgs(p TagCreatePreflight, in CreateTagArgs) (CreateTagAr
 	if in.Sign {
 		in.Annotated = true
 	}
-	if in.Annotated && in.Message == "" {
-		return in, errors.New("annotated tag message is empty")
-	}
-	if !in.Annotated && in.Message != "" {
-		return in, errors.New("lightweight tag cannot have a message")
+	if err := validateCreateTagMessage(in); err != nil {
+		return in, err
 	}
 	if in.Target == "" {
 		in.Target = "HEAD"
 	}
 	return in, nil
+}
+
+func validateCreateTagReplacement(p TagCreatePreflight, in CreateTagArgs) error {
+	if p.Exists && (!in.Force || !in.ConfirmReplace) {
+		return errors.New("replacing a tag requires force and confirmation")
+	}
+	return nil
+}
+
+func validateTagSigningIdentity(identity string) error {
+	if strings.ContainsAny(identity, "\x00\r\n") {
+		return errors.New("tag signing identity contains a control character")
+	}
+	return nil
+}
+
+func validateCreateTagMessage(in CreateTagArgs) error {
+	if in.Annotated && in.Message == "" {
+		return errors.New("annotated tag message is empty")
+	}
+	if !in.Annotated && in.Message != "" {
+		return errors.New("lightweight tag cannot have a message")
+	}
+	return nil
 }
 
 func createTagCommandArgs(in CreateTagArgs, resolved string) []string {
@@ -349,40 +391,47 @@ func (r *Repository) MergeState(ctx context.Context) (MergeState, error) {
 	if err != nil {
 		return MergeState{}, err
 	}
+	state := mergeStateFromStatus(status)
+	state.Dirty = state.HasStaged || state.HasUnstaged
+	heads, err := r.mergeHeads(ctx)
+	if err != nil {
+		return state, err
+	}
+	state.Heads = heads
+	state.InProgress = len(heads) != 0
+	return state, nil
+}
+
+func mergeStateFromStatus(status Status) MergeState {
 	var state MergeState
 	for _, file := range status.Files {
-		if file.Staged != ChangeNone {
-			state.HasStaged = true
-		}
-		if file.Unstaged != ChangeNone {
-			state.HasUnstaged = true
-		}
-		if file.Unstaged == ChangeUntracked {
-			state.HasUntracked = true
-		}
+		state.HasStaged = state.HasStaged || file.Staged != ChangeNone
+		state.HasUnstaged = state.HasUnstaged || file.Unstaged != ChangeNone
+		state.HasUntracked = state.HasUntracked || file.Unstaged == ChangeUntracked
 		if file.Staged == ChangeUnmerged || file.Unstaged == ChangeUnmerged {
 			state.Conflicts = append(state.Conflicts, file.Path)
 		}
 	}
-	state.Dirty = state.HasStaged || state.HasUnstaged
+	return state
+}
+
+func (r *Repository) mergeHeads(ctx context.Context) ([]string, error) {
 	pathOut, err := r.output(ctx, "rev-parse", "--git-path", "MERGE_HEAD")
 	if err != nil {
-		return state, err
+		return nil, err
 	}
 	path := strings.TrimSpace(string(pathOut))
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(r.commandDir, path)
 	}
 	data, err := readFileLimited(path, 64<<10)
-	if err == nil {
-		for _, head := range strings.Fields(string(data)) {
-			state.Heads = append(state.Heads, head)
-		}
-		state.InProgress = len(state.Heads) != 0
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return state, fmt.Errorf("read merge state: %w", err)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
 	}
-	return state, nil
+	if err != nil {
+		return nil, fmt.Errorf("read merge state: %w", err)
+	}
+	return strings.Fields(string(data)), nil
 }
 
 type MergePreflight struct {

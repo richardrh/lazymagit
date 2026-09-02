@@ -41,7 +41,7 @@ func TestWorktreeBrowserShowsAndFiltersLinkedWorktrees(t *testing.T) {
 	sendE2EKey(t, m, keyMsg("Z"))
 	sendE2EKey(t, m, keyMsg("g"))
 	plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
-	for _, want := range []string{"primary", "listed-topic", "Close"} {
+	for _, want := range []string{"separate checkouts", "Each worktree is another folder", "[current]", "[linked]", "listed-topic", "Filter worktrees", "Close"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("worktree browser omitted %q:\n%s", want, plain)
 		}
@@ -82,14 +82,14 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 			t.Fatalf("%s did not enter worktree transient: %q", prefix, m.resolver.ActiveTransient())
 		}
 		sendE2EKey(t, m, keyMsg("g"))
-		if m.mode != modeWorkflow || m.workflow == nil || m.workflow.dialog.Title != "Worktrees" {
+		if m.mode != modeWorkflow || m.workflow == nil || m.workflow.dialog.Title != "Worktrees — separate checkouts" {
 			t.Fatalf("%s g did not list worktrees", prefix)
 		}
 		if len(m.workflow.dialog.Fields) != 1 || m.workflow.dialog.Fields[0].Kind != WorkflowSearch {
 			t.Fatalf("%s g did not open searchable worktrees: %+v", prefix, m.workflow.dialog.Fields)
 		}
 		plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
-		for _, want := range []string{"primary", "Close"} {
+		for _, want := range []string{"[current]", "separate checkouts", "Filter worktrees", "Close"} {
 			if !strings.Contains(plain, want) {
 				t.Fatalf("%s g omitted %q:\n%s", prefix, want, plain)
 			}
@@ -119,6 +119,12 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	worktreeE2ETab(t, m) // revision: HEAD
 	worktreeE2ETab(t, m) // detached
 	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // no-checkout
+	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // lock on create
+	sendE2EKey(t, m, keyMsg("space"))
+	worktreeE2ETab(t, m) // lock reason
+	worktreeE2EText(t, m, "portable disk")
 	worktreeE2ETab(t, m) // force
 	worktreeE2ETab(t, m) // submit
 	worktreeE2EEnter(t, m)
@@ -126,6 +132,13 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	if got := r.git("-C", detached, "branch", "--show-current"); got != "" {
 		t.Fatalf("detached worktree branch = %q", got)
 	}
+	if _, err := os.Stat(filepath.Join(detached, "base.txt")); !os.IsNotExist(err) {
+		t.Fatalf("no-checkout worktree unexpectedly populated base.txt: %v", err)
+	}
+	if got := r.git("worktree", "list", "--porcelain"); !strings.Contains(got, "locked portable disk") {
+		t.Fatalf("lock-on-create state missing:\n%s", got)
+	}
+	r.git("worktree", "unlock", detached)
 
 	branched := filepath.Join(root, "branched")
 	sendE2EKey(t, m, keyMsg("%"))
@@ -134,6 +147,9 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	worktreeE2ETab(t, m)
 	worktreeE2EText(t, m, "worktree-topic")
 	worktreeE2ETab(t, m) // start: HEAD
+	worktreeE2ETab(t, m) // no-checkout
+	worktreeE2ETab(t, m) // lock
+	worktreeE2ETab(t, m) // lock reason
 	worktreeE2ETab(t, m) // force
 	worktreeE2ETab(t, m) // submit
 	worktreeE2EEnter(t, m)

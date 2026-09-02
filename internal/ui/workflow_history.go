@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
@@ -17,7 +18,7 @@ import (
 func init() {
 	pickOptions := []string{"magit-cherry-pick:--mainline", "magit-merge:--strategy", "transient:magit-cherry-pick:--ff", "transient:magit-cherry-pick:-x", "magit:--signoff"}
 	rebaseOptions := []string{"transient:magit-rebase:--keep-empty", "transient:magit-rebase:--rebase-merges=", "transient:magit-rebase:--update-refs", "transient:magit-rebase:--autostash", "transient:magit-rebase:--force-rebase", "magit-merge:--strategy", "magit:--signoff"}
-	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent"}
+	bisectOptions := []string{"transient:magit-bisect:--no-checkout", "transient:magit-bisect:--first-parent", "magit-bisect:--term-old", "magit-bisect:--term-new"}
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-cherry-pick", map[string][]string{
 		"magit-cherry-copy":  pickOptions,
 		"magit-cherry-apply": pickOptions,
@@ -190,31 +191,37 @@ func historyPickOptions(command WorkflowCommand) (gitbackend.PickOptions, error)
 		if !value.Enabled && value.Value == "" {
 			continue
 		}
-		upstream := historyOptionUpstream(id)
-		switch upstream {
-		case "magit-cherry-pick:--mainline":
-			n, err := strconv.Atoi(value.Value)
-			if err != nil || n <= 0 {
-				return opts, errors.New("mainline must be a positive integer")
-			}
-			opts.Mainline = n
-		case "magit-merge:--strategy":
-			opts.Strategy = value.Value
-		case "magit:--signoff":
-			opts.Signoff = true
-		case "transient:magit-cherry-pick:--ff":
-			opts.FastForward = true
-		case "transient:magit-cherry-pick:-x":
-			opts.RecordOrigin = true
-		case "transient:magit-cherry-pick:--edit":
-			return opts, errors.New("cherry-pick edit is adapted out: the TUI cannot safely preserve the editor session")
-		case "transient:magit-revert:--no-edit":
-			opts.NoEdit = true
-		default:
-			return opts, fmt.Errorf("%s is unavailable: no safe typed history option", upstream)
+		if err := applyHistoryPickOption(&opts, historyOptionUpstream(id), value); err != nil {
+			return opts, err
 		}
 	}
 	return opts, nil
+}
+
+func applyHistoryPickOption(opts *gitbackend.PickOptions, upstream string, value OptionValue) error {
+	switch upstream {
+	case "magit-cherry-pick:--mainline":
+		n, err := strconv.Atoi(value.Value)
+		if err != nil || n <= 0 {
+			return errors.New("mainline must be a positive integer")
+		}
+		opts.Mainline = n
+	case "magit-merge:--strategy":
+		opts.Strategy = value.Value
+	case "magit:--signoff":
+		opts.Signoff = true
+	case "transient:magit-cherry-pick:--ff":
+		opts.FastForward = true
+	case "transient:magit-cherry-pick:-x":
+		opts.RecordOrigin = true
+	case "transient:magit-cherry-pick:--edit":
+		return errors.New("cherry-pick edit is adapted out: the TUI cannot safely preserve the editor session")
+	case "transient:magit-revert:--no-edit":
+		opts.NoEdit = true
+	default:
+		return fmt.Errorf("%s is unavailable: no safe typed history option", upstream)
+	}
+	return nil
 }
 
 func openPickWorkflow(m *Model, revert, noCommit bool, command WorkflowCommand) tea.Cmd {
@@ -230,8 +237,8 @@ func openPickWorkflow(m *Model, revert, noCommit bool, command WorkflowCommand) 
 	if revert {
 		title, action = "Review revert", gitbackend.HistoryUIRevertStart
 	}
-	return openReviewedHistoryDialog(m, title, []WorkflowField{{Name: "revision", Label: "Commit revision", Kind: WorkflowText, Value: defaultRevision, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
-		return gitbackend.HistoryUIRequest{Action: action, Pick: opts, Revisions: []string{values["revision"]}}
+	return openReviewedHistoryDialog(m, title, []WorkflowField{{Name: "revision", Label: "Commit revisions (one per line)", Kind: WorkflowMultiline, Value: defaultRevision, Required: true}}, func(values WorkflowValues) gitbackend.HistoryUIRequest {
+		return gitbackend.HistoryUIRequest{Action: action, Pick: opts, Revisions: strings.Fields(values["revision"])}
 	})
 }
 
@@ -266,29 +273,36 @@ func rebaseOptions(command WorkflowCommand) (gitbackend.RebaseOptions, error) {
 		if !value.Enabled && value.Value == "" {
 			continue
 		}
-		switch historyOptionUpstream(id) {
-		case "transient:magit-rebase:--keep-empty":
-			opts.KeepEmpty = true
-		case "transient:magit-rebase:--rebase-merges=":
-			opts.RebaseMerges = true
-		case "transient:magit-rebase:--update-refs":
-			opts.UpdateRefs = true
-		case "transient:magit-rebase:--autostash":
-			opts.Autostash = true
-		case "transient:magit-rebase:--force-rebase":
-			opts.ForceRebase = true
-		case "transient:magit-rebase:--interactive":
-			// The suffix opens the bounded terminal todo editor; this infix is
-			// represented by choosing that suffix, not passed through as argv.
-		case "magit-merge:--strategy":
-			opts.Strategy = value.Value
-		case "magit:--signoff":
-			opts.Signoff = true
-		default:
-			return opts, fmt.Errorf("%s is unavailable: no safe typed rebase option", historyOptionUpstream(id))
+		if err := applyRebaseOption(&opts, historyOptionUpstream(id), value); err != nil {
+			return opts, err
 		}
 	}
 	return opts, nil
+}
+
+func applyRebaseOption(opts *gitbackend.RebaseOptions, upstream string, value OptionValue) error {
+	switch upstream {
+	case "transient:magit-rebase:--keep-empty":
+		opts.KeepEmpty = true
+	case "transient:magit-rebase:--rebase-merges=":
+		opts.RebaseMerges = true
+	case "transient:magit-rebase:--update-refs":
+		opts.UpdateRefs = true
+	case "transient:magit-rebase:--autostash":
+		opts.Autostash = true
+	case "transient:magit-rebase:--force-rebase":
+		opts.ForceRebase = true
+	case "transient:magit-rebase:--interactive":
+		// The suffix opens the bounded terminal todo editor; this infix is
+		// represented by choosing that suffix, not passed through as argv.
+	case "magit-merge:--strategy":
+		opts.Strategy = value.Value
+	case "magit:--signoff":
+		opts.Signoff = true
+	default:
+		return fmt.Errorf("%s is unavailable: no safe typed rebase option", upstream)
+	}
+	return nil
 }
 
 func openInteractiveRebaseWorkflow(m *Model, command WorkflowCommand) tea.Cmd {
@@ -451,6 +465,10 @@ func bisectOptions(command WorkflowCommand) (gitbackend.BisectStartOptions, erro
 			opts.NoCheckout = true
 		case "transient:magit-bisect:--first-parent":
 			opts.FirstParent = true
+		case "magit-bisect:--term-old":
+			opts.TermOld = value.Value
+		case "magit-bisect:--term-new":
+			opts.TermNew = value.Value
 		default:
 			return opts, fmt.Errorf("%s is unavailable: no safe typed bisect option", historyOptionUpstream(id))
 		}

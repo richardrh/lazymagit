@@ -91,57 +91,88 @@ func (m *Model) CycleGlobal() bool {
 	}
 	oldVisible := m.VisibleSectionIDs()
 	m.maxDepth = 0
-
-	rootFolded := false
-	descendantFolded := false
-	for _, root := range m.sections {
-		if root == nil || m.byID[root.id] != root {
-			continue
-		}
-		rootFolded = rootFolded || m.folded[root.id]
-		descendantFolded = descendantFolded || m.hasFoldedDescendant(root)
-	}
-
-	for _, root := range m.sections {
-		if root == nil || m.byID[root.id] != root {
-			continue
-		}
-		switch {
-		case rootFolded:
-			delete(m.folded, root.id)
-			m.foldChildren(root)
-		case descendantFolded:
-			m.unfoldTree(root)
-		default:
-			if len(root.children) > 0 {
-				m.folded[root.id] = true
-			}
-		}
+	roots := m.currentRoots()
+	state := m.globalCycleState(roots)
+	for _, root := range roots {
+		m.applyGlobalCycle(root, state)
 	}
 	m.retainVisibleCursor(oldVisible)
 	return true
+}
+
+type cycleState int
+
+const (
+	cycleCollapse cycleState = iota
+	cycleShowChildren
+	cycleExpand
+)
+
+func (m *Model) currentRoots() []*Section {
+	roots := make([]*Section, 0, len(m.sections))
+	for _, root := range m.sections {
+		if root != nil && m.byID[root.id] == root {
+			roots = append(roots, root)
+		}
+	}
+	return roots
+}
+
+func (m *Model) globalCycleState(roots []*Section) cycleState {
+	state := cycleCollapse
+	for _, root := range roots {
+		if m.folded[root.id] {
+			return cycleShowChildren
+		}
+		if m.hasFoldedDescendant(root) {
+			state = cycleExpand
+		}
+	}
+	return state
+}
+
+func (m *Model) applyGlobalCycle(root *Section, state cycleState) {
+	switch state {
+	case cycleShowChildren:
+		delete(m.folded, root.id)
+		m.foldChildren(root)
+	case cycleExpand:
+		m.unfoldTree(root)
+	case cycleCollapse:
+		if len(root.children) > 0 {
+			m.folded[root.id] = true
+		}
+	}
 }
 
 func (m *Model) sibling(id SectionID, direction int) SectionID {
 	if m.byID[id] == nil {
 		return ""
 	}
-	parent := m.parent[id]
-	nodes := m.sections
-	if parent != "" {
-		nodes = m.byID[parent].children
-	}
+	nodes := m.siblingNodes(id)
 	for i, section := range nodes {
-		if section == nil || section.id != id || m.byID[id] != section {
+		if section != m.byID[id] {
 			continue
 		}
-		for j := i + direction; j >= 0 && j < len(nodes); j += direction {
-			candidate := nodes[j]
-			if candidate != nil && m.byID[candidate.id] == candidate && m.isVisible(candidate.id) {
-				return candidate.id
-			}
+		return m.visibleSiblingFrom(nodes, i+direction, direction)
+	}
+	return ""
+}
+
+func (m *Model) siblingNodes(id SectionID) []*Section {
+	parent := m.parent[id]
+	if parent == "" {
+		return m.sections
+	}
+	return m.byID[parent].children
+}
+
+func (m *Model) visibleSiblingFrom(nodes []*Section, start, direction int) SectionID {
+	for i := start; i >= 0 && i < len(nodes); i += direction {
+		candidate := nodes[i]
+		if candidate != nil && m.byID[candidate.id] == candidate && m.isVisible(candidate.id) {
+			return candidate.id
 		}
-		break
 	}
 	return ""
 }

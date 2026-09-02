@@ -211,18 +211,7 @@ func (m *Model) transientGroupTitle(transient, title string) string {
 	case "magit-branch", "magit-branch-configure":
 		return "Configure " + branch
 	case "magit-pull":
-		switch {
-		case strings.Contains(title, "Pull arguments"):
-			return "Pull arguments"
-		case strings.Contains(title, "magit-get-upstream-branch"):
-			upstream := sanitizeSingleLine(strings.TrimSpace(m.snapshot.summary.Upstream))
-			if upstream == "" {
-				upstream = branch
-			}
-			return "Pull into " + upstream + " from"
-		default:
-			return "Pull into " + branch + " from"
-		}
+		return m.pullGroupTitle(title, branch)
 	case "magit-push":
 		return "Push " + branch + " to"
 	case "magit-rebase":
@@ -232,6 +221,19 @@ func (m *Model) transientGroupTitle(transient, title string) string {
 	default:
 		return "Commands"
 	}
+}
+
+func (m *Model) pullGroupTitle(title, branch string) string {
+	if strings.Contains(title, "Pull arguments") {
+		return "Pull arguments"
+	}
+	if strings.Contains(title, "magit-get-upstream-branch") {
+		upstream := sanitizeSingleLine(strings.TrimSpace(m.snapshot.summary.Upstream))
+		if upstream != "" {
+			branch = upstream
+		}
+	}
+	return "Pull into " + branch + " from"
 }
 
 func transientDefaultOption(binding keymap.Binding) OptionValue {
@@ -576,7 +578,30 @@ func (m *Model) dispatcherCatalog() []dispatcherSection {
 			}
 		}
 	}
-	return sections
+	return availableDispatcherCatalog(sections)
+}
+
+func availableDispatcherCatalog(sections []dispatcherSection) []dispatcherSection {
+	visible := make([]dispatcherSection, 0, len(sections))
+	for _, section := range sections {
+		filtered := dispatcherSection{Title: section.Title}
+		for _, column := range section.Columns {
+			entries := make([]menuEntry, 0, len(column))
+			for _, entry := range column {
+				if entry.Category == menuEntryMissing || entry.Category == menuEntryPresentation {
+					continue
+				}
+				entries = append(entries, entry)
+			}
+			if len(entries) > 0 {
+				filtered.Columns = append(filtered.Columns, entries)
+			}
+		}
+		if len(filtered.Columns) > 0 {
+			visible = append(visible, filtered)
+		}
+	}
+	return visible
 }
 
 func dispatcherEntry(sections []dispatcherSection, key string) (menuEntry, bool) {
@@ -596,29 +621,29 @@ func (catalog menuCatalog) entry(key string) (menuEntry, bool) {
 	if len(key) > 1 && !strings.ContainsRune(key, ' ') && strings.ContainsRune("-+=", rune(key[0])) {
 		key = strings.Join(strings.Split(key, ""), " ")
 	}
-	var fallback *menuEntry
-	var activeFallback *menuEntry
+	var matches []menuEntry
 	for _, group := range catalog.Groups {
 		for _, entry := range group.Entries {
-			if entry.Key == key {
-				copy := entry
-				if entry.Active && entry.Available {
-					return entry, true
-				}
-				if entry.Active && activeFallback == nil {
-					activeFallback = &copy
-				}
-				if fallback == nil {
-					fallback = &copy
-				}
+			if entry.Key != key {
+				continue
 			}
+			if entry.Active && entry.Available {
+				return entry, true
+			}
+			matches = append(matches, entry)
 		}
 	}
-	if activeFallback != nil {
-		return *activeFallback, true
+	return preferredMenuEntry(matches)
+}
+
+func preferredMenuEntry(matches []menuEntry) (menuEntry, bool) {
+	for _, entry := range matches {
+		if entry.Active {
+			return entry, true
+		}
 	}
-	if fallback != nil {
-		return *fallback, true
+	if len(matches) > 0 {
+		return matches[0], true
 	}
 	return menuEntry{}, false
 }
@@ -775,6 +800,9 @@ func visibleTransientCatalog(catalog menuCatalog) menuCatalog {
 	for _, group := range catalog.Groups {
 		filtered := menuGroup{Title: group.Title}
 		for _, entry := range group.Entries {
+			if entry.Category == menuEntryMissing || entry.Category == menuEntryPresentation {
+				continue
+			}
 			if !entry.Active && hasDirectConfigureCondition(entry.Conditions) {
 				continue
 			}
@@ -846,7 +874,7 @@ func transientViewportHeight(catalog menuCatalog, width, height int) int {
 }
 
 func transientHintLines(width int, clipped bool, first, end, total int) []string {
-	components := []string{"Esc/q close", "× unavailable"}
+	components := []string{"Esc/q close", "! unavailable here"}
 	if clipped {
 		components = append(components, "↑/↓ PgUp/PgDn", strconv.Itoa(first)+"-"+strconv.Itoa(end)+"/"+strconv.Itoa(total))
 	}
@@ -863,21 +891,7 @@ func transientHintLines(width int, clipped bool, first, end, total int) []string
 }
 
 func renderCompactTransient(catalog menuCatalog, width, height, offset int) string {
-	var entries []string
-	for _, group := range catalog.Groups {
-		for _, entry := range group.Entries {
-			if entry.Available {
-				key := entry.Display
-				if key == "" {
-					key = entry.Key
-				}
-				entries = append(entries, sanitizeSingleLine(key)+" "+sanitizeSingleLine(entry.Label))
-			}
-		}
-	}
-	if len(entries) == 0 {
-		entries = append(entries, "× unavailable")
-	}
+	entries := compactTransientEntries(catalog)
 	maximum := max(0, len(entries)-height)
 	offset = min(max(0, offset), maximum)
 	end := min(len(entries), offset+height)
@@ -892,18 +906,42 @@ func renderCompactTransient(catalog menuCatalog, width, height, offset int) stri
 		lines = append(lines, truncate(linePrefix+entry, width))
 	}
 	if maximum > 0 && len(lines) > 0 {
-		marker := ""
-		if offset > 0 {
-			marker += "↑"
-		}
-		if end < len(entries) {
-			marker += "↓"
-		}
-		marker += strconv.Itoa(offset+1) + "-" + strconv.Itoa(end) + "/" + strconv.Itoa(len(entries))
+		marker := compactTransientMarker(offset, end, len(entries))
 		available := max(0, width-ansi.StringWidth(marker)-1)
 		lines[len(lines)-1] = truncate(lines[len(lines)-1], available) + " " + marker
 	}
 	return fitBlock(strings.Join(lines, "\n"), width, height)
+}
+
+func compactTransientEntries(catalog menuCatalog) []string {
+	var entries []string
+	for _, group := range catalog.Groups {
+		for _, entry := range group.Entries {
+			if !entry.Available {
+				continue
+			}
+			key := entry.Display
+			if key == "" {
+				key = entry.Key
+			}
+			entries = append(entries, sanitizeSingleLine(key)+" "+sanitizeSingleLine(entry.Label))
+		}
+	}
+	if len(entries) == 0 {
+		return []string{"× unavailable"}
+	}
+	return entries
+}
+
+func compactTransientMarker(offset, end, total int) string {
+	marker := ""
+	if offset > 0 {
+		marker += "↑"
+	}
+	if end < total {
+		marker += "↓"
+	}
+	return marker + strconv.Itoa(offset+1) + "-" + strconv.Itoa(end) + "/" + strconv.Itoa(total)
 }
 
 func transientCanvas(catalog menuCatalog, innerW int) []string {

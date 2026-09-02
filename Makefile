@@ -15,7 +15,7 @@ test-race:
 crap-check:
 	@profile=$$(mktemp); trap 'rm -f "$$profile"' EXIT; \
 		go test -coverprofile="$$profile" ./... && \
-		go run ./internal/quality/cmd/crap -coverprofile "$$profile" -threshold 15.000000001
+		go run ./internal/quality/cmd/crap -coverprofile "$$profile" -threshold 12.000000001
 
 # Once keymapdoc exposes -check, replace this probe with an unconditional call.
 keymapdoc-check:

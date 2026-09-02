@@ -305,35 +305,54 @@ func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 func (m *Model) Init() tea.Cmd { return m.loadSnapshotCmd() }
 
 func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := message.(type) {
-	case tea.WindowSizeMsg:
-		return m, m.handleWindowSizeMsg(msg)
-	case snapshotMsg:
-		return m, m.handleSnapshotMsg(msg)
-	case operationMsg:
-		return m, m.handleOperationMsg(msg)
-	case workflowPreflightMsg:
-		return m, m.handleWorkflowPreflightMsg(msg)
-	case workflowReviewMsg:
-		return m, m.handleWorkflowReviewMsg(msg)
-	case workflowLoadMsg:
-		return m, m.handleWorkflowLoadMsg(msg)
-	case graphMsg:
-		return m, m.handleGraphMsg(msg)
-	case revisionMsg:
-		return m, m.handleRevisionMsg(msg)
-	case blameMsg:
-		return m, m.handleBlameMsg(msg)
-	case diffMsg:
-		return m, m.handleDiffMsg(msg)
-	case branchesMsg:
-		return m, m.handleBranchesMsg(msg)
-	case vimGTimeoutMsg:
-		return m, m.handleVimGTimeoutMsg(msg)
-	case tea.KeyPressMsg:
+	if cmd, handled := m.handleAppMessage(message); handled {
+		return m, cmd
+	}
+	if cmd, handled := m.handleDetailMessage(message); handled {
+		return m, cmd
+	}
+	if msg, ok := message.(tea.KeyPressMsg); ok {
 		return m.handleKey(msg)
 	}
 	return m, nil
+}
+
+func (m *Model) handleAppMessage(message tea.Msg) (tea.Cmd, bool) {
+	switch msg := message.(type) {
+	case tea.WindowSizeMsg:
+		return m.handleWindowSizeMsg(msg), true
+	case snapshotMsg:
+		return m.handleSnapshotMsg(msg), true
+	case operationMsg:
+		return m.handleOperationMsg(msg), true
+	case workflowPreflightMsg:
+		return m.handleWorkflowPreflightMsg(msg), true
+	case workflowReviewMsg:
+		return m.handleWorkflowReviewMsg(msg), true
+	case workflowLoadMsg:
+		return m.handleWorkflowLoadMsg(msg), true
+	case branchesMsg:
+		return m.handleBranchesMsg(msg), true
+	case vimGTimeoutMsg:
+		return m.handleVimGTimeoutMsg(msg), true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) handleDetailMessage(message tea.Msg) (tea.Cmd, bool) {
+	switch msg := message.(type) {
+	case graphMsg:
+		return m.handleGraphMsg(msg), true
+	case revisionMsg:
+		return m.handleRevisionMsg(msg), true
+	case blameMsg:
+		return m.handleBlameMsg(msg), true
+	case diffMsg:
+		return m.handleDiffMsg(msg), true
+	default:
+		return nil, false
+	}
 }
 
 func (m *Model) handleWindowSizeMsg(msg tea.WindowSizeMsg) tea.Cmd {
@@ -534,24 +553,32 @@ func (m *Model) handleGraphMsg(msg graphMsg) tea.Cmd {
 	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.graphCursor = -1
 	if msg.err != nil {
-		failure := "Unable to load history:\n"
-		if msg.title == "" || msg.title == "All refs graph" {
-			failure = "Unable to load graph:\n"
-		}
-		m.detail = failure + sanitizeSingleLine(msg.err.Error())
-		m.graphEntries = nil
+		m.installGraphFailure(msg)
 	} else {
-		for line := range msg.entries {
-			if m.graphCursor < 0 || line < m.graphCursor {
-				m.graphCursor = line
-			}
-		}
-		if m.graphCursor >= 0 {
-			m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-		}
+		m.installGraphCursor(msg.entries)
 	}
 	m.resetDetailSelection()
 	return nil
+}
+
+func (m *Model) installGraphFailure(msg graphMsg) {
+	failure := "Unable to load history:\n"
+	if msg.title == "" || msg.title == "All refs graph" {
+		failure = "Unable to load graph:\n"
+	}
+	m.detail = failure + sanitizeSingleLine(msg.err.Error())
+	m.graphEntries = nil
+}
+
+func (m *Model) installGraphCursor(entries map[int]gitbackend.LogEntry) {
+	for line := range entries {
+		if m.graphCursor < 0 || line < m.graphCursor {
+			m.graphCursor = line
+		}
+	}
+	if m.graphCursor >= 0 {
+		m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
+	}
 }
 
 func (m *Model) handleBlameMsg(msg blameMsg) tea.Cmd {
@@ -930,10 +957,8 @@ func (m *Model) handleResolvedStatusResult(result keymap.Result) tea.Cmd {
 	if m.workflowHandlers[result.Binding.Command] != nil {
 		return m.perform(result.Binding.Command)
 	}
-	for id, capability := range m.workflowCapabilities {
-		if capability.Transient == "" && capability.UpstreamCommand == result.Binding.UpstreamCommand {
-			return m.perform(id)
-		}
+	if id, ok := m.directWorkflowCommand(result.Binding.UpstreamCommand); ok {
+		return m.perform(id)
 	}
 	if result.Binding.Handler == keymap.HandlerUnsupported {
 		m.setMessage(fmt.Sprintf("%s unavailable: %s (%s)", result.Binding.Display, result.Binding.UpstreamCommand, result.Binding.Parity))
@@ -943,7 +968,23 @@ func (m *Model) handleResolvedStatusResult(result keymap.Result) tea.Cmd {
 	return nil
 }
 
+func (m *Model) directWorkflowCommand(upstream string) (keymap.CommandID, bool) {
+	for id, capability := range m.workflowCapabilities {
+		if capability.Transient == "" && capability.UpstreamCommand == upstream {
+			return id, true
+		}
+	}
+	return keymap.CommandNone, false
+}
+
 func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
+	if cmd, handled := m.handleStatusModeKey(msg, key); handled {
+		return cmd, true
+	}
+	return m.handleStatusNavigation(msg, key)
+}
+
+func (m *Model) handleStatusModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 	if m.handleStatusSearchKey(key, msg.Key().Text) {
 		m.cancelPrefix()
 		return m.loadDetailCmd(), true
@@ -977,6 +1018,10 @@ func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd
 		m.cancelPrefix()
 		return m.openInteractiveChange(request), true
 	}
+	return nil, false
+}
+
+func (m *Model) handleStatusNavigation(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
 		if cmd, handled := m.handleNavigationKey(msg); handled {
 			m.cancelPrefix()
@@ -1099,29 +1144,38 @@ func (m *Model) handleAddRemoteKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+f":
 		m.remoteFetch = !m.remoteFetch
 	case "enter":
-		if m.remoteField == 0 {
-			m.remoteField = 1
-			return m, nil
-		}
-		name, url, fetch := strings.TrimSpace(m.remoteInput[0]), m.remoteInput[1], m.remoteFetch
-		if name == "" || url == "" {
-			m.setError(errors.New("remote name and URL are required"))
-			return m, nil
-		}
-		m.setMode(modeStatus)
-		return m, m.startOperation("add remote", func(ctx context.Context) error { return m.addRemote(ctx, name, url, fetch) })
+		return m, m.submitAddRemote()
 	case "backspace", "ctrl+h":
-		value := m.remoteInput[m.remoteField]
-		if value != "" {
-			_, size := utf8.DecodeLastRuneInString(value)
-			m.remoteInput[m.remoteField] = value[:len(value)-size]
-		}
+		m.deleteRemoteInputRune()
 	default:
 		if text := msg.Key().Text; text != "" {
 			m.remoteInput[m.remoteField] += text
 		}
 	}
 	return m, nil
+}
+
+func (m *Model) submitAddRemote() tea.Cmd {
+	if m.remoteField == 0 {
+		m.remoteField = 1
+		return nil
+	}
+	name, url, fetch := strings.TrimSpace(m.remoteInput[0]), m.remoteInput[1], m.remoteFetch
+	if name == "" || url == "" {
+		m.setError(errors.New("remote name and URL are required"))
+		return nil
+	}
+	m.setMode(modeStatus)
+	return m.startOperation("add remote", func(ctx context.Context) error { return m.addRemote(ctx, name, url, fetch) })
+}
+
+func (m *Model) deleteRemoteInputRune() {
+	value := m.remoteInput[m.remoteField]
+	if value == "" {
+		return
+	}
+	_, size := utf8.DecodeLastRuneInString(value)
+	m.remoteInput[m.remoteField] = value[:len(value)-size]
 }
 
 func (m *Model) handleRemoteKey(key string) (tea.Model, tea.Cmd) {
@@ -1138,27 +1192,30 @@ func (m *Model) handleRemoteKey(key string) (tea.Model, tea.Cmd) {
 			m.remoteCursor--
 		}
 	case "enter":
-		if len(m.snapshot.remotes) == 0 {
-			return m, nil
-		}
-		remote := m.snapshot.remotes[m.remoteCursor].Name
-		m.setMode(modeStatus)
-		if m.remotePurpose == remoteConfigureAndPush {
-			return m, m.startOperation("push and set upstream", func(ctx context.Context) error {
-				return m.pushSetUpstream(ctx, remote)
-			})
-		}
-		if m.remotePurpose == remoteConfigurePush {
-			return m, m.startOperation("configure and fetch push remote", func(ctx context.Context) error {
-				if err := m.setPushRemote(ctx, remote); err != nil {
-					return err
-				}
-				return m.fetchPush(ctx)
-			})
-		}
-		return m, m.startOperation("fetch "+sanitizeSingleLine(remote), func(ctx context.Context) error { return m.fetch(ctx, remote) })
+		return m, m.submitSelectedRemote()
 	}
 	return m, nil
+}
+
+func (m *Model) submitSelectedRemote() tea.Cmd {
+	if len(m.snapshot.remotes) == 0 {
+		return nil
+	}
+	remote := m.snapshot.remotes[m.remoteCursor].Name
+	m.setMode(modeStatus)
+	switch m.remotePurpose {
+	case remoteConfigureAndPush:
+		return m.startOperation("push and set upstream", func(ctx context.Context) error { return m.pushSetUpstream(ctx, remote) })
+	case remoteConfigurePush:
+		return m.startOperation("configure and fetch push remote", func(ctx context.Context) error {
+			if err := m.setPushRemote(ctx, remote); err != nil {
+				return err
+			}
+			return m.fetchPush(ctx)
+		})
+	default:
+		return m.startOperation("fetch "+sanitizeSingleLine(remote), func(ctx context.Context) error { return m.fetch(ctx, remote) })
+	}
 }
 
 func (m *Model) cancelPrefix() {
@@ -1253,38 +1310,49 @@ func (m *Model) switchSelectedBranch() tea.Cmd {
 	return m.startOperation("switch branch", func(ctx context.Context) error { return m.repo.SwitchBranch(ctx, branch.Name) })
 }
 
+type detailScrollBehavior struct {
+	action string
+	amount int
+}
+
+var detailScrollBehaviors = map[string]detailScrollBehavior{
+	"down":   {action: "lines", amount: 1},
+	"up":     {action: "lines", amount: -1},
+	"home":   {action: "home"},
+	"end":    {action: "end"},
+	"]":      {action: "hunks", amount: 1},
+	"[":      {action: "hunks", amount: -1},
+	"pgdown": {action: "pages", amount: 1},
+	"ctrl+d": {action: "half-pages", amount: 1},
+	"pgup":   {action: "pages", amount: -1},
+	"ctrl+u": {action: "half-pages", amount: -1},
+}
+
 func (m *Model) handleDetailScroll(key string) (tea.Cmd, bool) {
 	viewport := m.detailViewportHeight()
-	if viewport <= 0 {
+	behavior, handled := detailScrollBehaviors[key]
+	if viewport <= 0 || !handled {
 		return nil, false
 	}
-	page := viewport
-	halfPage := max(1, viewport/2)
-	switch key {
-	case "down":
-		m.scrollDetail(1)
-	case "up":
-		m.scrollDetail(-1)
+	m.applyDetailScrollBehavior(behavior, viewport)
+	return nil, true
+}
+
+func (m *Model) applyDetailScrollBehavior(behavior detailScrollBehavior, viewport int) {
+	switch behavior.action {
+	case "lines":
+		m.scrollDetail(behavior.amount)
 	case "home":
 		m.detailOffset = 0
 	case "end":
 		m.detailOffset = m.detailMaximumOffset()
-	case "]":
-		m.scrollDetailHunk(1)
-	case "[":
-		m.scrollDetailHunk(-1)
-	case "pgdown":
-		m.scrollDetail(page)
-	case "ctrl+d":
-		m.scrollDetail(halfPage)
-	case "pgup":
-		m.scrollDetail(-page)
-	case "ctrl+u":
-		m.scrollDetail(-halfPage)
-	default:
-		return nil, false
+	case "hunks":
+		m.scrollDetailHunk(behavior.amount)
+	case "pages":
+		m.scrollDetail(behavior.amount * viewport)
+	case "half-pages":
+		m.scrollDetail(behavior.amount * max(1, viewport/2))
 	}
-	return nil, true
 }
 
 func (m *Model) scrollDetail(delta int) {

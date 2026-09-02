@@ -998,28 +998,35 @@ func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQ
 		if !ok || !value.Enabled && value.Value == "" {
 			continue
 		}
-		switch binding.UpstreamCommand {
-		case "magit-for-each-ref:--contains":
-			query.Contains = value.Value
-		case "transient:magit-show-refs:--merged=":
-			query.MergedTo = value.Value
-		case "transient:magit-show-refs:--merged":
-			query.MergedTo = "HEAD"
-		case "transient:magit-show-refs:--no-merged=":
-			query.NoMergedTo = value.Value
-		case "transient:magit-show-refs:--no-merged":
-			query.NoMergedTo = "HEAD"
-		case "magit-for-each-ref:--sort":
-			sort, err := refSortFromOption(value.Value)
-			if err != nil {
-				return query, err
-			}
-			query.Sort = sort
-		default:
-			return query, fmt.Errorf("unsupported refs option %s", binding.UpstreamCommand)
+		if err := applyRefQueryOption(&query, binding.UpstreamCommand, value); err != nil {
+			return query, err
 		}
 	}
 	return query, nil
+}
+
+func applyRefQueryOption(query *gitbackend.RefQuery, upstream string, value OptionValue) error {
+	switch upstream {
+	case "magit-for-each-ref:--contains":
+		query.Contains = value.Value
+	case "transient:magit-show-refs:--merged=":
+		query.MergedTo = value.Value
+	case "transient:magit-show-refs:--merged":
+		query.MergedTo = "HEAD"
+	case "transient:magit-show-refs:--no-merged=":
+		query.NoMergedTo = value.Value
+	case "transient:magit-show-refs:--no-merged":
+		query.NoMergedTo = "HEAD"
+	case "magit-for-each-ref:--sort":
+		sort, err := refSortFromOption(value.Value)
+		if err != nil {
+			return err
+		}
+		query.Sort = sort
+	default:
+		return fmt.Errorf("unsupported refs option %s", upstream)
+	}
+	return nil
 }
 
 func runRefsInspection(m *Model, title string, command WorkflowCommand, focus string) tea.Cmd {

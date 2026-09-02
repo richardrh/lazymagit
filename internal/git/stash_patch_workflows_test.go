@@ -111,6 +111,57 @@ func TestStashKeepIndexAndBranch(t *testing.T) {
 	}
 }
 
+func TestStashSnapshotStoresBothLayersWithoutChangingThem(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("staged.txt", "base staged\n")
+	r.write("worktree.txt", "base worktree\n")
+	r.commitAll("base")
+	r.write("staged.txt", "index snapshot\n")
+	r.git("add", "--", "staged.txt")
+	r.write("worktree.txt", "worktree snapshot\n")
+	repo, _ := Discover(r.dir)
+
+	beforeIndex := r.git("diff", "--cached", "--binary")
+	beforeWorktree := r.git("diff", "--binary")
+	var records []ProcessRecord
+	recorded := WithProcessRecorder(ctx, func(record ProcessRecord) { records = append(records, record) })
+	if err := repo.StashSnapshot(recorded, "checkpoint"); err != nil {
+		t.Fatalf("StashSnapshot: %v", err)
+	}
+	if got := r.git("diff", "--cached", "--binary"); got != beforeIndex {
+		t.Fatalf("snapshot changed index:\n%s", got)
+	}
+	if got := r.git("diff", "--binary"); got != beforeWorktree {
+		t.Fatalf("snapshot changed worktree:\n%s", got)
+	}
+	stashes, err := repo.Stashes(ctx)
+	if err != nil || len(stashes) != 1 || !strings.Contains(stashes[0].Subject, "checkpoint") {
+		t.Fatalf("snapshot stash = %#v, %v", stashes, err)
+	}
+	details, err := repo.ShowStash(ctx, stashes[0].ID)
+	if err != nil || !strings.Contains(details.Patch, "+index snapshot") || !strings.Contains(details.Patch, "+worktree snapshot") {
+		t.Fatalf("snapshot details = %#v, %v", details, err)
+	}
+	if len(records) != 1 || len(records[0].Args) != 5 || strings.Join(records[0].Args[:4], "\x00") != "stash\x00store\x00--message\x00checkpoint" || records[0].Args[4] != stashes[0].ID {
+		t.Fatalf("snapshot process records = %#v", records)
+	}
+}
+
+func TestStashSnapshotRejectsCleanRepositoryWithoutCreatingEntry(t *testing.T) {
+	ctx := context.Background()
+	r := newTestRepo(t)
+	r.write("file", "base\n")
+	r.commitAll("base")
+	repo, _ := Discover(r.dir)
+	if err := repo.StashSnapshot(ctx, "empty"); err == nil || !strings.Contains(err.Error(), "no tracked changes") {
+		t.Fatalf("clean snapshot error = %v", err)
+	}
+	if stashes, err := repo.Stashes(ctx); err != nil || len(stashes) != 0 {
+		t.Fatalf("clean snapshot created entry: %#v, %v", stashes, err)
+	}
+}
+
 func TestStashPopRestoresIndexAndClearRequiresConfirmation(t *testing.T) {
 	ctx := context.Background()
 	r := newTestRepo(t)

@@ -410,28 +410,30 @@ func (d *DiffDocument) ChangedLineSelectionsPatch(fileIndex int, selections []In
 		if !selectedHunk {
 			continue
 		}
-		whole := false
-		selected := make([]bool, len(source.Lines))
-		for _, selection := range hunkSelections {
-			if selection.WholeHunk {
-				whole = true
-				break
-			}
-			for line := selection.Start; line < selection.End; line++ {
-				selected[line] = true
-			}
-		}
-		if whole {
-			writeHunk(&b, source)
-			continue
-		}
-		refined, ok := refineHunk(source, selected)
+		selected, ok := selectedDiffHunk(source, hunkSelections)
 		if !ok {
 			return nil, ErrInvalidChangePatchRegion
 		}
-		writeHunk(&b, refined)
+		writeHunk(&b, selected)
 	}
 	return []byte(b.String()), nil
+}
+
+func selectedDiffHunk(source DiffHunk, selections []InteractiveChangeSelection) (DiffHunk, bool) {
+	if selections[0].WholeHunk {
+		return source, true
+	}
+	selected := make([]bool, len(source.Lines))
+	for _, selection := range selections {
+		selectDiffLines(selected, selection.Start, selection.End)
+	}
+	return refineHunk(source, selected)
+}
+
+func selectDiffLines(selected []bool, start, end int) {
+	for line := start; line < end; line++ {
+		selected[line] = true
+	}
 }
 
 func refineHunk(source DiffHunk, selected []bool) (DiffHunk, bool) {
@@ -814,6 +816,18 @@ const (
 // ApplyChangePatch validates patch structure before passing it on stdin. Patch
 // paths are never command arguments, so names beginning with '-' stay literal.
 func (r *Repository) ApplyChangePatch(ctx context.Context, patch []byte, operation ChangePatchOperation) error {
+	if err := validateChangePatch(patch); err != nil {
+		return err
+	}
+	args, err := changePatchArgs(operation)
+	if err != nil {
+		return err
+	}
+	args = append(args, "--whitespace=nowarn", "-")
+	return r.runInput(ctx, patch, args...)
+}
+
+func validateChangePatch(patch []byte) error {
 	if len(patch) > changeDiffLimit {
 		return ErrChangeDiffTooLarge
 	}
@@ -829,22 +843,22 @@ func (r *Repository) ApplyChangePatch(ctx context.Context, patch []byte, operati
 			return err
 		}
 	}
-	args := []string{"apply"}
-	switch operation {
-	case ChangePatchStage:
-		args = append(args, "--cached")
-	case ChangePatchUnstage:
-		args = append(args, "--cached", "--reverse")
-	case ChangePatchApply:
-	case ChangePatchReverse:
-		args = append(args, "--reverse")
-	case ChangePatchDiscardStaged:
-		args = append(args, "--index", "--reverse")
-	default:
-		return errors.New("unknown change patch operation")
+	return nil
+}
+
+func changePatchArgs(operation ChangePatchOperation) ([]string, error) {
+	args := map[ChangePatchOperation][]string{
+		ChangePatchStage:         {"apply", "--cached"},
+		ChangePatchUnstage:       {"apply", "--cached", "--reverse"},
+		ChangePatchApply:         {"apply"},
+		ChangePatchReverse:       {"apply", "--reverse"},
+		ChangePatchDiscardStaged: {"apply", "--index", "--reverse"},
 	}
-	args = append(args, "--whitespace=nowarn", "-")
-	return r.runInput(ctx, patch, args...)
+	selected, ok := args[operation]
+	if !ok {
+		return nil, errors.New("unknown change patch operation")
+	}
+	return selected, nil
 }
 
 func (r *Repository) StageChangePatch(ctx context.Context, patch []byte) error {

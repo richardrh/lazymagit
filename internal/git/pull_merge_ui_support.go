@@ -40,7 +40,7 @@ func (r *Repository) ReviewMerge(ctx context.Context, args MergeArgs) (ReviewedM
 }
 
 func (r *Repository) ExecuteReviewedMerge(ctx context.Context, reviewed ReviewedMerge) (MergePreflight, error) {
-	if reviewed.HeadOID == "" || reviewed.Preflight.TargetOID == "" || reviewed.Args.Target == "" || reviewed.ArgsIdentity == "" || reviewed.ArgsIdentity != mergeArgsIdentity(reviewed.Args) {
+	if !validReviewedMerge(reviewed) {
 		return MergePreflight{}, ErrStalePlan
 	}
 	head, config, err := r.mergeReviewIdentity(ctx)
@@ -51,12 +51,18 @@ func (r *Repository) ExecuteReviewedMerge(ctx context.Context, reviewed Reviewed
 	if err != nil {
 		return current, err
 	}
-	if head != reviewed.HeadOID || !bytes.Equal(config, reviewed.Config) ||
-		current.TargetOID != reviewed.Preflight.TargetOID || current.State.InProgress ||
-		current.State.Dirty != reviewed.Preflight.State.Dirty {
+	if reviewedMergeChanged(reviewed, current, head, config) {
 		return current, ErrStalePlan
 	}
 	return r.MergeWithArgs(ctx, reviewed.Args)
+}
+
+func validReviewedMerge(reviewed ReviewedMerge) bool {
+	return reviewed.HeadOID != "" && reviewed.Preflight.TargetOID != "" && reviewed.Args.Target != "" && reviewed.ArgsIdentity != "" && reviewed.ArgsIdentity == mergeArgsIdentity(reviewed.Args)
+}
+
+func reviewedMergeChanged(reviewed ReviewedMerge, current MergePreflight, head string, config []byte) bool {
+	return head != reviewed.HeadOID || !bytes.Equal(config, reviewed.Config) || current.TargetOID != reviewed.Preflight.TargetOID || current.State.InProgress || current.State.Dirty != reviewed.Preflight.State.Dirty
 }
 
 func mergeArgsIdentity(args MergeArgs) string {
