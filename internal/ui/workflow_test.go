@@ -105,8 +105,8 @@ func TestMutationSerializationRejectsSecondKeyAction(t *testing.T) {
 	done := make(chan tea.Msg, 1)
 	go func() { done <- first() }()
 	<-started
-	m.scheme = schemeMagit
-	_, _ = m.Update(keyMsg("P"))
+
+	_, _ = m.Update(keyMsg("p"))
 	_, second := m.Update(keyMsg("p"))
 	if second != nil || m.operationRequest != request || !strings.Contains(m.message, "already in progress") {
 		t.Fatalf("second mutation was not rejected: cmd=%v request=%d/%d message=%q", second != nil, m.operationRequest, request, m.message)

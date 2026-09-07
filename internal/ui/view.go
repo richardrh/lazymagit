@@ -88,6 +88,9 @@ func (m *Model) renderCompactMainBody(bodyHeight int) string {
 func (m *Model) renderCompactStatus(width, height int) string {
 	ids, cursor := m.visibleStatusCursor()
 	start := min(max(0, cursor-height+1), max(0, len(ids)-height))
+	if m.statusViewportOffset >= 0 {
+		start = min(max(0, m.statusViewportOffset), max(0, len(ids)-height))
+	}
 	var lines []string
 	for _, id := range ids[start:min(len(ids), start+height)] {
 		section, row := m.tree.Section(id), m.rows[id]
@@ -157,7 +160,7 @@ func (m *Model) renderCompactDetail(width, height int) string {
 	for visibleIndex, line := range lines[start:min(len(lines), start+height)] {
 		absoluteIndex := start + visibleIndex
 		style := m.compactDetailStyle(line, absoluteIndex, rangeLow, rangeHigh)
-		styled = append(styled, style.Render(truncate(line, width)))
+		styled = append(styled, style.Render(horizontalViewport(line, width, m.horizontalOffset)))
 	}
 	return fitBlock(strings.Join(styled, "\n"), width, height)
 }
@@ -244,6 +247,9 @@ func (m *Model) statusPanelViewport(height int) []sectionmodel.SectionID {
 		}
 	}
 	start := max(0, cursor-height+1)
+	if m.statusViewportOffset >= 0 {
+		start = min(max(0, m.statusViewportOffset), max(0, len(ids)-height))
+	}
 	return ids[start:min(len(ids), start+height)]
 }
 
@@ -310,12 +316,18 @@ func (m *Model) renderDetailPanel(width, height int) string {
 	for visibleIndex, line := range lines {
 		absoluteIndex := start + visibleIndex
 		style := m.compactDetailStyle(line, absoluteIndex, rangeLow, rangeHigh)
-		styled = append(styled, style.Render(truncate(line, innerW)))
+		styled = append(styled, style.Render(horizontalViewport(line, innerW, m.horizontalOffset)))
 	}
 	for len(styled) < innerH {
 		styled = append(styled, "")
 	}
 	return panelStyle(width, height).Render(strings.Join(styled, "\n"))
+}
+func horizontalViewport(line string, width, offset int) string {
+	if offset <= 0 {
+		return truncate(line, width)
+	}
+	return ansi.Cut(line, offset, offset+max(0, width))
 }
 
 func (m *Model) detailHunkSelected(lineIndex int) bool {
@@ -361,11 +373,7 @@ func panelStyle(outerWidth, outerHeight int) lipgloss.Style {
 }
 
 func (m *Model) renderFooter() string {
-	scheme := "Vim"
-	if m.scheme == schemeMagit {
-		scheme = "Magit"
-	}
-	left := m.footerLeft(scheme)
+	left := m.footerLeft("Doom")
 	messageStyle := lipgloss.NewStyle().Foreground(colorCyan)
 	if m.isError {
 		messageStyle = messageStyle.Foreground(colorRed).Bold(true)
@@ -379,6 +387,9 @@ func (m *Model) renderFooter() string {
 }
 
 func (m *Model) footerLeft(scheme string) string {
+	if m.mode == modeWorkflow && m.workflow != nil && m.workflow.message != nil {
+		return m.messageFooter()
+	}
 	if m.resolver.PendingPrefix() != "" {
 		return m.pendingFooter(scheme)
 	}
@@ -389,7 +400,7 @@ func (m *Model) footerLeft(scheme string) string {
 }
 
 func (m *Model) pendingFooter(scheme string) string {
-	text := "[" + scheme + "] g …  g → first"
+	text := "[" + scheme + "] prefix …"
 	if m.resolver.ActiveTransient() != "" {
 		catalog, _ := m.activeTransientCatalog()
 		text = "[" + scheme + "] " + catalog.Title + " — choose a suffix"
@@ -400,7 +411,7 @@ func (m *Model) pendingFooter(scheme string) string {
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
 	if m.graphActive {
-		return gold.Render("Graph") + muted.Render("  ↑/↓ select  Enter inspect  c cherry-pick  V revert  X reset  Esc close")
+		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  q close")
 	}
 	if m.blameActive {
 		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
@@ -409,26 +420,21 @@ func (m *Model) statusFooter() string {
 		return gold.Render("Conflict") + muted.Render("  1 base inspect-only  2 ours  3 theirs  r review resolution  Esc close")
 	}
 	if m.revisionActive {
-		controls := "  p first parent  Esc close"
+		controls := "  Alt-p first parent  Esc close"
 		if m.graphReturn != nil {
-			controls = "  p first parent  Esc return graph"
+			controls = "  Alt-p first parent  Esc return graph"
 		}
 		return gold.Render("Revision") + muted.Render(controls)
 	}
 	var primary []string
-	for _, binding := range keymap.PrimaryBindings(schemeID(m.scheme)) {
+	for _, binding := range keymap.PrimaryBindings(keymap.SchemeDoom) {
 		primary = append(primary, gold.Render(binding.Display)+" "+binding.Label)
 	}
 	return m.appendOptionalFooter(strings.Join(primary, "  "), muted)
 }
 
 func (m *Model) appendOptionalFooter(left string, style lipgloss.Style) string {
-	optional := []string{"↑/↓ detail  [ prev  ] next  V hunks  v lines", "Ctrl-B Blame", "$ Processes", "Ctrl-G Graph", "Alt-M Mark", "? Commands"}
-	if m.scheme == schemeMagit {
-		optional = append(optional, "[Magit] F2 Vim", "n/p move")
-	} else {
-		optional = append(optional, "[Vim] F2 Magit", "j/k move")
-	}
+	optional := []string{"gr Refresh", "z Folds", "` Processes", "j/k Move", "[/] Siblings", "v/V Select", "Alt-r PR", "Alt-b Blame", "Alt-g Graph", "Alt-M Mark", "? Commands", "Q Quit"}
 	for _, item := range optional {
 		candidate := left + "  " + style.Render(item)
 		if ansi.StringWidth(candidate) <= m.width {
@@ -448,7 +454,7 @@ func modeFooter(current mode) string {
 	case modeHelp:
 		text = "q/Esc close  ↑/↓ PageUp/PageDown"
 	case modeProcess:
-		text = "y Copy output  $/q Close  ↑/↓ PageUp/PageDown"
+		text = "y Copy output  q/Esc Close  j/k Ctrl-b/Ctrl-f Scroll"
 	}
 	return lipgloss.NewStyle().Foreground(colorMuted).Render(text)
 }
@@ -553,6 +559,9 @@ func (m *Model) addRemoteOverlayContent() string {
 func (m *Model) renderWorkflowOverlay(width, height int) string {
 	if m.workflow == nil {
 		return fitBlock("", width, height)
+	}
+	if m.workflow.message != nil {
+		return m.renderMessageWorkflow(width, height)
 	}
 	if width < 4 || height < 3 {
 		return fitBlock(sanitizeSingleLine(m.workflow.dialog.Title), width, height)
@@ -686,6 +695,9 @@ func workflowActionLabel(w *workflowState) string {
 	}
 	if w.dialog.ReviewPreflight != nil {
 		if w.review != nil {
+			if w.message != nil && w.dialog.ActionLabel != "" {
+				return w.dialog.ActionLabel
+			}
 			return "Execute"
 		}
 		return "Review"

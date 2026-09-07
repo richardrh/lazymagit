@@ -36,9 +36,8 @@ func TestWorktreeBrowserShowsAndFiltersLinkedWorktrees(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "listed")
 	r.git("worktree", "add", linked, "listed-topic")
 	m := newE2EModel(t, r)
-	m.scheme = schemeMagit
 
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("g"))
 	plain := ansi.Strip(m.renderWorkflowOverlay(120, 24))
 	for _, want := range []string{"separate checkouts", "Each worktree is another folder", "[current]", "[linked]", "listed-topic", "Filter worktrees", "Close"} {
@@ -75,8 +74,8 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	m := newE2EModel(t, r)
 	root := t.TempDir()
 
-	// Both effective Magit aliases enter the same top-level transient.
-	for _, prefix := range []string{"Z", "%"} {
+	// Doom's worktree key and the non-conflicting Magit alias enter the same transient.
+	for _, prefix := range []string{"*", "%"} {
 		sendE2EKey(t, m, keyMsg(prefix))
 		if m.resolver.ActiveTransient() != "magit-worktree" {
 			t.Fatalf("%s did not enter worktree transient: %q", prefix, m.resolver.ActiveTransient())
@@ -105,7 +104,7 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	}
 
 	// Cancellation is non-mutating.
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("b"))
 	sendE2EKey(t, m, keyMsg("esc"))
 	if got := len(strings.Fields(r.git("worktree", "list", "--porcelain"))); got == 0 {
@@ -113,7 +112,7 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	}
 
 	detached := filepath.Join(root, "detached")
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("b"))
 	worktreeE2EText(t, m, detached)
 	worktreeE2ETab(t, m) // revision: HEAD
@@ -159,7 +158,7 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 	}
 
 	moved := filepath.Join(root, "moved")
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("m"))
 	worktreeE2ETab(t, m)
 	worktreeE2EText(t, m, moved)
@@ -175,7 +174,7 @@ func TestWorktreeKeysListAddBranchDetachedMoveAndCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("k"))
 	for attempts := 0; m.workflow.dialog.Fields[0].Value != movedChoice && attempts < len(m.workflow.dialog.Fields[0].Choices); attempts++ {
 		sendE2EKey(t, m, keyMsg("right"))
@@ -201,7 +200,7 @@ func TestWorktreeKeyRemovalRejectsStaleReviewedState(t *testing.T) {
 	r.git("worktree", "add", "--detach", linked, "HEAD")
 	m := newE2EModel(t, r)
 
-	sendE2EKey(t, m, keyMsg("Z"))
+	sendE2EKey(t, m, keyMsg("*"))
 	sendE2EKey(t, m, keyMsg("k"))
 	worktreeE2ETab(t, m) // force
 	sendE2EKey(t, m, keyMsg("space"))

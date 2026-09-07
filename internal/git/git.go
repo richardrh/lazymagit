@@ -42,10 +42,10 @@ func (e *CommandError) Error() string {
 
 func (e *CommandError) Unwrap() error { return e.Err }
 
-// ProcessRecord describes one git command launched by a mutating repository
-// operation. Args contains the logical git arguments and does not include the
-// internal -C option.
+// ProcessRecord describes one repository command. Program defaults to git.
+// Git Args omit the internal -C option; other programs retain their own argv.
 type ProcessRecord struct {
+	Program         string
 	Dir             string
 	Args            []string
 	Started         time.Time
@@ -406,6 +406,9 @@ func redactCaptured(text string, sensitive []string) (string, bool) {
 	for len(text) > 0 {
 		at, matched := -1, ""
 		for _, secret := range sensitive {
+			if secret == "" {
+				continue
+			}
 			if i := strings.Index(text, secret); i >= 0 && (at < 0 || i < at || i == at && len(secret) > len(matched)) {
 				at, matched = i, secret
 			}

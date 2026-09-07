@@ -85,11 +85,13 @@ func TestCommandArgvParserHelpers(t *testing.T) {
 
 func TestRawCommandStatusKeysReachReviewedWorkflows(t *testing.T) {
 	m := New(&gitbackend.Repository{})
-	m.loading, m.scheme = false, schemeMagit
-	for _, key := range []string{"Q", ":"} {
-		_, _ = m.Update(keyMsg(key))
+	m.loading = false
+	for _, sequence := range [][]string{{"|"}, {"?", "Q"}} {
+		for _, key := range sequence {
+			_, _ = m.Update(keyMsg(key))
+		}
 		if m.mode != modeWorkflow || m.workflow == nil || !strings.Contains(m.workflow.dialog.Confirmation, "UNSAFE") {
-			t.Fatalf("%s did not open reviewed Git workflow: mode=%v message=%q", key, m.mode, m.message)
+			t.Fatalf("%v did not open reviewed Git workflow: mode=%v message=%q", sequence, m.mode, m.message)
 		}
 		_, _ = m.handleWorkflowKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	}
@@ -112,7 +114,7 @@ func typeWorkflowText(t *testing.T, m *Model, text string) {
 
 func reviewTypedRun(t *testing.T, m *Model, input string) {
 	t.Helper()
-	m.scheme = schemeMagit
+
 	_, _ = m.Update(keyMsg("!"))
 	_, _ = m.Update(keyMsg("s"))
 	if m.workflow == nil || m.workflow.dialog.Title != "Run argv directly" {

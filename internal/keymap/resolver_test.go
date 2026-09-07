@@ -2,7 +2,7 @@ package keymap
 
 import "testing"
 
-var statusContext = Context{View: ViewStatus, Scheme: SchemeVim}
+var statusContext = Context{View: ViewStatus, Scheme: SchemeDoom}
 
 func TestResolverUsesGenericSequences(t *testing.T) {
 	tests := []struct {
@@ -12,7 +12,7 @@ func TestResolverUsesGenericSequences(t *testing.T) {
 		{[]string{"j"}, CommandMoveDown}, {[]string{"k"}, CommandMoveUp}, {[]string{"g", "g"}, CommandFirst}, {[]string{"G"}, CommandLast},
 		{[]string{"c", "c"}, CommandCommit}, {[]string{"b", "b"}, CommandSwitchBranch}, {[]string{"f", "u"}, CommandFetchUpstream},
 		{[]string{"f", "p"}, CommandFetchPush}, {[]string{"f", "e"}, CommandFetchElsewhere}, {[]string{"f", "a"}, CommandFetchAll},
-		{[]string{"P", "p"}, CommandPush}, {[]string{"M", "a"}, CommandAddRemote},
+		{[]string{"p", "p"}, CommandPush}, {[]string{"M", "a"}, CommandAddRemote},
 	}
 	for _, tt := range tests {
 		r := NewResolver()
@@ -30,12 +30,12 @@ func TestResolverUsesGenericSequences(t *testing.T) {
 }
 
 func TestBindingQueries(t *testing.T) {
-	status := BindingsFor(SchemeVim, ContextStatus)
+	status := BindingsFor(SchemeDoom, ContextStatus)
 	if len(status) == 0 {
-		t.Fatal("BindingsFor returned no Vim status bindings")
+		t.Fatal("BindingsFor returned no Doom status bindings")
 	}
 	for _, b := range status {
-		if b.Scheme != SchemeVim || b.Context != ContextStatus {
+		if b.Scheme != SchemeDoom || b.Context != ContextStatus {
 			t.Fatalf("BindingsFor returned mismatched binding: %+v", b)
 		}
 	}
@@ -51,7 +51,7 @@ func TestBindingQueries(t *testing.T) {
 			t.Fatalf("BindingsForTransient returned mismatched binding: %+v", b)
 		}
 	}
-	for _, scheme := range []Scheme{SchemeVim, SchemeMagit} {
+	for _, scheme := range []Scheme{SchemeDoom, SchemeMagit} {
 		got := PrimaryBindings(scheme)
 		if len(got) != 4 {
 			t.Fatalf("PrimaryBindings(%s) returned %d bindings", scheme, len(got))
@@ -64,13 +64,21 @@ func TestBindingQueries(t *testing.T) {
 	}
 }
 
-func TestAmbiguousVimGFlushesToRefresh(t *testing.T) {
+func TestDoomGRequiresACompleteSequence(t *testing.T) {
 	r := NewResolver()
 	if !r.Feed(statusContext, "g").Pending {
 		t.Fatal("g not pending")
 	}
-	if got := r.Flush(statusContext); got.Command != CommandRefresh {
-		t.Fatalf("flush = %+v", got)
+	if got := r.Flush(statusContext); got.Command != CommandNone || !got.Handled {
+		t.Fatalf("flush = %+v, want handled no-op", got)
+	}
+	if got := NewResolver().Feed(statusContext, "g"); got.Command != CommandNone || !got.Pending {
+		t.Fatalf("g prefix = %+v", got)
+	}
+	got := NewResolver()
+	got.Feed(statusContext, "g")
+	if result := got.Feed(statusContext, "r"); result.Command != CommandRefresh {
+		t.Fatalf("gr refresh suffix = %+v", result)
 	}
 }
 
@@ -111,7 +119,7 @@ func TestDomainConnectedSuffixAndDirectTopAreRecognized(t *testing.T) {
 
 func TestArbitraryLengthTrie(t *testing.T) {
 	original := registry
-	registry = append(Registry(), Binding{Sequence: []string{"ctrl+x", "m", "x"}, Display: "C-x m x", Command: "test.nested", Scheme: SchemeVim, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways})
+	registry = append(Registry(), Binding{Sequence: []string{"ctrl+x", "m", "x"}, Display: "C-x m x", Command: "test.nested", Scheme: SchemeDoom, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways})
 	defer func() { registry = original }()
 	if err := ValidateRegistry(registry); err != nil {
 		t.Fatal(err)
@@ -129,7 +137,7 @@ func TestRegistryValidation(t *testing.T) {
 	if err := ValidateRegistry(Registry()); err != nil {
 		t.Fatal(err)
 	}
-	base := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeVim, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	base := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeDoom, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways}
 	for name, bindings := range map[string][]Binding{
 		"duplicate": {base, func() Binding { b := base; b.Command = "two"; return b }()},
 		"handler":   {func() Binding { b := base; b.Handler = ""; return b }()},
@@ -142,7 +150,7 @@ func TestRegistryValidation(t *testing.T) {
 }
 
 func TestRegistryValidationHelpers(t *testing.T) {
-	base := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeVim, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	base := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeDoom, Context: ContextStatus, Handler: HandlerExecute, Availability: AvailabilityAlways}
 	if err := validateBinding(base); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +173,7 @@ func TestRegistryValidationHelpers(t *testing.T) {
 }
 
 func TestRegistryIdentityHelpers(t *testing.T) {
-	transient := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeVim, Context: ContextTransient + ".test", Handler: HandlerExecute, Occurrence: "one"}
+	transient := Binding{Sequence: []string{"x"}, Display: "x", Command: "one", Scheme: SchemeDoom, Context: ContextTransient + ".test", Handler: HandlerExecute, Occurrence: "one"}
 	occurrences := map[string]bool{}
 	if err := recordOccurrence(transient, occurrences); err != nil {
 		t.Fatal(err)

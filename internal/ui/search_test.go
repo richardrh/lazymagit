@@ -72,7 +72,6 @@ func TestStatusSearchDoesNotStealPatchRangeKeys(t *testing.T) {
 		}},
 	})
 	m.tree.RevealGlobalDepth(4)
-	m.scheme = schemeMagit
 
 	_, _ = m.Update(keyMsg("/"))
 	for _, char := range "a" {
@@ -107,7 +106,7 @@ func TestStatusSearchDoesNotStealPatchRangeKeys(t *testing.T) {
 	}
 	startLine := m.detailLine
 
-	_, _ = m.Update(keyMsg("n"))
+	_, _ = m.Update(keyMsg("j"))
 	if m.tree.Cursor() != first {
 		t.Fatalf("search cursor moved during patch range extension")
 	}

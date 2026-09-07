@@ -115,21 +115,6 @@ func TestInspectionRegistrationCoversSafeExpandedOccurrences(t *testing.T) {
 	}
 }
 
-func TestInspectionRegistersPortableBlameAndGraphInBothSchemes(t *testing.T) {
-	m := New(nil)
-	for _, scheme := range []keymap.Scheme{keymap.SchemeVim, keymap.SchemeMagit} {
-		for key, command := range map[string]keymap.CommandID{"ctrl+b": keymap.CommandBlame, "ctrl+g": keymap.CommandGraph} {
-			binding, ok := keymap.Find(scheme, keymap.ContextStatus, key)
-			if !ok || binding.Command != command || binding.Handler != keymap.HandlerExecute {
-				t.Fatalf("%s %s binding = %#v, found=%t", scheme, key, binding, ok)
-			}
-			if m.workflowHandlers[command] == nil {
-				t.Fatalf("portable %s binding has no workflow handler", key)
-			}
-		}
-	}
-}
-
 func TestBlameSelectionHelpers(t *testing.T) {
 	entries := map[int]gitbackend.BlameLine{
 		4: {Line: 2, CommitID: "2222222222222222222222222222222222222222"},

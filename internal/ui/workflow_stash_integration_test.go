@@ -24,12 +24,6 @@ func TestStashStatusSectionJumpAndDetailUsesStableOID(t *testing.T) {
 		t.Fatalf("status tree omitted stable stash row %q", wantID)
 	}
 
-	sendE2EKey(t, m, keyMsg("f2"))
-	sendE2EKey(t, m, keyMsg("j"))
-	sendE2EKey(t, m, keyMsg("z"))
-	if got := string(m.tree.Cursor()); got != "status/stashes" {
-		t.Fatalf("j z cursor = %q", got)
-	}
 	if m.tree.IsFolded("status/stashes") {
 		m.tree.ToggleFold("status/stashes")
 	}
@@ -53,7 +47,7 @@ func TestStashE2EPushRoutesSelectionAndCancellation(t *testing.T) {
 	r.write("tracked.txt", "first\n")
 	m := newE2EModel(t, r)
 
-	openStashByKeys(t, m, "z", "z")
+	openStashByKeys(t, m, "Z", "z")
 	setStashMessageAndSubmit(t, m, "first stash")
 	if got := r.git("stash", "list", "--format=%s"); !strings.Contains(got, "first stash") {
 		t.Fatalf("z z did not create stash: %q", got)
@@ -61,7 +55,7 @@ func TestStashE2EPushRoutesSelectionAndCancellation(t *testing.T) {
 
 	r.write("tracked.txt", "second\n")
 	r.write("other.txt", "leave this change\n")
-	sendE2EKey(t, m, keyMsg("z"))
+	sendE2EKey(t, m, keyMsg("Z"))
 	sendE2EKey(t, m, keyMsg("P"))
 	if m.mode == modeWorkflow {
 		t.Fatal("parent z P was an inert duplicate terminal instead of a child edge")
@@ -81,7 +75,7 @@ func TestStashE2EPushRoutesSelectionAndCancellation(t *testing.T) {
 		t.Fatal("child literal path selection stashed an unselected file")
 	}
 
-	openStashByKeys(t, m, "z", "a")
+	openStashByKeys(t, m, "Z", "a")
 	first := m.workflow.dialog.Fields[0].Value
 	sendE2EKey(t, m, keyMsg("space"))
 	selected := m.workflow.dialog.Fields[0].Value
@@ -104,7 +98,7 @@ func TestStashE2EChildOptionsDoNotInheritParentInfixes(t *testing.T) {
 	r.write("untracked", "keep after parent option\n")
 	m := newE2EModel(t, r)
 
-	for _, key := range []string{"z", "-", "u", "P", "P"} {
+	for _, key := range []string{"Z", "-", "u", "P", "P"} {
 		sendE2EKey(t, m, keyMsg(key))
 	}
 	if m.mode != modeWorkflow {
@@ -116,7 +110,7 @@ func TestStashE2EChildOptionsDoNotInheritParentInfixes(t *testing.T) {
 	}
 
 	r.write("tracked", "second\n")
-	for _, key := range []string{"z", "P", "-", "u", "P"} {
+	for _, key := range []string{"Z", "P", "-", "u", "P"} {
 		sendE2EKey(t, m, keyMsg(key))
 	}
 	if m.mode != modeWorkflow {
@@ -141,7 +135,7 @@ func TestStashE2ESnapshotBothKeepsIndexAndWorktree(t *testing.T) {
 	beforeWorktree := r.git("diff", "--binary")
 	m := newE2EModel(t, r)
 
-	openStashByKeys(t, m, "z", "Z")
+	openStashByKeys(t, m, "Z", "Z")
 	setStashMessageAndSubmit(t, m, "safe checkpoint")
 	if m.isError {
 		t.Fatalf("snapshot workflow failed: %s", m.message)
@@ -170,7 +164,7 @@ func TestStashE2EBranchReviewBindsNormalizedName(t *testing.T) {
 	r.git("stash", "push", "-m", "branch target")
 	m := newE2EModel(t, r)
 
-	openStashByKeys(t, m, "z", "b")
+	openStashByKeys(t, m, "Z", "b")
 	sendE2EKey(t, m, keyMsg("tab"))
 	sendE2EKey(t, m, keyMsg("  reviewed-branch  "))
 	sendE2EKey(t, m, keyMsg("tab"))
@@ -208,7 +202,7 @@ func TestStashE2EReviewedApplyBindsSelectedOIDAndOptions(t *testing.T) {
 	}
 	m := newE2EModel(t, r)
 
-	openStashByKeys(t, m, "z", "a")
+	openStashByKeys(t, m, "Z", "a")
 	sendE2EKey(t, m, keyMsg("space")) // select the older stash
 	sendE2EKey(t, m, keyMsg("tab"))
 	sendE2EKey(t, m, keyMsg("tab"))
@@ -231,7 +225,7 @@ func TestStashE2EReviewedApplyBindsSelectedOIDAndOptions(t *testing.T) {
 }
 
 func TestStashE2EShowSelectsExactOIDFromBothTransients(t *testing.T) {
-	for name, keys := range map[string][]string{"stash": {"z", "v"}, "diff": {"d", "t"}} {
+	for name, keys := range map[string][]string{"stash": {"Z", "v"}, "diff": {"d", "t"}} {
 		t.Run(name, func(t *testing.T) {
 			r := newUIE2ERepo(t)
 			r.write("file", "base\n")

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/richardrh/lazymagit/internal/keymap"
 	sectionmodel "github.com/richardrh/lazymagit/internal/model"
 )
@@ -12,12 +13,15 @@ import (
 const defaultDiffContext = 3
 
 var statusJumpSections = map[string]sectionmodel.SectionID{
-	"magit-jump-to-stashes":                "status/stashes",
-	"magit-jump-to-untracked":              "status/untracked",
-	"magit-jump-to-unstaged":               "status/unstaged",
-	"magit-jump-to-staged":                 "status/staged",
-	"magit-jump-to-unpulled-from-upstream": "status/unpulled",
-	"magit-jump-to-unpushed-to-upstream":   "status/unpushed",
+	"magit-jump-to-stashes":                  "status/stashes",
+	"magit-jump-to-untracked":                "status/untracked",
+	"magit-jump-to-tracked":                  "status/unstaged",
+	"magit-jump-to-unstaged":                 "status/unstaged",
+	"magit-jump-to-staged":                   "status/staged",
+	"magit-jump-to-unpulled-from-upstream":   "status/unpulled",
+	"magit-jump-to-unpulled-from-pushremote": "status/unpulled",
+	"magit-jump-to-unpushed-to-upstream":     "status/unpushed",
+	"magit-jump-to-unpushed-to-pushremote":   "status/unpushed",
 }
 
 func init() {
@@ -25,7 +29,7 @@ func init() {
 		out := map[keymap.CommandID]WorkflowHandler{}
 		for _, binding := range keymap.Registry() {
 			section, ok := statusJumpSections[binding.UpstreamCommand]
-			if binding.Scheme != keymap.SchemeMagit || !ok || binding.Transient != "magit-status-jump" {
+			if (binding.Scheme != keymap.SchemeMagit && binding.Scheme != keymap.SchemeDoom) || !ok || binding.Transient != "magit-status-jump" {
 				continue
 			}
 			targetSection := section
@@ -42,13 +46,12 @@ func init() {
 }
 
 // handleNavigationKey dispatches a single, already-classified portable
-// top-level binding. Sequence prefixes remain owned by the resolver, so C-c
-// Tab and C-c C-w cannot steal Vim or Magit prefix collisions.
+// top-level binding. Sequence prefixes remain owned by the resolver.
 func (m *Model) handleNavigationKey(msg tea.KeyPressMsg) (tea.Cmd, bool) {
 	if m.mode != modeStatus || m.resolver.PendingPrefix() != "" {
 		return nil, false
 	}
-	binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, msg.String())
+	binding, ok := keymap.Find(keymap.SchemeDoom, keymap.ContextStatus, msg.String())
 	if !ok || binding.Handler != keymap.HandlerExecute || !navigationCommand(binding.Command) {
 		return nil, false
 	}
@@ -61,6 +64,12 @@ func navigationCommand(command keymap.CommandID) bool {
 		keymap.CommandSectionParent, keymap.CommandSiblingPrevious, keymap.CommandSiblingNext,
 		keymap.CommandLocalDepth1, keymap.CommandLocalDepth2, keymap.CommandLocalDepth3, keymap.CommandLocalDepth4,
 		keymap.CommandGlobalDepth1, keymap.CommandGlobalDepth2, keymap.CommandGlobalDepth3, keymap.CommandGlobalDepth4,
+		keymap.CommandSectionOpen, keymap.CommandSectionClose,
+		keymap.CommandSectionOpenRecursive, keymap.CommandSectionCloseRecursive,
+		keymap.CommandViewportTop, keymap.CommandViewportCenter, keymap.CommandViewportBottom,
+		keymap.CommandLineStart, keymap.CommandLineEnd,
+		keymap.CommandHalfPageDown, keymap.CommandHalfPageUp,
+		keymap.CommandPageDown, keymap.CommandPageUp,
 		keymap.CommandVisitThing, keymap.CommandCycleDiffs, keymap.CommandDetailBackward,
 		keymap.CommandDiffMoreContext, keymap.CommandDiffLessContext, keymap.CommandDiffDefaultContext,
 		keymap.CommandDescribeSection, keymap.CommandStatusJump, keymap.CommandDisplayRepository,
@@ -82,10 +91,80 @@ func (m *Model) performNavigationCommand(command keymap.CommandID) (tea.Cmd, boo
 	if cmd, handled := m.performDepthNavigation(command); handled {
 		return cmd, true
 	}
+	if cmd, handled := m.performViewportNavigation(command); handled {
+		return cmd, true
+	}
 	if cmd, handled := m.performTerminalNavigation(command); handled {
 		return cmd, true
 	}
 	return m.performBasicNavigation(command)
+}
+
+func (m *Model) performViewportNavigation(command keymap.CommandID) (tea.Cmd, bool) {
+	switch command {
+	case keymap.CommandLineStart:
+		m.horizontalOffset = 0
+		return nil, true
+	case keymap.CommandLineEnd:
+		m.horizontalOffset = m.maximumHorizontalOffset(m.lineViewportWidth())
+		return nil, true
+	case keymap.CommandHalfPageDown:
+		return m.move(max(1, m.statusPanelRows()/2)), true
+	case keymap.CommandHalfPageUp:
+		return m.move(-max(1, m.statusPanelRows()/2)), true
+	case keymap.CommandPageDown:
+		return m.move(max(1, m.statusPanelRows())), true
+	case keymap.CommandPageUp:
+		return m.move(-max(1, m.statusPanelRows())), true
+	case keymap.CommandViewportTop, keymap.CommandViewportCenter, keymap.CommandViewportBottom:
+		ids, cursor := m.visibleStatusCursor()
+		height := max(1, m.statusPanelRows())
+		offset := cursor
+		switch command {
+		case keymap.CommandViewportCenter:
+			offset = cursor - height/2
+		case keymap.CommandViewportBottom:
+			offset = cursor - height + 1
+		}
+		m.statusViewportOffset = min(max(0, offset), max(0, len(ids)-height))
+		return nil, true
+	default:
+		return nil, false
+	}
+}
+
+func (m *Model) statusPanelRows() int {
+	body := max(1, m.height-4)
+	if m.mode == modeProcess && m.processPanelHeight() > 0 {
+		body = max(1, body-m.processPanelHeight()-1)
+	}
+	if m.compact {
+		return body
+	}
+	if m.width >= 96 || body < 7 {
+		return max(1, body-2)
+	}
+	panelHeight := body - 1
+	statusHeight := max(3, panelHeight*55/100)
+	return max(1, min(statusHeight, panelHeight-3)-2)
+}
+
+func (m *Model) lineViewportWidth() int {
+	if m.compact {
+		return max(1, m.width-max(30, m.width*38/100)-1)
+	}
+	if m.width >= 96 {
+		return max(1, m.width-max(36, m.width*43/100)-2)
+	}
+	return max(1, m.width-2)
+}
+
+func (m *Model) maximumHorizontalOffset(width int) int {
+	maximum := 0
+	for _, line := range m.detailLines() {
+		maximum = max(maximum, ansi.StringWidth(line)-width)
+	}
+	return max(0, maximum)
 }
 
 func (m *Model) performBasicNavigation(command keymap.CommandID) (tea.Cmd, bool) {
@@ -103,14 +182,25 @@ func (m *Model) performCursorNavigation(command keymap.CommandID) (tea.Cmd, bool
 	case keymap.CommandSectionParent:
 		return m.finishNavigationMove(m.tree.MoveToParent()), true
 	case keymap.CommandSiblingPrevious:
-		return m.finishNavigationMove(m.tree.MoveToPreviousSibling()), true
+		return m.moveSibling(-1), true
 	case keymap.CommandSiblingNext:
-		return m.finishNavigationMove(m.tree.MoveToNextSibling()), true
+		return m.moveSibling(1), true
 	case keymap.CommandVisitThing:
 		return m.visitSelectedThing(), true
 	default:
 		return nil, false
 	}
+}
+
+func (m *Model) moveSibling(direction int) tea.Cmd {
+	if _, file := m.selectedFile(rowUnstaged, rowStaged); file && m.detailID == m.tree.Cursor() && strings.Contains(m.detail, "\n@@") {
+		m.scrollDetailHunk(direction)
+		return nil
+	}
+	if direction < 0 {
+		return m.finishNavigationMove(m.tree.MoveToPreviousSibling())
+	}
+	return m.finishNavigationMove(m.tree.MoveToNextSibling())
 }
 
 func (m *Model) performDetailNavigation(command keymap.CommandID) (tea.Cmd, bool) {
@@ -150,6 +240,8 @@ func (m *Model) performStatusNavigation(command keymap.CommandID) (tea.Cmd, bool
 
 func (m *Model) performTerminalNavigation(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
+	case keymap.CommandCopyLine:
+		return m.copySelectedLine(), true
 	case keymap.CommandCopyThing, keymap.CommandCopySectionValue:
 		return m.copySelectedSection(), true
 	case keymap.CommandCopyBufferRevision:
@@ -170,6 +262,14 @@ func (m *Model) performFoldNavigation(command keymap.CommandID) (tea.Cmd, bool) 
 		changed = m.tree.CycleLocal()
 	case keymap.CommandSectionCycleGlobal:
 		changed = m.tree.CycleGlobal()
+	case keymap.CommandSectionOpen:
+		changed = m.tree.OpenSelected()
+	case keymap.CommandSectionClose:
+		changed = m.tree.CloseSelected()
+	case keymap.CommandSectionOpenRecursive:
+		changed = m.tree.OpenSelectedRecursive()
+	case keymap.CommandSectionCloseRecursive:
+		changed = m.tree.CloseSelectedRecursive()
 	default:
 		return nil, false
 	}
@@ -202,6 +302,8 @@ func (m *Model) finishFoldNavigation(changed bool) {
 
 func (m *Model) finishNavigationMove(moved bool) tea.Cmd {
 	if moved {
+		m.statusViewportOffset = -1
+		m.horizontalOffset = 0
 		m.bumpState()
 	}
 	return m.loadDetailCmd()
@@ -373,6 +475,32 @@ func (m *Model) copySelectedSection() tea.Cmd {
 	}
 	m.setMessage("Section value copied with OSC52")
 	return tea.SetClipboard(value)
+}
+func (m *Model) copySelectedLine() tea.Cmd {
+	id := m.tree.Cursor()
+	section := m.tree.Section(id)
+	if section == nil {
+		m.setMessage("Nothing to copy")
+		return nil
+	}
+	line := m.statusRowPrefix(id, m.rows[id]) + section.Title()
+	if m.inspectionActive || m.detailLine >= 0 {
+		index := m.detailOffset
+		switch {
+		case m.graphActive:
+			index = m.graphCursor
+		case m.blameActive:
+			index = m.blameCursor
+		case m.detailLine >= 0:
+			index = m.detailLine
+		}
+		lines := m.detailLines()
+		if index >= 0 && index < len(lines) {
+			line = lines[index]
+		}
+	}
+	m.setMessage("Displayed line copied with OSC52")
+	return tea.SetClipboard(sanitizeSingleLine(line) + "\n")
 }
 
 func (m *Model) copySelectedRevision() tea.Cmd {

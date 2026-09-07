@@ -13,29 +13,44 @@ import (
 type CommandID string
 
 const (
-	CommandNone           CommandID = ""
-	CommandMoveDown       CommandID = "ui.move-down"
-	CommandMoveUp         CommandID = "ui.move-up"
-	CommandFirst          CommandID = "ui.first"
-	CommandLast           CommandID = "ui.last"
-	CommandRefresh        CommandID = "status.refresh"
-	CommandToggleSection  CommandID = "section.toggle"
-	CommandStage          CommandID = "change.stage"
-	CommandUnstage        CommandID = "change.unstage"
-	CommandStageAll       CommandID = "change.stage-all"
-	CommandUnstageAll     CommandID = "change.unstage-all"
-	CommandDiscard        CommandID = "change.discard"
-	CommandCommit         CommandID = "commit.create"
-	CommandSwitchBranch   CommandID = "branch.switch"
-	CommandPush           CommandID = "push.configured"
-	CommandFetchUpstream  CommandID = "fetch.upstream"
-	CommandFetchPush      CommandID = "fetch.push-remote"
-	CommandFetchElsewhere CommandID = "fetch.elsewhere"
-	CommandFetchAll       CommandID = "fetch.all"
-	CommandAddRemote      CommandID = "remote.add"
-	CommandShowProcesses  CommandID = "process.toggle"
-	CommandOpenDispatcher CommandID = "transient.dispatch"
-	CommandQuit           CommandID = "ui.quit"
+	CommandNone                  CommandID = ""
+	CommandMoveDown              CommandID = "ui.move-down"
+	CommandMoveUp                CommandID = "ui.move-up"
+	CommandFirst                 CommandID = "ui.first"
+	CommandLast                  CommandID = "ui.last"
+	CommandRefresh               CommandID = "status.refresh"
+	CommandToggleSection         CommandID = "section.toggle"
+	CommandStage                 CommandID = "change.stage"
+	CommandUnstage               CommandID = "change.unstage"
+	CommandStageAll              CommandID = "change.stage-all"
+	CommandUnstageAll            CommandID = "change.unstage-all"
+	CommandDiscard               CommandID = "change.discard"
+	CommandCommit                CommandID = "commit.create"
+	CommandSwitchBranch          CommandID = "branch.switch"
+	CommandPush                  CommandID = "push.configured"
+	CommandFetchUpstream         CommandID = "fetch.upstream"
+	CommandFetchPush             CommandID = "fetch.push-remote"
+	CommandFetchElsewhere        CommandID = "fetch.elsewhere"
+	CommandFetchAll              CommandID = "fetch.all"
+	CommandAddRemote             CommandID = "remote.add"
+	CommandShowProcesses         CommandID = "process.toggle"
+	CommandOpenDispatcher        CommandID = "transient.dispatch"
+	CommandQuit                  CommandID = "ui.quit"
+	CommandSectionOpen           CommandID = "section.open"
+	CommandSectionClose          CommandID = "section.close"
+	CommandSectionOpenRecursive  CommandID = "section.open-recursive"
+	CommandSectionCloseRecursive CommandID = "section.close-recursive"
+	CommandViewportTop           CommandID = "ui.viewport-top"
+	CommandViewportCenter        CommandID = "ui.viewport-center"
+	CommandViewportBottom        CommandID = "ui.viewport-bottom"
+	CommandLineStart             CommandID = "ui.line-start"
+	CommandLineEnd               CommandID = "ui.line-end"
+	CommandHalfPageDown          CommandID = "ui.half-page-down"
+	CommandHalfPageUp            CommandID = "ui.half-page-up"
+	CommandPageDown              CommandID = "ui.page-down"
+	CommandPageUp                CommandID = "ui.page-up"
+	CommandQuitAll               CommandID = "ui.quit-all"
+	CommandCopyLine              CommandID = "ui.copy-line"
 	// CommandDepth1 through CommandDepth3 are retained for compatibility with
 	// earlier callers. New section-depth bindings distinguish local and global
 	// scope, as Magit does.
@@ -77,6 +92,8 @@ const (
 	CommandBlame CommandID = "inspect.blame"
 	// CommandGraph opens the all-refs terminal graph browser.
 	CommandGraph CommandID = "inspect.graph"
+	// CommandPullRequest opens the terminal GitHub PR message composer.
+	CommandPullRequest CommandID = "forge.pull-request"
 )
 
 type View uint8
@@ -94,11 +111,11 @@ const (
 	SectionStaged
 )
 
-// Scheme makes intentional Vim/Magit collisions data, not resolver branches.
+// Scheme makes intentional Doom/Magit collisions data, not resolver branches.
 type Scheme string
 
 const (
-	SchemeVim   Scheme = "vim"
+	SchemeDoom  Scheme = "doom"
 	SchemeMagit Scheme = "magit"
 )
 
@@ -293,11 +310,9 @@ func buildRegistry() []Binding {
 	if err := json.Unmarshal(upstreamManifest, &m); err != nil {
 		panic("embedded Magit manifest: " + err.Error())
 	}
-	transientNames := make(map[string]bool, len(m.Transients))
-	for _, tr := range m.Transients {
-		transientNames[tr.Name] = true
-	}
+	transientNames := transientNames(m.Transients)
 	var out []Binding
+	var stockTop []Binding
 	for _, top := range m.Top {
 		if !top.Effective {
 			continue
@@ -308,51 +323,183 @@ func buildRegistry() []Binding {
 		}
 		b := Binding{Sequence: seq, Display: displaySequence(seq), Command: CommandID("missing/" + top.Command), Label: friendlyLabel(top.Command), Scheme: SchemeMagit, Context: ContextStatus, Parity: ParityMissing, UpstreamCommand: top.Command, UpstreamKey: top.Key, Kind: EntryKind(top.Kind), Domain: top.Domain, Layer: top.Layer, Source: top.Source, Handler: HandlerUnsupported, Availability: AvailabilityNever, Unavailable: "not implemented", UnavailableCategory: UnavailableMissing, EffectiveTop: true}
 		classifyTop(&b, transientNames)
+		stockTop = append(stockTop, b)
 		out = append(out, b)
-		if keyAvailableInVim(strings.Join(b.Sequence, " ")) && vimCanUseTopBinding(b) {
-			copy := b
-			copy.Scheme = SchemeVim
-			if copy.Handler != HandlerUnsupported {
-				copy.Parity = ParityAdapted
-			}
-			copy.EffectiveTop = false
-			out = append(out, copy)
-		}
 	}
-	// Vim adaptations are explicit collision metadata and are intentionally not
-	// part of the 98-entry upstream ledger.
-	out = append(out,
-		vim("j", CommandMoveDown, "Next row", HandlerExecute),
-		vim("k", CommandMoveUp, "Previous row", HandlerExecute),
-		vim("g", CommandRefresh, "Refresh", HandlerExecute),
-		vim("g g", CommandFirst, "First row", HandlerExecute),
-		vim("G", CommandLast, "Last row", HandlerExecute),
-		vim("x", CommandDiscard, "Discard", HandlerExecute),
-	)
-	out = append(out, portable("ctrl+b", CommandBlame, "Blame selected file")...)
-	out = append(out, portable("ctrl+g", CommandGraph, "Browse all-refs graph")...)
+	out = append(out, doomTopBindings(stockTop, transientNames)...)
+	out = append(out, portable("alt+b", CommandBlame, "Blame selected file")...)
+	out = append(out, portable("alt+g", CommandGraph, "Browse all-refs graph")...)
+	out = append(out, portable("alt+r", CommandPullRequest, "Compose GitHub pull request")...)
 	out = append(out, transientBindings(m)...)
 	return out
 }
 
-// vimCanUseTopBinding excludes sequences whose Ctrl-c prefix is the explicit
-// Vim-scheme quit command. Do not advertise a terminal sequence that cannot
-// run before the TUI exits.
-func vimCanUseTopBinding(b Binding) bool {
-	switch b.Command {
-	case CommandEditThing, CommandBrowseThing, CommandNextReference:
-		return false
-	default:
+// doomTopBindings derives the runtime scheme from the pinned Magit rows. The
+// Magit rows above remain untouched so their exact upstream provenance can be
+// rendered in the ledger.
+func doomTopBindings(stock []Binding, transientNames map[string]bool) []Binding {
+	var out []Binding
+	for _, stockBinding := range stock {
+		sequence, keep := doomTopSequence(stockBinding)
+		if !keep {
+			continue
+		}
+		b := stockBinding
+		b.Scheme, b.EffectiveTop = SchemeDoom, false
+		b.Sequence, b.Display = sequence, displaySequence(sequence)
+		if b.UpstreamCommand == "magit-dispatch" && b.UpstreamKey == "h" {
+			b.Label = "Help"
+		}
+		if b.Handler == HandlerUnsupported {
+			if !doomTopExecutable(b.UpstreamCommand) {
+				out = append(out, b)
+				continue
+			}
+			b.Command = doomTopCommand(b.UpstreamCommand)
+			b.Handler, b.Availability, b.Parity = HandlerExecute, AvailabilityAlways, ParityAdapted
+			b.Unavailable, b.UnavailableCategory = "", UnavailableNone
+		} else if b.Handler != HandlerInfix {
+			b.Parity = ParityAdapted
+		}
+		if transientNames[b.UpstreamCommand] {
+			b.Command = transientCommandID(b.UpstreamCommand)
+			b.Handler, b.Availability, b.Parity = HandlerPrefix, AvailabilityAlways, ParityPartial
+		}
+		out = append(out, b)
+	}
+	out = append(out,
+		doom("j", CommandMoveDown, "Next row"),
+		doom("k", CommandMoveUp, "Previous row"),
+		doom("g g", CommandFirst, "First row"),
+		doom("G", CommandLast, "Last row"),
+		doom("g r", CommandRefresh, "Refresh"),
+		doom("g R", CommandRefresh, "Refresh all"),
+		doom("g z", CommandRefresh, "Refresh"),
+		doom("x", CommandDiscard, "Discard"),
+		doom("g =", CommandDiffDefaultContext, "Default diff context"),
+		doom("z 1", CommandGlobalDepth1, "Global section depth 1"),
+		doom("z 2", CommandGlobalDepth2, "Global section depth 2"),
+		doom("z 3", CommandGlobalDepth3, "Global section depth 3"),
+		doom("z 4", CommandGlobalDepth4, "Global section depth 4"),
+		doom("z r", CommandGlobalDepth4, "Expand all sections"),
+		doom("z a", CommandToggleSection, "Toggle section"),
+		doom("z o", CommandSectionOpen, "Open section"),
+		doom("z c", CommandSectionClose, "Close section"),
+		doom("z O", CommandSectionOpenRecursive, "Open section recursively"),
+		doom("z C", CommandSectionCloseRecursive, "Close section recursively"),
+		doom("z t", CommandViewportTop, "Scroll selected row to top"),
+		doom("z z", CommandViewportCenter, "Center selected row"),
+		doom("z b", CommandViewportBottom, "Scroll selected row to bottom"),
+		doom("ctrl+j", CommandMoveDown, "Next section"),
+		doom("ctrl+k", CommandMoveUp, "Previous section"),
+		doom("alt+j", CommandSiblingNext, "Next sibling section"),
+		doom("alt+k", CommandSiblingPrevious, "Previous sibling section"),
+		doom("g j", CommandSiblingNext, "Next sibling section"),
+		doom("g k", CommandSiblingPrevious, "Previous sibling section"),
+		doom("]", CommandSiblingNext, "Next sibling section"),
+		doom("[", CommandSiblingPrevious, "Previous sibling section"),
+		doom("g h", CommandSectionParent, "Parent section"),
+		doom("g n", doomStatusJumpCommand("magit-jump-to-untracked"), "Jump to untracked"),
+		doom("g u", doomStatusJumpCommand("magit-jump-to-unstaged"), "Jump to unstaged"),
+		doom("g s", doomStatusJumpCommand("magit-jump-to-staged"), "Jump to staged"),
+		doom("g t", doomStatusJumpCommand("magit-jump-to-tracked"), "Jump to tracked"),
+		doom("g f u", doomStatusJumpCommand("magit-jump-to-unpulled-from-upstream"), "Jump to unpulled upstream"),
+		doom("g f p", doomStatusJumpCommand("magit-jump-to-unpulled-from-pushremote"), "Jump to unpulled push remote"),
+		doom("g p u", doomStatusJumpCommand("magit-jump-to-unpushed-to-upstream"), "Jump to unpushed upstream"),
+		doom("g p p", doomStatusJumpCommand("magit-jump-to-unpushed-to-pushremote"), "Jump to unpushed push remote"),
+		doom("y y", CommandCopyLine, "Copy current line"),
+		doom("0", CommandLineStart, "Beginning of line"),
+		doom("$", CommandLineEnd, "End of line"),
+		doom("ctrl+d", CommandHalfPageDown, "Half page down"),
+		doom("ctrl+u", CommandHalfPageUp, "Half page up"),
+		doom("ctrl+f", CommandPageDown, "Page down"),
+		doom("ctrl+b", CommandPageUp, "Page up"),
+		doom("Q", CommandQuitAll, "Quit all Magit buffers"),
+	)
+	return out
+}
+
+func doomTopSequence(b Binding) ([]string, bool) {
+	switch b.UpstreamCommand {
+	case "magit-section-backward", "magit-section-forward",
+		"magit-status-jump", "magit-delete-thing", "magit-refresh", "magit-refresh-all":
+		return nil, false
+	case "magit-file-untrack":
+		return []string{"X"}, true
+	case "magit-reset-quickly":
+		return []string{"o"}, true
+	case "magit-reset":
+		return []string{"O"}, true
+	case "magit-revert-no-commit":
+		return []string{"-"}, true
+	case "magit-revert":
+		return []string{"_"}, true
+	case "magit-git-command":
+		// Stock Magit has Q and : aliases; Doom reserves Q for quit-all.
+		return []string{"|"}, b.UpstreamKey == ":"
+	case "magit-submodule":
+		return []string{"'"}, true
+	case "magit-subtree":
+		return []string{"\""}, true
+	case "magit-diff-less-context":
+		return []string{"="}, true
+	case "magit-diff-default-context":
+		return []string{"~"}, true
+	case "magit-process-buffer":
+		return []string{"`"}, true
+	case "magit-push":
+		return []string{"p"}, true
+	case "magit-stash":
+		return []string{"Z"}, true
+	case "magit-worktree":
+		if b.UpstreamKey == "%" {
+			return b.Sequence, true
+		}
+		return []string{"*"}, true
+	case "magit-show-refs":
+		return []string{"y", "r"}, true
+	case "magit-copy-section-value":
+		return []string{"y", "s"}, true
+	case "magit-copy-buffer-revision":
+		return []string{"y", "b"}, true
+	case "magit-dispatch":
+		return b.Sequence, true
+	}
+	switch b.UpstreamKey {
+	case "j", "p", "n", "k", "g", "G", "P", "z", "Z", "y", "0", "$", "-", ":", "Q":
+		return nil, false
+	case "1", "2", "3", "4", "M-1", "M-2", "M-3", "M-4":
+		return nil, false
+	}
+	return b.Sequence, true
+}
+
+func doomTopCommand(upstream string) CommandID {
+	if upstream == "magit-file-untrack" {
+		return CommandID("file.untrack")
+	}
+	return CommandID("magit." + strings.TrimPrefix(upstream, "magit-"))
+}
+func doomTopExecutable(upstream string) bool {
+	switch upstream {
+	case "magit-file-untrack", "magit-reset-quickly", "magit-reset", "magit-revert-no-commit", "magit-revert", "magit-git-command":
 		return true
+	default:
+		return false
 	}
 }
 
-func keyAvailableInVim(key string) bool {
-	switch key {
-	case "j", "k", "g", "G", "x", "n", "p":
-		return false
+func doomStatusJumpCommand(upstream string) CommandID {
+	return domainCommandID("magit-status-jump", upstream)
+}
+
+func doom(sequence string, command CommandID, label string) Binding {
+	seq := strings.Fields(sequence)
+	b := Binding{Sequence: seq, Display: displaySequence(seq), Command: command, Label: label, Scheme: SchemeDoom, Context: ContextStatus, Parity: ParityAdapted, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	if command == CommandDiscard {
+		b.Availability, b.UnavailableCategory = AvailabilityChange, UnavailableContext
 	}
-	return true
+	return b
 }
 
 var topNavigationCommands = map[string]CommandID{
@@ -469,31 +616,18 @@ func classifyTopIntegration(b *Binding) {
 	}
 }
 
-// portable adds a terminal-native binding that is intentionally outside the
-// pinned Magit keymap manifest. It must be available in both input schemes.
+// portable adds a terminal-native binding outside the pinned Magit manifest.
+// Runtime dispatch has one owner: the Doom scheme.
 func portable(sequence string, command CommandID, label string) []Binding {
 	seq := strings.Split(sequence, " ")
-	binding := Binding{Sequence: seq, Display: displaySequence(seq), Command: command, Label: label, Context: ContextStatus, Parity: ParityAdapted, Handler: HandlerExecute, Availability: AvailabilityAlways}
-	vim, magit := binding, binding
-	vim.Scheme, magit.Scheme = SchemeVim, SchemeMagit
-	return []Binding{vim, magit}
-}
-
-func vim(sequence string, command CommandID, label string, handler Handler) Binding {
-	seq := strings.Split(sequence, " ")
-	b := Binding{Sequence: seq, Display: displaySequence(seq), Command: command, Label: label, Scheme: SchemeVim, Context: ContextStatus, Parity: ParityAdapted, Handler: handler, Availability: AvailabilityAlways}
-	if command == CommandDiscard {
-		b.Availability, b.UnavailableCategory = AvailabilityUnstaged, UnavailableContext
-	}
-	return b
+	binding := Binding{Sequence: seq, Display: displaySequence(seq), Command: command, Label: label, Scheme: SchemeDoom, Context: ContextStatus, Parity: ParityAdapted, Handler: HandlerExecute, Availability: AvailabilityAlways}
+	return []Binding{binding}
 }
 
 func transientBindings(m manifest) []Binding {
 	routes := transientRoutes(m)
-	names := make(map[string]bool, len(m.Transients))
-	for _, tr := range m.Transients {
-		names[tr.Name] = true
-	}
+	doomRoutes := doomTransientRoutes(m, routes)
+	names := transientNames(m.Transients)
 	orphans := orphanTransientNames(m, names)
 	implemented := map[string]CommandID{
 		"magit-branch\x00magit-checkout": CommandSwitchBranch, "magit-commit\x00magit-commit-create": CommandCommit,
@@ -506,8 +640,64 @@ func transientBindings(m manifest) []Binding {
 		prefix := strings.Join(routes[tr.Name], " ")
 		for occurrence, entry := range tr.Entries {
 			b := transientBinding(tr, entry, occurrence, prefix, routes[tr.Name], names, orphans, implemented)
-			out = append(out, b, vimTransientBinding(b))
+			d := b
+			d.Scheme = SchemeDoom
+			d.Sequence = append(append([]string(nil), doomRoutes[tr.Name]...), d.LocalSequence...)
+			d.Display = displaySequence(d.Sequence)
+			out = append(out, b, doomTransientBinding(d))
 		}
+	}
+	return out
+}
+
+func doomTransientRoutes(m manifest, stock map[string][]string) map[string][]string {
+	out := make(map[string][]string, len(stock))
+	for _, tr := range m.Transients {
+		route := append([]string(nil), stock[tr.Name]...)
+		switch tr.Name {
+		case "magit-dispatch":
+			route = []string{"?"}
+		case "magit-status-jump", "magit-status-quick":
+			route = []string{"?", "j"}
+		case "magit-push":
+			route = []string{"p"}
+		case "magit-show-refs":
+			route = []string{"y", "r"}
+		case "magit-stash":
+			route = []string{"Z"}
+		case "magit-worktree":
+			route = []string{"*"}
+		case "magit-submodule":
+			route = []string{"'"}
+		case "magit-subtree":
+			route = []string{"\""}
+		default:
+			if len(route) > 0 {
+				switch route[0] {
+				case "h":
+					route[0] = "?"
+				case "z":
+					route[0] = "Z"
+				case "Z":
+					route[0] = "*"
+				case "X":
+					route[0] = "O"
+				case "V":
+					route[0] = "_"
+				case "P":
+					route[0] = "p"
+				case "y":
+					route = append([]string{"y", "r"}, route[1:]...)
+				case "o":
+					route[0] = "'"
+				case "O":
+					route[0] = "\""
+				case "j":
+					route = append([]string{"?", "j"}, route[1:]...)
+				}
+			}
+		}
+		out[tr.Name] = route
 	}
 	return out
 }
@@ -600,16 +790,8 @@ func transientArgument(argument *string) string {
 	return ""
 }
 
-func vimTransientBinding(b Binding) Binding {
-	b.Scheme = SchemeVim
-	if b.Transient == "magit-status-jump" && b.Handler == HandlerExecute {
-		// Vim's j is navigation, so these Magit-only descendants cannot
-		// be reached in this scheme. Give them a distinct unsupported ID:
-		// shared Magit handlers must not accidentally promote the rows.
-		b.Command = CommandID("missing/" + strings.TrimPrefix(b.UpstreamCommand, "magit-"))
-		b.Handler, b.Availability, b.Parity = HandlerUnsupported, AvailabilityNever, ParityMissing
-		b.Unavailable, b.UnavailableCategory = "status jump uses Magit keys", UnavailableContext
-	}
+func doomTransientBinding(b Binding) Binding {
+	b.Scheme = SchemeDoom
 	return b
 }
 
@@ -735,7 +917,7 @@ func Transients() []Transient {
 	if err := json.Unmarshal(upstreamManifest, &m); err != nil {
 		panic(err)
 	}
-	routes := transientRoutes(m)
+	routes := doomTransientRoutes(m, transientRoutes(m))
 	out := make([]Transient, 0, len(m.Transients))
 	for _, tr := range m.Transients {
 		name := strings.TrimPrefix(tr.Name, "magit-")

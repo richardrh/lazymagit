@@ -201,7 +201,7 @@ func TestInteractivePatchKeysStageFocusedHunkAndLineRange(t *testing.T) {
 		}
 	})
 
-	t.Run("search query does not steal range extension in Magit mode", func(t *testing.T) {
+	t.Run("search query does not steal visual range movement", func(t *testing.T) {
 		r := newUIE2ERepo(t)
 		r.write("file.txt", "one\ntwo\nthree\n")
 		r.git("add", "--", "file.txt")
@@ -211,8 +211,7 @@ func TestInteractivePatchKeysStageFocusedHunkAndLineRange(t *testing.T) {
 		selectE2EPath(t, m, "file.txt", rowUnstaged)
 		runE2ECmd(t, m, m.loadDetailCmd())
 
-		// Switch to Magit mode, then enter and complete a status search.
-		sendE2EKey(t, m, keyMsg("f2"))
+		// Complete a status search before entering visual selection.
 		sendE2EKey(t, m, keyMsg("/"))
 		for _, char := range "file" {
 			sendE2EKey(t, m, keyMsg(string(char)))
@@ -230,12 +229,12 @@ func TestInteractivePatchKeysStageFocusedHunkAndLineRange(t *testing.T) {
 		}
 		startLine := m.detailLine
 
-		sendE2EKey(t, m, keyMsg("n"))
+		sendE2EKey(t, m, keyMsg("j"))
 		if m.tree.Cursor() != target {
 			t.Fatalf("search cursor moved during range extension: %q", m.tree.Cursor())
 		}
 		if m.detailLine == startLine {
-			t.Fatalf("range n did not extend selected lines")
+			t.Fatalf("visual j did not extend selected lines")
 		}
 	})
 }

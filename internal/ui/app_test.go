@@ -58,95 +58,50 @@ func TestHandleConfirmKeyRoutesEveryAction(t *testing.T) {
 	}
 }
 
-func TestVimGTimeoutRefreshesAndGGStillNavigatesFirst(t *testing.T) {
+func TestDoomGPrefixWaitsAndGGStillNavigatesFirst(t *testing.T) {
 	m := New(nil)
 	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}, {Path: "b", Staged: gitbackend.ChangeModified}}}})
 	m.loading = false
 	last := len(m.tree.VisibleSectionIDs()) - 1
 	_, _ = m.Update(keyMsg("G"))
 	if m.tree.Cursor() != m.tree.VisibleSectionIDs()[last] || m.busy {
-		t.Fatal("Vim G should navigate to the last row without refreshing")
+		t.Fatal("G should navigate to the last row without refreshing")
 	}
 	_, cmd := m.Update(keyMsg("g"))
-	if cmd == nil || m.busy || m.resolver.PendingPrefix() != "g" {
-		t.Fatal("Vim g should briefly wait for a navigation suffix")
+	if cmd != nil || m.busy || m.resolver.PendingPrefix() != "g" {
+		t.Fatal("g must wait for a suffix without scheduling a refresh")
 	}
-	firstTimeout := vimGTimeoutMsg{token: m.vimGToken}
-	_, cmd = m.Update(keyMsg("g"))
-	if m.tree.Cursor() != m.tree.VisibleSectionIDs()[0] || m.busy {
-		t.Fatal("Vim gg should navigate and load detail, not refresh")
-	}
-	_, cmd = m.Update(firstTimeout)
-	if cmd != nil || m.busy {
-		t.Fatal("stale g timeout refreshed after gg had consumed the prefix")
-	}
-
 	_, _ = m.Update(keyMsg("g"))
-	current := vimGTimeoutMsg{token: m.vimGToken}
-	_, cmd = m.Update(current)
+	if m.tree.Cursor() != m.tree.VisibleSectionIDs()[0] || m.busy {
+		t.Fatal("gg should navigate to the first row, not refresh")
+	}
+	_, _ = m.Update(keyMsg("g"))
+	_, cmd = m.Update(keyMsg("r"))
 	if cmd == nil || !m.busy || m.resolver.PendingPrefix() != "" {
-		t.Fatal("current single-g timeout did not refresh")
+		t.Fatal("gr did not refresh")
 	}
 }
 
-func TestKeySchemeToggleAndCollisions(t *testing.T) {
+func TestDoomNavigationNeverDiscardsAndXReviewsStagedChanges(t *testing.T) {
 	m := New(nil)
 	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{
 		{Path: "unstaged", Unstaged: gitbackend.ChangeModified},
 		{Path: "staged", Staged: gitbackend.ChangeModified},
 	}}})
 	m.loading = false
-	selectPath := func(path string) {
-		for id, r := range m.rows {
-			if r.path == path {
-				m.tree.SetCursor(id)
-				return
-			}
+	for _, kind := range []rowKind{rowUnstaged, rowStaged} {
+		selectTargetRow(m, kind)
+		before := m.tree.Cursor()
+		_, _ = m.Update(keyMsg("k"))
+		if m.mode == modeConfirm || m.tree.Cursor() == before {
+			t.Fatal("k must move up, not discard")
 		}
-		t.Fatalf("missing row for %q", path)
-	}
-
-	selectPath("unstaged")
-	_, _ = m.Update(keyMsg("k"))
-	if m.mode == modeConfirm {
-		t.Fatal("Vim k discarded instead of navigating")
-	}
-	selectPath("unstaged")
-	_, _ = m.Update(keyMsg("x"))
-	if m.mode != modeConfirm || m.confirmPath != "unstaged" {
-		t.Fatal("Vim x did not retain convenience discard")
-	}
-	m.setMode(modeStatus)
-	m.confirmPath = ""
-
-	_, _ = m.Update(keyMsg("f2"))
-	if m.scheme != schemeMagit {
-		t.Fatal("F2 did not enable Magit scheme")
-	}
-	selectPath("staged")
-	_, _ = m.Update(keyMsg("k"))
-	if m.mode != modeConfirm || m.confirmPath != "staged" {
-		t.Fatal("Magit k did not make staged-only whole-file discard reachable")
-	}
-	m.setMode(modeStatus)
-	m.confirmPath = ""
-	selectPath("unstaged")
-	_, cmd := m.Update(keyMsg("x"))
-	if cmd != nil || m.mode == modeConfirm || m.confirmPath != "" {
-		t.Fatal("Magit x must never discard")
-	}
-
-	for _, key := range []string{"g", "G"} {
-		m.busy = false
-		_, cmd = m.Update(keyMsg(key))
-		if cmd == nil || !m.busy || m.resolver.PendingPrefix() != "" {
-			t.Fatalf("Magit %s did not refresh immediately", key)
+		selectTargetRow(m, kind)
+		_, _ = m.Update(keyMsg("x"))
+		if m.mode != modeConfirm || m.confirmPath == "" {
+			t.Fatal("x must review discard for the selected change")
 		}
-	}
-
-	_, _ = m.Update(keyMsg("f2"))
-	if m.scheme != schemeVim {
-		t.Fatal("second F2 did not restore Vim scheme")
+		_, _ = m.Update(keyMsg("esc"))
 	}
 }
 
@@ -621,7 +576,7 @@ func TestPushSelectsSetupChooserConfiguredRemoteOrPlainPush(t *testing.T) {
 		}
 		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
 
-		_, _ = m.Update(keyMsg("P"))
+		_, _ = m.Update(keyMsg("p"))
 		_, cmd := m.Update(keyMsg("p"))
 		if cmd != nil || m.mode != modeRemotes || m.remotePurpose != remoteConfigureAndPush {
 			t.Fatalf("P p state = mode %d purpose %d", m.mode, m.remotePurpose)
@@ -648,7 +603,7 @@ func TestPushSelectsSetupChooserConfiguredRemoteOrPlainPush(t *testing.T) {
 		m.pushSetUpstream = func(_ context.Context, remote string) error { setup = remote; return nil }
 		m.push = func(context.Context) error { t.Fatal("plain push called without upstream"); return nil }
 		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
-		_, _ = m.Update(keyMsg("P"))
+		_, _ = m.Update(keyMsg("p"))
 		_, cmd := m.Update(keyMsg("p"))
 		if cmd == nil {
 			t.Fatal("configured push remote did not start setup push")
@@ -667,7 +622,7 @@ func TestPushSelectsSetupChooserConfiguredRemoteOrPlainPush(t *testing.T) {
 		m.push = func(context.Context) error { plainCalls++; return nil }
 		m.pushSetUpstream = func(context.Context, string) error { t.Fatal("setup push called with upstream"); return nil }
 		m.snapshotLoader = func(context.Context) (snapshot, error) { return snapshot{}, nil }
-		_, _ = m.Update(keyMsg("P"))
+		_, _ = m.Update(keyMsg("p"))
 		_, cmd := m.Update(keyMsg("p"))
 		if cmd == nil {
 			t.Fatal("plain push did not start")
@@ -681,7 +636,7 @@ func TestPushSelectsSetupChooserConfiguredRemoteOrPlainPush(t *testing.T) {
 	t.Run("no remotes is a clear error", func(t *testing.T) {
 		m := New(nil)
 		m.loading = false
-		_, _ = m.Update(keyMsg("P"))
+		_, _ = m.Update(keyMsg("p"))
 		_, cmd := m.Update(keyMsg("p"))
 		if cmd != nil || !m.isError || !strings.Contains(m.message, "requires a repository") {
 			t.Fatalf("no-remotes result cmd=%v error=%v message=%q", cmd != nil, m.isError, m.message)
@@ -758,7 +713,7 @@ func TestSupersededDetailLoadCancelsItsContext(t *testing.T) {
 func TestQuitCancelsApplicationLifecycle(t *testing.T) {
 	for _, key := range []tea.KeyPressMsg{
 		keyMsg("q"),
-		tea.KeyPressMsg(tea.Key{Code: 'c', Mod: tea.ModCtrl}),
+		keyMsg("Q"),
 	} {
 		m := New(nil)
 		_, cmd := m.Update(key)
@@ -770,6 +725,13 @@ func TestQuitCancelsApplicationLifecycle(t *testing.T) {
 		default:
 			t.Fatalf("%s did not cancel application context", key.String())
 		}
+	}
+	search := New(nil)
+	search.loading = false
+	_, _ = search.Update(keyMsg("/"))
+	_, _ = search.Update(keyMsg("Q"))
+	if search.appCtx.Err() != nil || search.searchQuery != "Q" {
+		t.Fatal("Q in search input must insert text, not quit")
 	}
 }
 

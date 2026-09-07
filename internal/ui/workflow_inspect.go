@@ -105,8 +105,7 @@ func init() {
 				handlers[binding.Command] = handler
 			}
 		}
-		// Ctrl-B is a portable terminal extension rather than a Magit status-map
-		// binding; it is registered explicitly in keymap alongside both schemes.
+		// Alt-b is a terminal extension; Ctrl-b remains Doom's page-up motion.
 		handlers[keymap.CommandBlame] = inspectBlame
 		handlers[keymap.CommandGraph] = inspectGraph
 		return handlers
@@ -395,10 +394,22 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 		index = 0
 	}
 	switch key {
-	case "up", "k", "p":
+	case "up", "k":
 		index = max(0, index-1)
-	case "down", "j", "n":
+	case "down", "j":
 		index = min(len(lines)-1, index+1)
+	case "ctrl+d":
+		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()/2))
+	case "ctrl+u":
+		index = max(0, index-max(1, m.detailViewportHeight()/2))
+	case "ctrl+f":
+		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()))
+	case "ctrl+b":
+		index = max(0, index-max(1, m.detailViewportHeight()))
+	case "home":
+		index = 0
+	case "end":
+		index = len(lines) - 1
 	case "enter":
 		entry := m.graphEntries[m.graphCursor]
 		m.graphReturn = m.captureGraphInspection()
@@ -409,7 +420,7 @@ func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
 	}
 	m.graphCursor = lines[index]
 	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects, c cherry-picks, V reverts, X resets")
+	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects, A cherry-picks, _ reverts, O resets")
 	return nil, true
 }
 
@@ -434,7 +445,7 @@ func (m *Model) handleInspectionNavigationKey(key string) (tea.Cmd, bool) {
 }
 
 func (m *Model) handleRevisionKey(key string) (tea.Cmd, bool) {
-	if key != "p" {
+	if key != "alt+p" {
 		return nil, false
 	}
 	if len(m.revisionParents) == 0 {
@@ -469,10 +480,22 @@ func (m *Model) handleBlameKey(key string) (tea.Cmd, bool) {
 		index = 0
 	}
 	switch key {
-	case "up", "k", "p":
+	case "up", "k":
 		index = max(0, index-1)
-	case "down", "j", "n":
+	case "down", "j":
 		index = min(len(lines)-1, index+1)
+	case "ctrl+d":
+		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()/2))
+	case "ctrl+u":
+		index = max(0, index-max(1, m.detailViewportHeight()/2))
+	case "ctrl+f":
+		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()))
+	case "ctrl+b":
+		index = max(0, index-max(1, m.detailViewportHeight()))
+	case "home":
+		index = 0
+	case "end":
+		index = len(lines) - 1
 	case "enter":
 		return m.openSelectedBlameCommit(), true
 	default:
@@ -752,7 +775,7 @@ func inspectReflogOther(m *Model, _ WorkflowCommand) tea.Cmd {
 
 func shortlogQueryFromCommand(command WorkflowCommand) (gitbackend.ShortlogQuery, error) {
 	query := gitbackend.ShortlogQuery{Numbered: true, Summary: true, OutputLimit: inspectOutputLimit}
-	for _, binding := range keymap.BindingsForTransient(schemeID(schemeMagit), "magit-shortlog") {
+	for _, binding := range keymap.BindingsForTransient(keymap.SchemeMagit, "magit-shortlog") {
 		value, ok := command.Options[binding.Command]
 		if !ok {
 			continue
@@ -993,7 +1016,7 @@ func refSortFromOption(value string) (gitbackend.RefSort, error) {
 
 func refQueryFromCommand(command WorkflowCommand, focus string) (gitbackend.RefQuery, error) {
 	query := gitbackend.RefQuery{Focus: focus, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
-	for _, binding := range keymap.BindingsForTransient(schemeID(schemeMagit), "magit-show-refs") {
+	for _, binding := range keymap.BindingsForTransient(keymap.SchemeMagit, "magit-show-refs") {
 		value, ok := command.Options[binding.Command]
 		if !ok || !value.Enabled && value.Value == "" {
 			continue

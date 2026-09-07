@@ -1,6 +1,6 @@
 # Worktree workflows
 
-Open the worktree transient with `Z` (or `%`, where Magit's alternate binding is available).
+Open the worktree transient with Doom's `*` (or Magit's non-conflicting `%` alias).
 
 ## Create
 

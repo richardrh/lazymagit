@@ -74,9 +74,10 @@ func TestE2EFileRenameAndUntrackByTopLevelKeys(t *testing.T) {
 	r.write("other.txt", "staged unrelated\n")
 	r.git("add", "--", "other.txt")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	selectE2EPath(t, m, "tracked ; new.txt", rowStaged)
-	sendE2EKey(t, m, keyMsg("K"))
-	requireFileWorkflow(t, m, "K")
+	sendE2EKey(t, m, keyMsg("X"))
+	requireFileWorkflow(t, m, "X")
 	submitReviewedFileWorkflow(t, m)
 	if _, err := os.Stat(filepath.Join(r.dir, "tracked ; new.txt")); err != nil {
 		t.Fatalf("K deleted the worktree file: %v", err)
@@ -163,6 +164,7 @@ func TestE2EFileWorkflowCancelStaleAndIndexFlags(t *testing.T) {
 	// dialog opens, the mutation is rejected instead of acting on stale context.
 	r.write("stale.txt", "stale\n")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	selectE2EPath(t, m, "stale.txt", rowUntracked)
 	sendE2EKey(t, m, keyMsg("R"))
 	requireFileWorkflow(t, m, "stale rename")

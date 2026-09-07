@@ -2,17 +2,15 @@
 package ui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-	"unicode/utf8"
-
-	tea "charm.land/bubbletea/v2"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
 	"github.com/richardrh/lazymagit/internal/keymap"
 	sectionmodel "github.com/richardrh/lazymagit/internal/model"
+	"strings"
+	"unicode/utf8"
 )
 
 type mode uint8
@@ -27,13 +25,6 @@ const (
 	modeRemotes
 	modeProcess
 	modeWorkflow
-)
-
-type keyScheme uint8
-
-const (
-	schemeVim keyScheme = iota
-	schemeMagit
 )
 
 type remotePurpose uint8
@@ -58,10 +49,6 @@ type operationMsg struct {
 	loadErr  error
 	records  []gitbackend.ProcessRecord
 }
-
-type vimGTimeoutMsg struct{ token uint64 }
-
-const vimGTimeout = 350 * time.Millisecond
 
 var errNoTrackedUnstagedChanges = errors.New("no tracked unstaged changes to stage")
 
@@ -165,7 +152,6 @@ type Model struct {
 	detail                string
 	detailID              sectionmodel.SectionID
 	mode                  mode
-	scheme                keyScheme
 	input                 string
 	branches              []gitbackend.Branch
 	branchCursor          int
@@ -199,7 +185,8 @@ type Model struct {
 	conflictInspectPath   string
 	conflictResolution    string
 	transientOffset       int
-	vimGToken             uint64
+	statusViewportOffset  int
+	horizontalOffset      int
 	snapshotRequest       uint64
 	operationRequest      uint64
 	workflowRequest       uint64
@@ -213,6 +200,7 @@ type Model struct {
 	processBatches        []processBatch
 	processOffset         int
 	workflow              *workflowState
+	pendingMessage        *workflowState
 	workflowHandlers      map[keymap.CommandID]WorkflowHandler
 	workflowCapabilities  map[keymap.CommandID]WorkflowCapability
 	transientOptions      map[keymap.CommandID]OptionValue
@@ -253,7 +241,7 @@ func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 	appCtx, appCancel := context.WithCancel(context.Background())
 	m := &Model{
 		repo: repo, tree: sectionmodel.New(roots), rows: rows,
-		resolver: keymap.NewResolver(), scheme: schemeVim, loading: true, compact: options.Compact,
+		resolver: keymap.NewResolver(), loading: true, compact: options.Compact, statusViewportOffset: -1,
 		message: "Loading repository…", diffContext: defaultDiffContext, detailHunk: -1, detailLine: -1, detailRangeStart: -1, detailRangeEnd: -1,
 		appCtx: appCtx, appCancel: appCancel,
 		foldPreferences: map[sectionmodel.SectionID]bool{
@@ -319,6 +307,10 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) handleAppMessage(message tea.Msg) (tea.Cmd, bool) {
 	switch msg := message.(type) {
+	case tea.PasteMsg:
+		return m.handleMessagePaste(msg.Content), true
+	case messageDraftTick:
+		return m.handleMessageDraftTick(msg), true
 	case tea.WindowSizeMsg:
 		return m.handleWindowSizeMsg(msg), true
 	case snapshotMsg:
@@ -333,8 +325,6 @@ func (m *Model) handleAppMessage(message tea.Msg) (tea.Cmd, bool) {
 		return m.handleWorkflowLoadMsg(msg), true
 	case branchesMsg:
 		return m.handleBranchesMsg(msg), true
-	case vimGTimeoutMsg:
-		return m.handleVimGTimeoutMsg(msg), true
 	default:
 		return nil, false
 	}
@@ -400,6 +390,9 @@ func (m *Model) handleOperationMsg(msg operationMsg) tea.Cmd {
 		m.install(msg.snapshot)
 	}
 	m.finishOperationMsg(msg, stageNoOp)
+	if m.finishMessageSubmission(msg) {
+		return nil
+	}
 	return m.loadDetailCmd()
 }
 
@@ -484,15 +477,6 @@ func (m *Model) handleDiffMsg(msg diffMsg) tea.Cmd {
 		m.detail = sanitizeDiff(msg.text)
 	}
 	return nil
-}
-
-func (m *Model) handleVimGTimeoutMsg(msg vimGTimeoutMsg) tea.Cmd {
-	if msg.token != m.vimGToken || m.scheme != schemeVim || m.mode != modeStatus || m.resolver.PendingPrefix() != "g" || !m.appActive() {
-		return nil
-	}
-	m.resolver.Reset()
-	m.vimGToken++
-	return m.perform(keymap.CommandRefresh)
 }
 
 func (m *Model) handleBranchesMsg(msg branchesMsg) tea.Cmd {
@@ -603,9 +587,52 @@ func (m *Model) handleBlameMsg(msg blameMsg) tea.Cmd {
 }
 
 func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
-	if key == "ctrl+c" && m.scheme == schemeVim {
-		m.shutdown()
-		return tea.Quit, true
+	if m.mode == modeWorkflow && m.workflow != nil && m.workflow.message != nil {
+		return nil, false
+	}
+	if key == "ctrl+g" {
+		m.cancelPrefix()
+		if m.workflowLoading {
+			m.cancelWorkflowLoad()
+		}
+		switch m.mode {
+		case modeCommit:
+			return m.cancelCommit(), true
+		case modeConfirm:
+			return m.handleConfirmKey("esc"), true
+		case modeAddRemote:
+			m.setMode(modeStatus)
+			m.setMessage("Add remote cancelled")
+			return nil, true
+		case modeRemotes:
+			_, cmd := m.handleRemoteKey("esc")
+			return cmd, true
+		case modeProcess:
+			m.closeProcesses()
+			return nil, true
+		case modeBranches:
+			return m.closeBranches(), true
+		case modeWorkflow:
+			return m.cancelWorkflow(), true
+		case modeHelp:
+			m.setMode(modeStatus)
+			return nil, true
+		}
+		m.clearStatusSearch()
+		m.detailRangeStart, m.detailRangeEnd = -1, -1
+		m.resetDetailSelection()
+		if m.inspectionActive {
+			m.closeInspection()
+			return m.loadDetailCmd(), true
+		}
+		return nil, true
+	}
+	if key == "Q" && !m.searching && m.resolver.PendingPrefix() == "" {
+		switch m.mode {
+		case modeStatus, modeProcess:
+			m.shutdown()
+			return tea.Quit, true
+		}
 	}
 	if key == "esc" && m.resolver.PendingPrefix() == "" {
 		if cmd, handled := m.handleInspectionEscape(); handled {
@@ -617,21 +644,7 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 		m.setMessage("Workflow loading cancelled")
 		return nil, true
 	}
-	if key != "f2" {
-		return nil, false
-	}
-	m.cancelPrefix()
-	if m.mode == modeHelp {
-		m.setMode(modeStatus)
-	}
-	if m.scheme == schemeVim {
-		m.scheme = schemeMagit
-		m.setMessage("Magit key scheme active")
-	} else {
-		m.scheme = schemeVim
-		m.setMessage("Vim key scheme active")
-	}
-	return nil, true
+	return nil, false
 }
 
 func (m *Model) handleInspectionEscape() (tea.Cmd, bool) {
@@ -703,7 +716,7 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 
 func (m *Model) routeProcessKey(msg tea.KeyPressMsg, key string) tea.Cmd {
 	switch key {
-	case "q", "esc", "$", "up", "down", "pgup", "pgdown", "y":
+	case "q", "esc", "$", "`", "up", "down", "j", "k", "pgup", "pgdown", "ctrl+b", "ctrl+f", "ctrl+u", "ctrl+d", "y":
 		_, cmd := m.handleProcessKey(key)
 		return cmd
 	default:
@@ -764,10 +777,14 @@ func (m *Model) handleHelpKey(key string) tea.Cmd {
 	if m.scrollTransient(key) {
 		return nil
 	}
-	if _, ok := prefixCatalogs[key]; ok {
+	if binding, ok := dispatcherBinding(key); ok && binding.Handler == keymap.HandlerPrefix {
 		m.setMode(modeStatus)
 		m.transientOffset = 0
-		_ = m.resolver.Feed(m.keyContext(), key)
+		m.resolver.Feed(m.keyContext(), "?")
+		result := m.resolver.Feed(m.keyContext(), key)
+		if !result.Pending {
+			return m.handleResolvedStatusResult(result)
+		}
 		return nil
 	}
 	entry, found := dispatcherEntry(m.dispatcherCatalog(), key)
@@ -926,18 +943,10 @@ func (m *Model) handleStatusKey(msg tea.KeyPressMsg, key string) (tea.Model, tea
 	if result.Pending {
 		return m, m.handlePendingStatusResult(key, hadPrefix)
 	}
-	if prefix == "g" {
-		m.vimGToken++
-	}
 	return m, m.handleResolvedStatusResult(result)
 }
 
-func (m *Model) handlePendingStatusResult(key string, hadPrefix bool) tea.Cmd {
-	if m.scheme == schemeVim && key == "g" && m.resolver.PendingPrefix() == "g" {
-		m.vimGToken++
-		token := m.vimGToken
-		return tea.Tick(vimGTimeout, func(time.Time) tea.Msg { return vimGTimeoutMsg{token: token} })
-	}
+func (m *Model) handlePendingStatusResult(_ string, hadPrefix bool) tea.Cmd {
 	if !hadPrefix {
 		if _, ok := m.transientCatalog(m.resolver.PendingPrefix()); ok {
 			m.transientOptions = make(map[keymap.CommandID]OptionValue)
@@ -978,6 +987,9 @@ func (m *Model) directWorkflowCommand(upstream string) (keymap.CommandID, bool) 
 }
 
 func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
+	if m.resolver.PendingPrefix() != "" {
+		return nil, false
+	}
 	if cmd, handled := m.handleStatusModeKey(msg, key); handled {
 		return cmd, true
 	}
@@ -988,10 +1000,6 @@ func (m *Model) handleStatusModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, b
 	if m.handleStatusSearchKey(key, msg.Key().Text) {
 		m.cancelPrefix()
 		return m.loadDetailCmd(), true
-	}
-	if key == "q" {
-		m.shutdown()
-		return tea.Quit, true
 	}
 	if key == "?" {
 		m.resolver.Reset()
@@ -1022,7 +1030,7 @@ func (m *Model) handleStatusModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, b
 }
 
 func (m *Model) handleStatusNavigation(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
-	if binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
+	if binding, ok := keymap.Find(keymap.SchemeDoom, keymap.ContextStatus, key); !ok || m.workflowHandlers[binding.Command] == nil {
 		if cmd, handled := m.handleNavigationKey(msg); handled {
 			m.cancelPrefix()
 			return cmd, true
@@ -1093,7 +1101,7 @@ func (m *Model) validateTransientOptions(prefix string, suffix keymap.CommandID)
 			continue
 		}
 		name := m.resolver.ActiveTransient()
-		for _, binding := range keymap.BindingsForTransient(schemeID(m.scheme), name) {
+		for _, binding := range keymap.BindingsForTransient(keymap.SchemeDoom, name) {
 			if binding.Kind != keymap.KindInfix || binding.Command != optionID {
 				continue
 			}
@@ -1220,9 +1228,6 @@ func (m *Model) submitSelectedRemote() tea.Cmd {
 
 func (m *Model) cancelPrefix() {
 	if m.resolver.PendingPrefix() != "" {
-		if m.resolver.PendingPrefix() == "g" {
-			m.vimGToken++
-		}
 		m.resolver.Reset()
 	}
 	m.transientOffset = 0
@@ -1320,12 +1325,8 @@ var detailScrollBehaviors = map[string]detailScrollBehavior{
 	"up":     {action: "lines", amount: -1},
 	"home":   {action: "home"},
 	"end":    {action: "end"},
-	"]":      {action: "hunks", amount: 1},
-	"[":      {action: "hunks", amount: -1},
 	"pgdown": {action: "pages", amount: 1},
-	"ctrl+d": {action: "half-pages", amount: 1},
 	"pgup":   {action: "pages", amount: -1},
-	"ctrl+u": {action: "half-pages", amount: -1},
 }
 
 func (m *Model) handleDetailScroll(key string) (tea.Cmd, bool) {
@@ -1447,6 +1448,22 @@ func (m *Model) perform(command keymap.CommandID) tea.Cmd {
 }
 
 func (m *Model) performMovementCommand(command keymap.CommandID) (tea.Cmd, bool) {
+	if m.graphActive || m.blameActive {
+		key := ""
+		switch command {
+		case keymap.CommandMoveDown:
+			key = "j"
+		case keymap.CommandMoveUp:
+			key = "k"
+		case keymap.CommandFirst:
+			key = "home"
+		case keymap.CommandLast:
+			key = "end"
+		}
+		if key != "" {
+			return m.handleInspectionNavigationKey(key)
+		}
+	}
 	switch command {
 	case keymap.CommandMoveDown:
 		return m.move(1), true
@@ -1536,11 +1553,7 @@ func (m *Model) performAggregateChange(name string, operation func(context.Conte
 }
 
 func (m *Model) performDiscardChange() {
-	if m.scheme == schemeMagit {
-		m.beginDiscard(rowUnstaged, rowUntracked, rowStaged)
-		return
-	}
-	m.beginDiscard(rowUnstaged, rowUntracked)
+	m.beginDiscard(rowUnstaged, rowUntracked, rowStaged)
 }
 
 func (m *Model) performRepositoryCommand(command keymap.CommandID) (tea.Cmd, bool) {
@@ -1557,6 +1570,13 @@ func (m *Model) performRepositoryCommand(command keymap.CommandID) (tea.Cmd, boo
 			m.setMode(modeAddRemote)
 		}
 	case keymap.CommandQuit:
+		if m.inspectionActive {
+			m.closeInspection()
+			return m.loadDetailCmd(), true
+		}
+		m.shutdown()
+		return tea.Quit, true
+	case keymap.CommandQuitAll:
 		m.shutdown()
 		return tea.Quit, true
 	default:
@@ -1682,6 +1702,8 @@ func (m *Model) moveTo(index int) tea.Cmd {
 	if index >= 0 && index < len(ids) {
 		if m.tree.Cursor() != ids[index] {
 			m.tree.SetCursor(ids[index])
+			m.statusViewportOffset = -1
+			m.horizontalOffset = 0
 			m.bumpState()
 		}
 	}
@@ -1689,7 +1711,7 @@ func (m *Model) moveTo(index int) tea.Cmd {
 }
 
 func (m *Model) keyContext() keymap.Context {
-	ctx := keymap.Context{View: keymap.ViewStatus, Scheme: schemeID(m.scheme)}
+	ctx := keymap.Context{View: keymap.ViewStatus, Scheme: keymap.SchemeDoom}
 	switch m.rows[m.tree.Cursor()].kind {
 	case rowUntracked, rowUnstaged:
 		ctx.Section = keymap.SectionUnstaged
@@ -1697,13 +1719,6 @@ func (m *Model) keyContext() keymap.Context {
 		ctx.Section = keymap.SectionStaged
 	}
 	return ctx
-}
-
-func schemeID(s keyScheme) keymap.Scheme {
-	if s == schemeMagit {
-		return keymap.SchemeMagit
-	}
-	return keymap.SchemeVim
 }
 
 func (m *Model) install(s snapshot) {

@@ -74,27 +74,23 @@ func TestPanelDimensionsAreOuterDimensions(t *testing.T) {
 	}
 }
 
-func TestFooterPrioritizesWorkflowsAndUsesUppercasePush(t *testing.T) {
+func TestFooterAdvertisesDoomPushOnlyOutsideTextEntry(t *testing.T) {
 	m := New(&gitbackend.Repository{})
 	for _, width := range []int{40, 120} {
 		m.width = width
 		footer := ansi.Strip(m.renderFooter())
-		for _, want := range []string{"c Commit", "f Fetch", "P Push", "b Branch"} {
+		for _, want := range []string{"c Commit", "f Fetch", "p Push", "b Branch"} {
 			if !strings.Contains(footer, want) {
 				t.Fatalf("width %d footer omitted %q: %q", width, want, footer)
 			}
 		}
-		if strings.Contains(footer, "p Push") {
-			t.Fatalf("footer advertised lowercase push navigation collision: %q", footer)
+		if strings.Contains(footer, "P Push") {
+			t.Fatalf("footer advertised obsolete stock push key: %q", footer)
 		}
 	}
 	m.width, m.mode = 120, modeCommit
-	if footer := ansi.Strip(m.renderFooter()); strings.Contains(footer, "c Commit") || strings.Contains(footer, "P Push") {
+	if footer := ansi.Strip(m.renderFooter()); strings.Contains(footer, "c Commit") || strings.Contains(footer, "p Push") {
 		t.Fatalf("modal footer misleadingly exposed intercepted globals: %q", footer)
-	}
-	m.mode = modeStatus
-	if footer := ansi.Strip(m.renderFooter()); !strings.Contains(footer, "$ Processes") || !strings.Contains(footer, "[ prev  ] next") {
-		t.Fatalf("wide status footer omitted process or pager controls: %q", footer)
 	}
 }
 
@@ -146,9 +142,9 @@ func TestDetailScrollingIsIndependentAndClamped(t *testing.T) {
 		t.Fatal("PageDown did not scroll detail independently")
 	}
 	down := m.detailOffset
-	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: 'u', Mod: tea.ModCtrl}))
+	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
 	if m.detailOffset >= down {
-		t.Fatal("Ctrl-u did not scroll detail up")
+		t.Fatal("Up did not scroll detail up")
 	}
 	_, _ = m.Update(tea.KeyPressMsg(tea.Key{Code: tea.KeySpace, Text: " ", Mod: tea.ModShift}))
 	if m.detailOffset != 0 {
@@ -159,6 +155,14 @@ func TestDetailScrollingIsIndependentAndClamped(t *testing.T) {
 func TestDetailLineAndHunkNavigation(t *testing.T) {
 	m := New(&gitbackend.Repository{})
 	m.width, m.height = 100, 12
+	m.install(snapshot{status: gitbackend.Status{Files: []gitbackend.FileStatus{{Path: "a", Unstaged: gitbackend.ChangeModified}}}})
+	m.loading = false
+	for id, row := range m.rows {
+		if row.path == "a" {
+			m.tree.SetCursor(id)
+		}
+	}
+	m.detailID = m.tree.Cursor()
 	m.detail = strings.Join([]string{
 		"diff --git a/a b/a", "--- a/a", "+++ b/a", "@@ -1,2 +1,2 @@", "-old", "+new", " context",
 		"@@ -10,2 +10,2 @@", "-before", "+after", " tail", "end", "more", "last",

@@ -66,8 +66,12 @@ func formatProcessBatch(name string, records []gitbackend.ProcessRecord, opErr e
 	out.WriteString("== " + sanitizeSingleLine(name) + " — " + status + " ==")
 	limit := min(len(records), maxProcessRecordsBatch)
 	for _, record := range records[:limit] {
-		out.WriteString("\n$ git -C ")
-		out.WriteString(humanQuote(record.Dir))
+		if record.Program == "" || record.Program == "git" {
+			out.WriteString("\n$ git -C ")
+			out.WriteString(humanQuote(record.Dir))
+		} else {
+			out.WriteString("\n$ " + humanQuote(record.Program))
+		}
 		for _, arg := range record.Args {
 			out.WriteByte(' ')
 			out.WriteString(humanQuote(arg))
@@ -170,19 +174,25 @@ func (m *Model) closeProcesses() { m.mode = modeStatus }
 
 func (m *Model) handleProcessKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
-	case "q", "esc", "$":
+	case "q", "esc":
 		m.closeProcesses()
-	case "up":
+	case "up", "k":
 		m.processOffset--
 		m.clampProcessOffset()
-	case "down":
+	case "down", "j":
 		m.processOffset++
 		m.clampProcessOffset()
-	case "pgup":
+	case "pgup", "ctrl+b":
 		m.processOffset -= max(1, m.processViewportHeight())
 		m.clampProcessOffset()
-	case "pgdown":
+	case "pgdown", "ctrl+f":
 		m.processOffset += max(1, m.processViewportHeight())
+		m.clampProcessOffset()
+	case "ctrl+u":
+		m.processOffset -= max(1, m.processViewportHeight()/2)
+		m.clampProcessOffset()
+	case "ctrl+d":
+		m.processOffset += max(1, m.processViewportHeight()/2)
 		m.clampProcessOffset()
 	case "y":
 		transcript := m.processTranscript()
@@ -192,6 +202,8 @@ func (m *Model) handleProcessKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.setMessage("Clipboard copy requested")
 		return m, tea.SetClipboard(transcript)
+	case "`":
+		return m, nil
 	}
 	return m, nil
 }

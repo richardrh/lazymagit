@@ -2,6 +2,8 @@
 
 Generated from the vendored manifest for Magit 4.7.0 (`v4.7.0`, `67f203853e74e926e2c99f60ed508840714f7ced`, clean checkout). Run `go run ./internal/keymap/cmd/keymapdoc` to update or add `-check` to verify drift.
 
+> The stock Magit keys and canonical inputs below are retained for provenance and catalog integrity; runtime dispatch uses the Doom scheme. See [README Keys](../README.md#keys), [Doom Magit](https://raw.githubusercontent.com/doomemacs/modules/main/modules/tools/magit/config.el), and [Evil Collection Magit](https://raw.githubusercontent.com/emacs-evil/evil-collection/master/modes/magit/evil-collection-magit.el).
+
 | # | Upstream key | Canonical input | Upstream command | Kind | Domain | Layer | Source | Classification | Current status |
 |---:|---|---|---|---|---|---|---|---|---|
 | 1 | `<left-fringe> <mouse-1>` | `emacs:<left-fringe> <mouse-1>` | `magit-mouse-toggle-section` | binding | ui | `magit-section-mode-map` | `lisp/magit-section.el:463 (magit-section-mode-map)` | `not-applicable` | Emacs-only input or integration |

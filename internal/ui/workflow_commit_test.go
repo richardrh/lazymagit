@@ -89,7 +89,8 @@ func TestCommitSigningRequiresDialogConsent(t *testing.T) {
 }
 
 func TestCommitWorkflowCancelAndUnsupportedOptionError(t *testing.T) {
-	m := New(&gitbackend.Repository{})
+	m := newE2EModel(t, newUIE2ERepo(t))
+	defer m.shutdown()
 	id, _ := commitCommandID("magit-commit-create")
 	load, handled := m.performWorkflow(WorkflowCommand{ID: id})
 	if !handled || load == nil {
@@ -99,8 +100,8 @@ func TestCommitWorkflowCancelAndUnsupportedOptionError(t *testing.T) {
 	if m.workflow == nil {
 		t.Fatal("create dialog did not open")
 	}
-	_, _ = m.handleWorkflowKey(keyMsg("esc"))
-	if m.workflow != nil || m.mode != modeStatus || m.message != "Workflow cancelled" {
+	_, _ = m.handleWorkflowKey(keyMsg("ctrl+g"))
+	if m.workflow != nil || m.mode != modeStatus {
 		t.Fatalf("cancel retained state: workflow=%v mode=%v message=%q", m.workflow != nil, m.mode, m.message)
 	}
 

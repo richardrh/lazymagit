@@ -145,21 +145,25 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 		if spec.message || options.ReeditMessage != "" {
 			required := (spec.required || options.ReeditMessage != "") && options.ReuseMessage == ""
 			message := ""
-			if options.ReeditMessage != "" {
+			source := options.ReeditMessage
+			if source == "" && options.ReuseMessage == "" && (spec.variant == gitbackend.CommitUIAmend || spec.variant == gitbackend.CommitUIReword) {
+				source = "HEAD"
+			}
+			if source != "" {
 				var err error
-				message, err = m.repo.CommitMessageForUI(ctx, options.ReeditMessage)
+				message, err = m.repo.CommitMessageForUI(ctx, source)
 				if err != nil {
 					return WorkflowDialog{}, fmt.Errorf("load reedit message: %w", err)
 				}
 			}
-			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Message (internal editor)", Kind: WorkflowMultiline, Value: message, Required: required})
+			fields = append(fields, WorkflowField{Name: commitMessageField, Label: "Subject and body", Kind: WorkflowMultiline, Value: message, Required: required})
 		}
 		signing := options.Sign || options.SigningKey != ""
 		if signing {
 			fields = append(fields, WorkflowField{Name: commitConsentField, Label: "Allow Git signing program", Kind: WorkflowBool})
 		}
 		dialog := WorkflowDialog{
-			Title: spec.title, Operation: strings.ToLower(spec.title), ActionLabel: "Review & Submit", Fields: fields,
+			Title: spec.title, Operation: strings.ToLower(spec.title), ActionLabel: "Commit", Fields: fields,
 			Confirmation: "Review commit details, then execute",
 			Plan:         []string{spec.title},
 			Validate: func(values WorkflowValues) error {
@@ -191,6 +195,32 @@ func openCommitWorkflow(m *Model, spec commitWorkflowSpec, command WorkflowComma
 			dialog.Submit = func(ctx context.Context, values WorkflowValues) error {
 				_, err := m.repo.ExecuteCommitUI(ctx, spec.variant, values[commitTargetField], values[commitMessageField], options, values[commitConsentField] == "true")
 				return err
+			}
+		}
+		if spec.message || options.ReeditMessage != "" {
+			summary, err := m.repo.Summary(ctx)
+			if err != nil {
+				return WorkflowDialog{}, err
+			}
+			var detail string
+			caption := summary.Branch + " · staged changes"
+			if spec.variant == gitbackend.CommitUIReword {
+				detail, err = m.repo.ShowCommit(ctx, "HEAD")
+				caption = summary.Branch + " · message only; staged changes are preserved"
+			} else {
+				preview, queryErr := m.repo.QueryDiff(ctx, gitbackend.DiffQuery{Kind: gitbackend.DiffIndex, Context: 3, OutputLimit: 128 << 10})
+				detail, err = preview.Detail, queryErr
+			}
+			if err != nil {
+				return WorkflowDialog{}, err
+			}
+			key := "commit/" + string(spec.variant) + "/" + summary.Branch + "/" + options.ReeditMessage
+			if spec.variant != gitbackend.CommitUICreate {
+				key += "/" + summary.Head
+			}
+			dialog.Message = &MessageWorkflow{
+				DraftPath: messageDraftPath(m.repo.GitDir(), key),
+				Context:   caption, Preview: detail,
 			}
 		}
 		return dialog, nil
