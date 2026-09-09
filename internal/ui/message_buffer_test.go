@@ -135,3 +135,58 @@ func TestMessageBufferViewportFollowsCursorPastBlankLines(t *testing.T) {
 		t.Fatalf("cursor above viewport:\n%s", view)
 	}
 }
+
+func TestMessageBufferNormalCommandsAndMotionBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		keys []string
+		want string
+	}{
+		{name: "insert", text: "abc", keys: []string{"esc", "0", "i", "X", "esc"}, want: "Xabc"},
+		{name: "insert at first nonblank", text: "  abc", keys: []string{"esc", "0", "I", "X", "esc"}, want: "  Xabc"},
+		{name: "append", text: "abc", keys: []string{"esc", "0", "a", "X", "esc"}, want: "aXbc"},
+		{name: "append at end", text: "abc", keys: []string{"esc", "A", "X", "esc"}, want: "abcX"},
+		{name: "open below", text: "abc", keys: []string{"esc", "o", "X", "esc"}, want: "abc\nX"},
+		{name: "open above", text: "abc", keys: []string{"esc", "O", "X", "esc"}, want: "X\nabc"},
+		{name: "delete middle", text: "abc", keys: []string{"esc", "0", "l", "x"}, want: "ac"},
+		{name: "delete right", text: "abc", keys: []string{"esc", "0", "x"}, want: "bc"},
+		{name: "delete left", text: "abc", keys: []string{"esc", "0", "l", "X"}, want: "bc"},
+		{name: "delete to end", text: "abc\ndef", keys: []string{"esc", "0", "D"}, want: "abc\n"},
+		{name: "line yank and put", text: "one\ntwo", keys: []string{"esc", "g", "g", "Y", "p"}, want: "one\none\ntwo"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			b := NewMessageBuffer(test.text)
+			for _, key := range test.keys {
+				b.HandleKey(messageKey(key))
+			}
+			if got := b.Text(); got != test.want {
+				t.Fatalf("text = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	b := NewMessageBuffer("one two\nthree")
+	for _, key := range []string{"esc", "g", "x", "g", "g", "2", "d", "w"} {
+		b.HandleKey(messageKey(key))
+	}
+	if b.Text() != "three" {
+		t.Fatalf("invalid g prefix or counted delete changed text incorrectly: %q", b.Text())
+	}
+	for _, key := range []string{"0", "^", "$", "end", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "G", "g", "g", "w", "b", "e"} {
+		b.HandleKey(messageKey(key))
+	}
+	if line, column := b.Cursor(); line < 0 || column < 0 {
+		t.Fatalf("motion produced invalid cursor %d:%d", line, column)
+	}
+	b.HandleKey(messageKey("v"))
+	b.HandleKey(messageKey("V"))
+	if b.Mode() != "V-LINE" {
+		t.Fatalf("V did not enter linewise visual mode: %s", b.Mode())
+	}
+	b.HandleKey(messageKey("V"))
+	if b.Mode() != "NORMAL" {
+		t.Fatalf("V did not leave linewise visual mode: %s", b.Mode())
+	}
+}

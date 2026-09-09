@@ -45,6 +45,10 @@ The GitHub Actions workflow in `.github/workflows/docs.yml` builds the site on
 pull requests and deploys the `master` build to GitHub Pages. Deployment
 requires GitHub Pages to use GitHub Actions as its source.
 
+The Go quality gate currently treats CRAP scores above 100 as regressions.
+Accepted scores are recorded in `internal/quality/crap-baseline.json`; future
+changes must not introduce new violations or worsen the recorded scores.
+
 To update the pinned Hextra module intentionally:
 
 ```sh
