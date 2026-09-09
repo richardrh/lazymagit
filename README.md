@@ -70,9 +70,9 @@ sudo dnf install ./lazymagit_*_linux_amd64.rpm
 sudo pacman -U ./lazymagit_*_linux_amd64.pkg.tar.zst
 ```
 
-Generic Linux, macOS, and Windows archives and `checksums.txt` are published in
-the same release. The first release will be available after the `v0.1.0` tag is
-created on the merged release commit.
+Generic Linux, macOS, and Windows archives and `checksums.txt` are published
+by the release workflow for every `v*` tag. `go install` users can install
+the module directly; there is not currently a Homebrew tap or formula.
 
 ## Build
 
@@ -80,14 +80,14 @@ Requirements: Go 1.25 or newer and Git available on `PATH`.
 GitHub PR composition additionally requires the GitHub CLI (`gh`) with an existing authenticated session.
 
 ```sh
-go test ./...
+make check
 CGO_ENABLED=0 go build -o lazymagit ./cmd/lazymagit
 ./lazymagit [--init] [--theme NAME] [--layout standard|compact] [repository]
-
-# Theme names may use their display spelling or canonical slug.
-./lazymagit --theme "Tokyo Night" --layout compact
-# Equivalent: ./lazymagit --theme tokyo-night --layout compact
 ```
+
+`make check` runs formatting, vet, race-enabled tests, the complexity
+threshold check, and generated-keybinding drift checks. To run only the Go
+tests, use `go test ./...`.
 
 The resulting executable contains the Go application and TUI dependencies in
 one binary. Like Magit itself, it invokes the system Git executable for Git
@@ -100,6 +100,70 @@ form initializes the exact directory given, even when that directory is inside
 another repository. Existing repositories (including bare repositories) are
 never reinitialized. Use `--` before a repository path that begins with a dash,
 for example `./lazymagit -- --project`.
+
+## Documentation
+
+The documentation site uses [Hugo Extended](https://gohugo.io/) with the
+[Hextra](https://imfing.github.io/hextra/) theme. Site sources live under
+`doc/content/`; the focused Markdown notes under `docs/` are synchronized into
+the site during each build. See the [documentation site README](doc/README.md)
+for prerequisites and maintenance details.
+
+Preview or build the site from the repository root:
+
+```sh
+make -C doc serve
+make -C doc build
+```
+
+Local site output is written to `doc/public/` and is not committed. The
+development server is available at <http://localhost:1313/lazymagit/>.
+
+`docs/keybindings.md` remains the canonical generated keybinding ledger. Do not
+edit it by hand. Regenerate it with:
+
+```sh
+go run ./internal/keymap/cmd/keymapdoc
+```
+
+Check for generated-documentation drift with:
+
+```sh
+go run ./internal/keymap/cmd/keymapdoc -check
+```
+
+## Themes
+
+Themes can be selected at startup with `--theme` or changed in the status
+view with the `F2` theme picker. The default is `default`. The bundled themes
+and their canonical names are:
+
+| Theme | Name |
+|---|---|
+| Default | `default` |
+| Tokyo Night | `tokyo-night` |
+| Catppuccin Mocha | `catppuccin-mocha` |
+| Nord | `nord` |
+| Dracula | `dracula` |
+| Gruvbox Dark | `gruvbox-dark` |
+| Solarized Dark | `solarized-dark` |
+
+Use either a canonical name or its display spelling. Names are
+case-insensitive, and spaces or underscores are treated like hyphens.
+`catppuccin` is also accepted as an alias for Catppuccin Mocha. For example:
+
+```sh
+./lazymagit --theme nord
+./lazymagit --theme "Catppuccin Mocha" ./my-repository
+./lazymagit --theme gruvbox_dark
+```
+
+Theme options must appear before the repository path. Restart the application
+with a different `--theme` value to change the palette.
+
+While in the status view, press `F2` to open the theme picker. Use `↑`/`↓`
+or `j`/`k` to move, `Enter` to apply the selected theme, and `q`/`Esc` to
+cancel.
 
 ## Keys
 
@@ -126,6 +190,7 @@ top-level commands around Vim navigation.
 | Select multiple hunks | `V` |
 | Search / next / previous match | `/`, then `n` / `N` |
 | Stage tracked modifications / unstage all | `S` / `U` |
+| Change theme | `F2` |
 | Reviewed discard | `x` |
 | Commit | `c c` |
 | Compose or edit the current branch's GitHub PR | `Alt-r` |

@@ -56,6 +56,25 @@ var (
 	colorOnAccent color.Color
 )
 
+var activeThemeName = "default"
+
+var themeDisplayNames = map[string]string{
+	"catppuccin-mocha": "Catppuccin Mocha",
+	"default":          "Default",
+	"dracula":          "Dracula",
+	"gruvbox-dark":     "Gruvbox Dark",
+	"nord":             "Nord",
+	"solarized-dark":   "Solarized Dark",
+	"tokyo-night":      "Tokyo Night",
+}
+
+func themeDisplayName(name string) string {
+	if display, ok := themeDisplayNames[name]; ok {
+		return display
+	}
+	return name
+}
+
 func init() { _ = ApplyTheme("default") }
 
 func ThemeNames() []string {
@@ -87,5 +106,6 @@ func ApplyTheme(name string) error {
 	colorBorder = lipgloss.Color(palette.Border)
 	colorText = lipgloss.Color(palette.Text)
 	colorOnAccent = lipgloss.Color(palette.OnAccent)
+	activeThemeName = name
 	return nil
 }

@@ -21,6 +21,7 @@ const (
 	modeBranches
 	modeConfirm
 	modeHelp
+	modeTheme
 	modeAddRemote
 	modeRemotes
 	modeProcess
@@ -139,19 +140,23 @@ type Model struct {
 	snapshot snapshot
 	resolver *keymap.Resolver
 
-	width, height         int
-	loading               bool
-	busy                  bool
-	compact               bool
-	searching             bool
-	searchQuery           string
-	searchMatches         []sectionmodel.SectionID
-	searchIndex           int
-	message               string
-	isError               bool
-	detail                string
-	detailID              sectionmodel.SectionID
-	mode                  mode
+	width, height int
+	loading       bool
+	busy          bool
+	compact       bool
+	searching     bool
+	searchQuery   string
+	searchMatches []sectionmodel.SectionID
+	searchIndex   int
+	message       string
+	isError       bool
+	detail        string
+	detailID      sectionmodel.SectionID
+	mode          mode
+	themeNames    []string
+	themeCursor   int
+	themeName     string
+
 	input                 string
 	branches              []gitbackend.Branch
 	branchCursor          int
@@ -243,7 +248,8 @@ func NewWithOptions(repo *gitbackend.Repository, options Options) *Model {
 		repo: repo, tree: sectionmodel.New(roots), rows: rows,
 		resolver: keymap.NewResolver(), loading: true, compact: options.Compact, statusViewportOffset: -1,
 		message: "Loading repository…", diffContext: defaultDiffContext, detailHunk: -1, detailLine: -1, detailRangeStart: -1, detailRangeEnd: -1,
-		appCtx: appCtx, appCancel: appCancel,
+		themeName: activeThemeName,
+		appCtx:    appCtx, appCancel: appCancel,
 		foldPreferences: map[sectionmodel.SectionID]bool{
 			"status/untracked": true, "status/stashes": true, "status/unpulled": true, "status/recent": true,
 		},
@@ -614,6 +620,10 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 			return m.closeBranches(), true
 		case modeWorkflow:
 			return m.cancelWorkflow(), true
+		case modeTheme:
+			m.setMode(modeStatus)
+			m.setMessage("Theme selection cancelled")
+			return nil, true
 		case modeHelp:
 			m.setMode(modeStatus)
 			return nil, true
@@ -627,6 +637,11 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 		}
 		return nil, true
 	}
+	if key == "f2" && m.mode == modeStatus && m.resolver.PendingPrefix() == "" {
+		m.openThemePicker()
+		return nil, true
+	}
+
 	if key == "Q" && !m.searching && m.resolver.PendingPrefix() == "" {
 		switch m.mode {
 		case modeStatus, modeProcess:
@@ -708,10 +723,51 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 		return cmd, true
 	case modeConfirm:
 		return m.handleConfirmKey(key), true
+	case modeTheme:
+		return m.handleThemeKey(key), true
 	case modeHelp:
 		return m.handleHelpKey(key), true
 	}
 	return nil, false
+}
+
+func (m *Model) openThemePicker() {
+	m.themeNames = ThemeNames()
+	m.themeName = activeThemeName
+	m.themeCursor = 0
+	for index, name := range m.themeNames {
+		if name == m.themeName {
+			m.themeCursor = index
+			break
+		}
+	}
+	m.setMode(modeTheme)
+}
+
+func (m *Model) handleThemeKey(key string) tea.Cmd {
+	switch key {
+	case "up", "k":
+		m.themeCursor = max(0, m.themeCursor-1)
+	case "down", "j":
+		m.themeCursor = min(len(m.themeNames)-1, m.themeCursor+1)
+	case "q", "esc":
+		m.setMode(modeStatus)
+		m.setMessage("Theme selection cancelled")
+	case "enter":
+		if len(m.themeNames) == 0 {
+			m.setMode(modeStatus)
+			return nil
+		}
+		name := m.themeNames[m.themeCursor]
+		if err := ApplyTheme(name); err != nil {
+			m.setError(err)
+			return nil
+		}
+		m.themeName = name
+		m.setMode(modeStatus)
+		m.setMessage("Theme changed to " + themeDisplayName(name))
+	}
+	return nil
 }
 
 func (m *Model) routeProcessKey(msg tea.KeyPressMsg, key string) tea.Cmd {

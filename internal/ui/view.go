@@ -434,7 +434,7 @@ func (m *Model) statusFooter() string {
 }
 
 func (m *Model) appendOptionalFooter(left string, style lipgloss.Style) string {
-	optional := []string{"gr Refresh", "z Folds", "` Processes", "j/k Move", "[/] Siblings", "v/V Select", "Alt-r PR", "Alt-b Blame", "Alt-g Graph", "Alt-M Mark", "? Commands", "Q Quit"}
+	optional := []string{"F2 Themes", "gr Refresh", "z Folds", "` Processes", "j/k Move", "[/] Siblings", "v/V Select", "Alt-r PR", "Alt-b Blame", "Alt-g Graph", "Alt-M Mark", "? Commands", "Q Quit"}
 	for _, item := range optional {
 		candidate := left + "  " + style.Render(item)
 		if ansi.StringWidth(candidate) <= m.width {
@@ -453,6 +453,8 @@ func modeFooter(current mode) string {
 		text = "Tab/↑/↓ field  Enter edit/submit  Esc cancel"
 	case modeHelp:
 		text = "q/Esc close  ↑/↓ PageUp/PageDown"
+	case modeTheme:
+		text = "Enter select  q/Esc cancel  ↑/↓ move"
 	case modeProcess:
 		text = "y Copy output  q/Esc Close  j/k Ctrl-b/Ctrl-f Scroll"
 	}
@@ -503,6 +505,8 @@ func (m *Model) basicOverlayContent(innerW, innerH int) (string, string) {
 		return " Switch branch ", m.branchOverlayContent(innerW, innerH)
 	case modeAddRemote:
 		return " Add remote ", m.addRemoteOverlayContent()
+	case modeTheme:
+		return " Change theme ", m.themeOverlayContent(innerW, innerH)
 	default:
 		return "", ""
 	}
@@ -554,6 +558,32 @@ func (m *Model) addRemoteOverlayContent() string {
 		fetch = "no"
 	}
 	return strings.Join(lines, "\n\n") + "\n\nFetch after add: " + fetch + " (Ctrl-f toggle)\n\nTab/↑/↓ field  •  Enter next/add  •  Esc cancel"
+}
+
+func (m *Model) themeOverlayContent(innerW, innerH int) string {
+	current := "Default"
+	if m.themeName != "" {
+		current = themeDisplayName(m.themeName)
+	}
+	lines := []string{"Current: " + current, ""}
+	visible := max(1, innerH-5)
+	start := max(0, m.themeCursor-visible/2)
+	start = min(start, max(0, len(m.themeNames)-visible))
+	end := min(len(m.themeNames), start+visible)
+	for index := start; index < end; index++ {
+		name := m.themeNames[index]
+		prefix := "  "
+		if index == m.themeCursor {
+			prefix = "▶ "
+		}
+		line := prefix + themeDisplayName(name) + "  (" + name + ")"
+		if index == m.themeCursor {
+			line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
+		}
+		lines = append(lines, line)
+	}
+	lines = append(lines, "", "Enter select  •  q/Esc cancel")
+	return strings.Join(lines, "\n")
 }
 
 func (m *Model) renderWorkflowOverlay(width, height int) string {
