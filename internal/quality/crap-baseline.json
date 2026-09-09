@@ -1,4 +1,33 @@
 {
   "threshold": 12.000000001,
-  "scores": {}
+  "scores": {
+    "github.com/richardrh/lazymagit/internal/git/Repository/PullRequestForUI": 20.352589708301164,
+    "github.com/richardrh/lazymagit/internal/git/Repository/SubmitPullRequest": 16.81818181818182,
+    "github.com/richardrh/lazymagit/internal/git/Repository/editPullRequest": 156,
+    "github.com/richardrh/lazymagit/internal/keymap/-/doomTopSequence": 23.030097860719163,
+    "github.com/richardrh/lazymagit/internal/keymap/-/doomTransientRoutes": 26.419663177059622,
+    "github.com/richardrh/lazymagit/internal/model/Model/foldDescendants": 30,
+    "github.com/richardrh/lazymagit/internal/ui/-/historyTopHandler": 13.271484375,
+    "github.com/richardrh/lazymagit/internal/ui/-/prepareMessageWorkflow": 14.351999999999999,
+    "github.com/richardrh/lazymagit/internal/ui/-/workflowActionLabel": 14.292216659080566,
+    "github.com/richardrh/lazymagit/internal/ui/MessageBuffer/HandleKey": 459.276504983967,
+    "github.com/richardrh/lazymagit/internal/ui/MessageBuffer/insertKey": 19.112499999999997,
+    "github.com/richardrh/lazymagit/internal/ui/MessageBuffer/motion": 255.54650426793972,
+    "github.com/richardrh/lazymagit/internal/ui/MessageBuffer/word": 91.07109394263172,
+    "github.com/richardrh/lazymagit/internal/ui/Model/copySelectedLine": 90,
+    "github.com/richardrh/lazymagit/internal/ui/Model/directWorkflowCommand": 20,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleBlameKey": 26.544000000000004,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleGlobalKey": 87.01186282578877,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleGraphKey": 21.259259259259263,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleHelpKey": 12.757458699761651,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleMessagePaste": 14.859374999999998,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleMessageWorkflowKey": 122.36657434591353,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleProcessKey": 16.81818181818182,
+    "github.com/richardrh/lazymagit/internal/ui/Model/handleResolvedStatusResult": 22.914883932635412,
+    "github.com/richardrh/lazymagit/internal/ui/Model/performMovementCommand": 33.845333333333336,
+    "github.com/richardrh/lazymagit/internal/ui/Model/performViewportNavigation": 80.23319615912207,
+    "github.com/richardrh/lazymagit/internal/ui/Model/renderMessageWorkflow": 650,
+    "github.com/richardrh/lazymagit/internal/ui/Model/saveMessageDraft": 17.147436874460194,
+    "github.com/richardrh/lazymagit/internal/ui/Model/statusPanelRows": 42
+  }
 }
