@@ -131,3 +131,27 @@ func TestCreatedPullRequestKeepsIdentityWhenRefreshFails(t *testing.T) {
 		t.Fatalf("partial success lost the published PR identity: %#v, %v", result, err)
 	}
 }
+
+func TestSubmitPullRequestEditUsesReviewedIdentity(t *testing.T) {
+	logPath, _ := fakeGH(t, "if [ \"$1\" = pr ] && [ \"$2\" = view ]; then printf '%s' '{\"number\":7,\"url\":\"https://github.com/owner/repo/pull/7\",\"title\":\"old\",\"body\":\"old\",\"baseRefName\":\"main\",\"headRefName\":\"main\",\"isDraft\":false}'; exit 0; fi\nif [ \"$1\" = pr ] && [ \"$2\" = edit ]; then cat >/dev/null; exit 0; fi\n")
+	r := newTestRepo(t)
+	r.write("tracked", "text\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.SubmitPullRequest(context.Background(), PullRequest{
+		Number: 7, Title: "new title", Body: "new body", Base: "main", Head: "main",
+	})
+	if err != nil || got.Number != 7 || got.URL != "https://github.com/owner/repo/pull/7" {
+		t.Fatalf("edited pull request = %#v, %v", got, err)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(log), "pr edit 7 --repo owner/repo --title new title --body-file - --base main") {
+		t.Fatalf("edit invocation missing reviewed values: %s", log)
+	}
+}
