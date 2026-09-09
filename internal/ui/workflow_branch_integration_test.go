@@ -28,7 +28,6 @@ func TestBranchCheckoutSearchFiltersAndSwitchesByKeys(t *testing.T) {
 	r.git("branch", "feature/login")
 	r.git("branch", "release")
 	m := newE2EModel(t, r)
-	m.scheme = schemeMagit
 
 	sendE2EKey(t, m, keyMsg("b"))
 	sendE2EKey(t, m, keyMsg("b"))

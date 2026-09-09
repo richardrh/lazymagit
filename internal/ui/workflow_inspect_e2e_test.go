@@ -18,7 +18,7 @@ func newInspectE2EModel(t *testing.T) *Model {
 	r.git("commit", "-m", "inspection second")
 	r.write("story.txt", "one\ntwo\nworking\n")
 	m := newE2EModel(t, r)
-	sendE2EKey(t, m, keyMsg("f2"))
+
 	return m
 }
 
@@ -50,7 +50,7 @@ func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 		{"d", []string{"d", "d"}, []string{"Unstaged diff", "+working"}},
 		{"D", []string{"D", "g"}, []string{"Unstaged diff", "+working"}},
 		{"l", []string{"l", "l"}, []string{"Log", "inspection second", "inspection first"}},
-		{"y", []string{"y", "y"}, []string{"References", "Local branches", "main"}},
+		{"yr", []string{"y", "r", "y"}, []string{"References", "Local branches", "main"}},
 		{"Y", []string{"Y"}, []string{"Cherries", "inspection second"}},
 		{"H", []string{"H"}, []string{"Section information", "Section:", "Repository operation: none"}},
 		{"e", []string{"e"}, []string{"Terminal comparison (unified)", "+working"}},
@@ -68,13 +68,13 @@ func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 func TestInspectBlameThroughModelUpdate(t *testing.T) {
 	m := newInspectE2EModel(t)
 	// The initial cursor is the Unstaged heading; select its tracked file.
-	sendInspectSequence(t, m, "n", "ctrl+b")
+	sendInspectSequence(t, m, "j", "alt+b")
 	assertInspectDetail(t, m, "Blame story.txt", "inspection second", "| one", "| two", "| working")
 	if !m.blameActive || m.blameCursor < 0 {
 		t.Fatalf("blame was not selectable: active=%t cursor=%d", m.blameActive, m.blameCursor)
 	}
 	first := m.blameCursor
-	sendInspectSequence(t, m, "n")
+	sendInspectSequence(t, m, "j")
 	if m.blameCursor == first {
 		t.Fatalf("blame next did not advance from line %d", first)
 	}
@@ -105,14 +105,14 @@ func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
 	r.git("commit", "-m", "graph main")
 
 	m := newE2EModel(t, r)
-	sendE2EKey(t, m, keyMsg("f2"))
-	sendInspectSequence(t, m, "ctrl+g")
+
+	sendInspectSequence(t, m, "alt+g")
 	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main", "topic", "* ")
 	if !m.graphActive || m.graphCursor < 0 {
 		t.Fatalf("graph was not made selectable: active=%t cursor=%d", m.graphActive, m.graphCursor)
 	}
 	first := m.graphCursor
-	sendInspectSequence(t, m, "n")
+	sendInspectSequence(t, m, "j")
 	if m.graphCursor == first {
 		t.Fatalf("graph next did not advance from line %d", first)
 	}
@@ -124,7 +124,7 @@ func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
 	assertInspectDetail(t, m, "Commit", "graph")
 
 	// The selected topic commit has the base commit as its first parent.
-	sendInspectSequence(t, m, "p")
+	sendInspectSequence(t, m, "alt+p")
 	assertInspectDetail(t, m, "Commit", "graph base")
 	sendInspectSequence(t, m, "esc")
 	if !m.graphActive || m.graphCursor != selected {
@@ -152,7 +152,7 @@ func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
 	historyE2ESubmit(t, m)
 	assertInspectDetail(t, m, "Log matching branches", "inspection second")
 
-	sendInspectSequence(t, m, "y", "o")
+	sendInspectSequence(t, m, "y", "r", "o")
 	if m.workflow == nil {
 		t.Fatalf("refs-other prompt did not open: %q", m.message)
 	}
@@ -183,7 +183,7 @@ func TestInspectReflogShortlogAndMergedRefsThroughModelUpdate(t *testing.T) {
 	historyE2ESubmit(t, m)
 	assertInspectDetail(t, m, "Shortlog HEAD~1", "UI E2E Test")
 
-	sendInspectSequence(t, m, "y", "-", "m", "y")
+	sendInspectSequence(t, m, "y", "r", "-", "m", "y")
 	assertInspectDetail(t, m, "References", "Local branches", "main")
 }
 
@@ -192,7 +192,7 @@ func TestInspectRefsContainsAndSortOptionsThroughModelUpdate(t *testing.T) {
 
 	// --contains and --sort are entered through the manifest transient, then
 	// executed through the same model/update path as the other inspection views.
-	sendInspectSequence(t, m, "y", "-", "c", "H", "E", "A", "D")
+	sendInspectSequence(t, m, "y", "r", "-", "c", "H", "E", "A", "D")
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	sendInspectSequence(t, m, "-", "s", "-", "s", "u", "b", "j", "e", "c", "t")
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))

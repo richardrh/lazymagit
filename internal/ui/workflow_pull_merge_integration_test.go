@@ -35,6 +35,7 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	peer.git("push", "origin", "elsewhere")
 	local.git("fetch", "origin")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	sendE2EKey(t, m, keyMsg("F"))
 	sendE2EKey(t, m, keyMsg("e"))
 	selectWorkflowValue(t, m, "target", "0") // origin/elsewhere sorts before origin/main.
@@ -53,6 +54,7 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	local.git("switch", "main")
 	local.git("reset", "--hard", base)
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	openMergeTarget(t, m, "refs/heads/ff-topic", false)
 	if got := local.git("rev-parse", "HEAD"); got != ffHead {
 		t.Fatalf("fast-forward merge HEAD = %s, want %s", got, ffHead)
@@ -68,6 +70,7 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	local.git("add", "main")
 	local.git("commit", "-m", "main")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	sendE2EKey(t, m, keyMsg("m"))
 	sendE2EKey(t, m, keyMsg("-n"))
 	sendE2EKey(t, m, keyMsg("m"))
@@ -87,9 +90,11 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	// Conflict, resolution/continue, then another conflict and reviewed abort.
 	makeConflictBranches(t, local)
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	openMergeTarget(t, m, "refs/heads/conflict-topic", true)
 	local.write("conflict", "resolved\n")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	selectE2EPath(t, m, "conflict", rowUnstaged)
 	sendE2EKey(t, m, keyMsg("s"))
 	sendE2EKey(t, m, keyMsg("m"))
@@ -105,6 +110,7 @@ func TestPullMergeKeyDrivenIntegration(t *testing.T) {
 	}
 	local.git("reset", "--hard", "conflict-main")
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	openMergeTarget(t, m, "refs/heads/conflict-topic", true)
 	sendE2EKey(t, m, keyMsg("m"))
 	sendE2EKey(t, m, keyMsg("a"))

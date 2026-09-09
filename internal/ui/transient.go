@@ -51,7 +51,7 @@ const (
 	menuEntryPresentation menuEntryCategory = "presentation-only"
 )
 
-var prefixCatalogs = buildPrefixCatalogs(keymap.SchemeVim)
+var prefixCatalogs = buildPrefixCatalogs(keymap.SchemeDoom)
 
 func buildPrefixCatalogs(scheme keymap.Scheme) map[string]menuCatalog {
 	out := map[string]menuCatalog{}
@@ -103,7 +103,7 @@ func (m *Model) transientCatalog(prefix string) (menuCatalog, bool) {
 		if _, exact := keymap.TransientByName(prefix); exact {
 			name = prefix
 		}
-		for _, top := range keymap.BindingsFor(schemeID(m.scheme), keymap.ContextStatus) {
+		for _, top := range keymap.BindingsFor(keymap.SchemeDoom, keymap.ContextStatus) {
 			if strings.Join(top.Sequence, " ") == prefix && top.Handler == keymap.HandlerPrefix {
 				name = top.UpstreamCommand
 				break
@@ -117,7 +117,7 @@ func (m *Model) transientCatalog(prefix string) (menuCatalog, bool) {
 	catalog := menuCatalog{Title: tr.Title}
 	groups := map[string]int{}
 	ctx := m.keyContext()
-	for _, binding := range keymap.BindingsForTransient(schemeID(m.scheme), name) {
+	for _, binding := range keymap.BindingsForTransient(keymap.SchemeDoom, name) {
 		index := m.ensureTransientGroup(&catalog, groups, name, binding.Group)
 		catalog.Groups[index].Entries = append(catalog.Groups[index].Entries, m.transientEntry(prefix, binding, ctx))
 	}
@@ -429,7 +429,7 @@ func (m *Model) optionConsumers(prefix string, option keymap.Binding) map[keymap
 	out := make(map[keymap.CommandID]bool, len(wanted))
 	for _, upstream := range wanted {
 		name := option.Transient
-		for _, binding := range keymap.BindingsForTransient(schemeID(m.scheme), name) {
+		for _, binding := range keymap.BindingsForTransient(keymap.SchemeDoom, name) {
 			if binding.Kind == keymap.KindSuffix && binding.UpstreamCommand == upstream {
 				if _, registered := m.workflowHandlers[binding.Command]; registered || builtinUICommands[binding.Command] {
 					out[binding.Command] = true
@@ -486,16 +486,24 @@ type dispatcherSection struct {
 	Columns [][]menuEntry
 }
 
-func dispatcherCatalog(scheme keyScheme, contexts ...keymap.Context) []dispatcherSection {
-	ctx := keymap.Context{View: keymap.ViewStatus, Scheme: schemeID(scheme)}
+// Dispatcher suffixes remain stock Magit even when normal-state keys use Doom.
+func dispatcherBinding(key string) (keymap.Binding, bool) {
+	if binding, ok := keymap.Find(keymap.SchemeMagit, keymap.ContextStatus, strings.Fields(key)...); ok {
+		return binding, true
+	}
+	return keymap.Find(keymap.SchemeDoom, keymap.ContextStatus, strings.Fields(key)...)
+}
+
+func dispatcherCatalog(contexts ...keymap.Context) []dispatcherSection {
+	ctx := keymap.Context{View: keymap.ViewStatus, Scheme: keymap.SchemeDoom}
 	if len(contexts) > 0 {
 		ctx = contexts[0]
-		ctx.Scheme = schemeID(scheme)
+		ctx.Scheme = keymap.SchemeDoom
 	}
 	entry := func(key, label string, command keymap.CommandID) menuEntry {
 		available, reason := false, "presentation-only dispatcher adaptation"
 		category := menuEntryPresentation
-		if b, ok := keymap.Find(schemeID(scheme), keymap.ContextStatus, key); ok {
+		if b, ok := dispatcherBinding(key); ok {
 			available, reason = b.Available(ctx)
 			command = b.Command
 			category = menuEntryRegistry
@@ -505,10 +513,7 @@ func dispatcherCatalog(scheme keyScheme, contexts ...keymap.Context) []dispatche
 		}
 		return menuEntry{Key: key, Display: key, Label: label, Available: available, Command: command, Reason: reason, Category: category, Kind: keymap.KindBinding}
 	}
-	discard := entry("x", "Discard", keymap.CommandDiscard)
-	if scheme == schemeMagit {
-		discard = entry("k", "Discard", keymap.CommandDiscard)
-	}
+	discard := entry("k", "Discard", keymap.CommandDiscard)
 	sections := []dispatcherSection{
 		{Title: "Transient and dwim commands", Columns: [][]menuEntry{
 			{{Key: "A", Label: "Apply"}, entry("b", "Branch", keymap.CommandNone), {Key: "B", Label: "Bisect"}, entry("c", "Commit", keymap.CommandNone), {Key: "C", Label: "Clone"}, {Key: "d", Label: "Diff"}, {Key: "D", Label: "Diff (change)"}, {Key: "e", Label: "Ediff (dwim)"}, {Key: "E", Label: "Ediff"}, entry("f", "Fetch", keymap.CommandNone), {Key: "F", Label: "Pull"}, {Key: "h", Label: "Help"}, {Key: "H", Label: "Section info"}},
@@ -522,14 +527,14 @@ func dispatcherCatalog(scheme keyScheme, contexts ...keymap.Context) []dispatche
 		}},
 		{Title: "Essential commands", Columns: [][]menuEntry{
 			{entry("g", "Refresh current buffer", keymap.CommandRefresh), entry("q", "Close dispatcher", keymap.CommandQuit), {Key: "tab", Display: "Tab", Label: "Toggle section", Available: true, Command: keymap.CommandToggleSection}, {Key: "enter", Display: "Enter", Label: "Visit thing"}},
-			{entry("ctrl+b", "Blame selected file", keymap.CommandBlame), entry("ctrl+g", "Browse all-refs graph", keymap.CommandGraph), entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
+			{entry("alt+b", "Blame selected file", keymap.CommandBlame), entry("alt+g", "Browse all-refs graph", keymap.CommandGraph), entry("alt+r", "Compose GitHub pull request", keymap.CommandPullRequest), entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
 		}},
 	}
 	for sectionIndex := range sections {
 		for columnIndex := range sections[sectionIndex].Columns {
 			for entryIndex := range sections[sectionIndex].Columns[columnIndex] {
 				item := &sections[sectionIndex].Columns[columnIndex][entryIndex]
-				if binding, ok := keymap.Find(schemeID(scheme), keymap.ContextStatus, item.Key); ok && binding.UpstreamCommand != "" {
+				if binding, ok := dispatcherBinding(item.Key); ok && binding.UpstreamCommand != "" {
 					item.Command = binding.Command
 					item.Available, item.Reason = binding.Available(ctx)
 					item.Category, item.Kind = menuEntryRegistry, binding.Kind
@@ -555,12 +560,12 @@ func dispatcherCatalog(scheme keyScheme, contexts ...keymap.Context) []dispatche
 // manifest sheet. Static "missing" classifications therefore never mask an
 // installed exact workflow capability.
 func (m *Model) dispatcherCatalog() []dispatcherSection {
-	sections := dispatcherCatalog(m.scheme, m.keyContext())
+	sections := dispatcherCatalog(m.keyContext())
 	for si := range sections {
 		for ci := range sections[si].Columns {
 			for ei := range sections[si].Columns[ci] {
 				entry := &sections[si].Columns[ci][ei]
-				binding, ok := keymap.Find(schemeID(m.scheme), keymap.ContextStatus, entry.Key)
+				binding, ok := dispatcherBinding(entry.Key)
 				if !ok {
 					continue
 				}

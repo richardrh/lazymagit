@@ -44,6 +44,50 @@ func (m *Model) RevealSelectedDepth(depth int) bool {
 	return true
 }
 
+// OpenSelected expands the selected section by one level while retaining
+// explicit folds below it.
+func (m *Model) OpenSelected() bool {
+	section := m.byID[m.cursor]
+	if section == nil || len(section.children) == 0 {
+		return false
+	}
+	delete(m.folded, section.id)
+	return true
+}
+
+// CloseSelected folds the selected section.
+func (m *Model) CloseSelected() bool {
+	section := m.byID[m.cursor]
+	if section == nil || len(section.children) == 0 {
+		return false
+	}
+	m.folded[section.id] = true
+	m.retainVisibleCursor(m.VisibleSectionIDs())
+	return true
+}
+
+// OpenSelectedRecursive fully expands the selected section tree.
+func (m *Model) OpenSelectedRecursive() bool {
+	section := m.byID[m.cursor]
+	if section == nil || len(section.children) == 0 {
+		return false
+	}
+	m.unfoldTree(section)
+	return true
+}
+
+// CloseSelectedRecursive folds the selected section and every descendant.
+func (m *Model) CloseSelectedRecursive() bool {
+	section := m.byID[m.cursor]
+	if section == nil || len(section.children) == 0 {
+		return false
+	}
+	m.folded[section.id] = true
+	m.foldDescendants(section)
+	m.retainVisibleCursor(m.VisibleSectionIDs())
+	return true
+}
+
 // RevealGlobalDepth reveals every top-level tree to depth levels. Roots are
 // level 1. Depth must be between 1 and 4.
 func (m *Model) RevealGlobalDepth(depth int) bool {
@@ -205,6 +249,17 @@ func (m *Model) revealDepth(section *Section, depth int) {
 	for _, child := range section.children {
 		if child != nil && m.byID[child.id] == child {
 			m.revealDepth(child, depth-1)
+		}
+	}
+}
+func (m *Model) foldDescendants(section *Section) {
+	for _, child := range section.children {
+		if child == nil || m.byID[child.id] != child {
+			continue
+		}
+		if len(child.children) > 0 {
+			m.folded[child.id] = true
+			m.foldDescendants(child)
 		}
 	}
 }

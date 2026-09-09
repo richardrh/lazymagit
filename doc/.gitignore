@@ -1,0 +1,9 @@
+/public/
+/resources/_gen/
+/.hugo_build.lock
+/static/images/
+/content/docs/compatibility.md
+/content/docs/keybindings.md
+/content/docs/parity.md
+/content/docs/sparse-checkout.md
+/content/docs/worktrees.md

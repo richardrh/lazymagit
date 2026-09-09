@@ -203,16 +203,23 @@ var builtinUICommands = map[keymap.CommandID]bool{
 	keymap.CommandStageAll: true, keymap.CommandUnstageAll: true, keymap.CommandDiscard: true, keymap.CommandCommit: true,
 	keymap.CommandSwitchBranch: true, keymap.CommandPush: true, keymap.CommandFetchUpstream: true, keymap.CommandFetchPush: true,
 	keymap.CommandFetchElsewhere: true, keymap.CommandFetchAll: true, keymap.CommandAddRemote: true, keymap.CommandShowProcesses: true,
-	keymap.CommandOpenDispatcher: true, keymap.CommandQuit: true, keymap.CommandDepth1: true, keymap.CommandDepth2: true,
-	keymap.CommandDepth3: true, keymap.CommandScrollDown: true, keymap.CommandScrollUp: true,
+	keymap.CommandOpenDispatcher: true, keymap.CommandQuit: true, keymap.CommandQuitAll: true,
+	keymap.CommandDepth1: true, keymap.CommandDepth2: true, keymap.CommandDepth3: true,
+	keymap.CommandScrollDown: true, keymap.CommandScrollUp: true,
 	keymap.CommandSectionCycle: true, keymap.CommandSectionCycleGlobal: true,
 	keymap.CommandSectionParent: true, keymap.CommandSiblingPrevious: true, keymap.CommandSiblingNext: true,
+	keymap.CommandSectionOpen: true, keymap.CommandSectionClose: true,
+	keymap.CommandSectionOpenRecursive: true, keymap.CommandSectionCloseRecursive: true,
+	keymap.CommandViewportTop: true, keymap.CommandViewportCenter: true, keymap.CommandViewportBottom: true,
+	keymap.CommandLineStart: true, keymap.CommandLineEnd: true,
+	keymap.CommandHalfPageDown: true, keymap.CommandHalfPageUp: true,
+	keymap.CommandPageDown: true, keymap.CommandPageUp: true,
 	keymap.CommandLocalDepth1: true, keymap.CommandLocalDepth2: true, keymap.CommandLocalDepth3: true, keymap.CommandLocalDepth4: true,
 	keymap.CommandGlobalDepth1: true, keymap.CommandGlobalDepth2: true, keymap.CommandGlobalDepth3: true, keymap.CommandGlobalDepth4: true,
 	keymap.CommandVisitThing: true, keymap.CommandCycleDiffs: true, keymap.CommandDetailBackward: true,
 	keymap.CommandDiffMoreContext: true, keymap.CommandDiffLessContext: true, keymap.CommandDiffDefaultContext: true,
 	keymap.CommandDescribeSection: true, keymap.CommandStatusJump: true, keymap.CommandDisplayRepository: true,
-	keymap.CommandCopyThing: true, keymap.CommandCopySectionValue: true, keymap.CommandCopyBufferRevision: true,
+	keymap.CommandCopyLine: true, keymap.CommandCopyThing: true, keymap.CommandCopySectionValue: true, keymap.CommandCopyBufferRevision: true,
 	keymap.CommandEditThing: true, keymap.CommandBrowseThing: true, keymap.CommandNextReference: true,
 }
 
@@ -294,6 +301,7 @@ type WorkflowDialog struct {
 	Help                []string
 	Plan                []string
 	Fields              []WorkflowField
+	Message             *MessageWorkflow
 	Validate            func(WorkflowValues) error
 	Preflight           func(context.Context, WorkflowValues) error
 	Submit              func(context.Context, WorkflowValues) error
@@ -317,6 +325,7 @@ type workflowState struct {
 	review  *WorkflowReview
 	request uint64
 	cancel  context.CancelFunc
+	message *messageWorkflowState
 }
 
 type workflowPreflightMsg struct {
@@ -346,6 +355,18 @@ func (m *Model) OpenWorkflow(dialog WorkflowDialog) tea.Cmd {
 	}
 	dialog = cloneWorkflowDialog(dialog)
 	m.workflow = &workflowState{dialog: dialog}
+	if err := prepareMessageWorkflow(m.workflow); err != nil {
+		m.workflow = nil
+		m.setError(err)
+		return nil
+	}
+	if m.workflow.message != nil {
+		if m.workflow.message.saved {
+			m.setMessage("Message draft restored")
+		} else {
+			m.setMessage("Write a subject, blank line, then body")
+		}
+	}
 	m.setMode(modeWorkflow)
 	return nil
 }
@@ -391,6 +412,10 @@ func cloneWorkflowDialog(dialog WorkflowDialog) WorkflowDialog {
 	dialog.Fields = append([]WorkflowField(nil), dialog.Fields...)
 	dialog.Help = append([]string(nil), dialog.Help...)
 	dialog.Plan = append([]string(nil), dialog.Plan...)
+	if dialog.Message != nil {
+		message := *dialog.Message
+		dialog.Message = &message
+	}
 	for i := range dialog.Fields {
 		dialog.Fields[i].Choices = append([]WorkflowChoice(nil), dialog.Fields[i].Choices...)
 	}
@@ -504,6 +529,9 @@ func (m *Model) handleWorkflowKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.setMode(modeStatus)
 		return m, nil
 	}
+	if w.message != nil {
+		return m, m.handleMessageWorkflowKey(msg)
+	}
 	key := msg.String()
 	if cmd, handled := m.handleWorkflowStateKey(w, key); handled {
 		return m, cmd
@@ -541,6 +569,12 @@ func (m *Model) handleWorkflowStateKey(w *workflowState, key string) (tea.Cmd, b
 
 func (m *Model) cancelWorkflow() tea.Cmd {
 	w := m.workflow
+	if w.message != nil {
+		if err := m.saveMessageDraft(); err != nil {
+			w.error = "Save draft: " + sanitizeSingleLine(err.Error())
+			return nil
+		}
+	}
 	if w.cancel != nil {
 		w.cancel()
 	}
@@ -550,7 +584,11 @@ func (m *Model) cancelWorkflow() tea.Cmd {
 	m.workflow = nil
 	m.workflowRequest++
 	m.setMode(modeStatus)
-	m.setMessage("Workflow cancelled")
+	if w.message != nil {
+		m.setMessage("Message draft saved; reopen the same command to resume")
+	} else {
+		m.setMessage("Workflow cancelled")
+	}
 	return m.loadDetailCmd()
 }
 
@@ -602,6 +640,12 @@ func handleWorkflowSearchNavigation(w *workflowState, field *WorkflowField, key 
 
 func (m *Model) activateWorkflow() tea.Cmd {
 	w := m.workflow
+	if w.message != nil {
+		if err := m.saveMessageDraft(); err != nil {
+			w.error = "Save draft: " + sanitizeSingleLine(err.Error())
+			return nil
+		}
+	}
 	values := m.workflowValues()
 	if err := validateWorkflow(w.dialog, values); err != nil {
 		w.error = sanitizeSingleLine(err.Error())
@@ -752,6 +796,7 @@ func (m *Model) submitWorkflow(values WorkflowValues) tea.Cmd {
 	if name == "" {
 		name = "workflow"
 	}
+	m.retainMessageSubmission()
 	m.workflow = nil
 	m.setMode(modeStatus)
 	return m.startOperation(name, func(ctx context.Context) error { return submit(ctx, values) })
@@ -771,6 +816,7 @@ func (m *Model) submitReviewedWorkflow(values WorkflowValues, review WorkflowRev
 		name = "workflow"
 	}
 	values, review = cloneWorkflowValues(values), cloneWorkflowReview(review)
+	m.retainMessageSubmission()
 	m.workflow = nil
 	m.setMode(modeStatus)
 	return m.startOperation(name, func(ctx context.Context) error {

@@ -43,7 +43,6 @@ func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
 	}()
 	r.git("checkout", "main")
 	m := newE2EModel(t, r)
-	sendE2EKey(t, m, keyMsg("f2"))
 
 	// Lower-case a is Magit's no-commit cherry apply.
 	sendE2EKey(t, m, keyMsg("a"))
@@ -61,6 +60,7 @@ func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
 	}
 	r.git("reset", "--hard", base)
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 
 	sendE2EKey(t, m, keyMsg("a"))
 	historyE2EReplaceField(t, m, source)
@@ -69,9 +69,9 @@ func TestHistoryE2EApplyCancelAndStaleResetByKeys(t *testing.T) {
 		t.Fatalf("cancel changed repository: %q", got)
 	}
 
-	// X h reviews a hard reset. Change worktree after review and before the
+	// O h reviews a hard reset. Change worktree after review and before the
 	// second Enter; execution must reject the stale token and preserve it.
-	sendE2EKey(t, m, keyMsg("X"))
+	sendE2EKey(t, m, keyMsg("O"))
 	sendE2EKey(t, m, keyMsg("h"))
 	historyE2ESubmit(t, m)
 	if m.workflow == nil || m.workflow.review == nil {
@@ -106,7 +106,7 @@ func TestHistoryE2EInteractiveTodoEditContinueAndAbortByKeys(t *testing.T) {
 	r.git("switch", "topic")
 
 	m := newE2EModel(t, r)
-	sendE2EKey(t, m, keyMsg("f2"))
+
 	sendE2EKey(t, m, keyMsg("r"))
 	sendE2EKey(t, m, keyMsg("i"))
 	if m.workflow == nil || m.workflow.dialog.Title != "Review interactive rebase todo" {
@@ -200,7 +200,6 @@ func TestHistoryE2ERebaseOntoPushRemoteByKeys(t *testing.T) {
 	local.git("commit", "-m", "local change")
 	head := local.git("rev-parse", "HEAD")
 	m := newE2EModel(t, local)
-	sendE2EKey(t, m, keyMsg("f2"))
 
 	sendE2EKey(t, m, keyMsg("r"))
 	sendE2EKey(t, m, keyMsg("p"))
@@ -229,7 +228,6 @@ func TestHistoryE2EBisectFirstParentOptionByKeys(t *testing.T) {
 	r.git("add", "--all")
 	r.git("commit", "-m", "bad")
 	m := newE2EModel(t, r)
-	sendE2EKey(t, m, keyMsg("f2"))
 
 	sendE2EKey(t, m, keyMsg("B"))
 	sendE2EKey(t, m, keyMsg("-p"))
@@ -275,7 +273,7 @@ func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 			r.write("conflict.txt", "main\n")
 			main := func() string { r.git("add", "--all"); r.git("commit", "-m", "main"); return r.git("rev-parse", "HEAD") }()
 			m := newE2EModel(t, r)
-			sendE2EKey(t, m, keyMsg("f2"))
+
 			if finish == "continue" {
 				// A A is Magit's committing cherry-copy path. Unlike lower-case
 				// cherry-apply (--no-commit), a conflict has sequencer state and a
@@ -283,7 +281,7 @@ func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 				sendE2EKey(t, m, keyMsg("A"))
 				sendE2EKey(t, m, keyMsg("A"))
 			} else {
-				sendE2EKey(t, m, keyMsg("V"))
+				sendE2EKey(t, m, keyMsg("_"))
 				sendE2EKey(t, m, keyMsg("V"))
 			}
 			historyE2EReplaceField(t, m, source)
@@ -315,7 +313,7 @@ func TestHistoryE2ERevertConflictContinueAndAbortByKeys(t *testing.T) {
 					t.Fatalf("continue status=%q", got)
 				}
 			} else {
-				sendE2EKey(t, m, keyMsg("V"))
+				sendE2EKey(t, m, keyMsg("_"))
 				sendE2EKey(t, m, keyMsg("a"))
 				historyE2ESubmit(t, m) // review
 				sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))

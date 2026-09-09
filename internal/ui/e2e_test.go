@@ -117,6 +117,48 @@ func sendE2EKey(t *testing.T, m *Model, msg tea.KeyPressMsg) {
 	runE2ECmd(t, m, cmd)
 }
 
+func TestDoomPrefixesDoNotStageSelectedDiffOrRepeatSearch(t *testing.T) {
+	r := newUIE2ERepo(t)
+	r.write("alpha.txt", "base\n")
+	r.write("beta.txt", "base\n")
+	r.git("add", ".")
+	r.git("commit", "-m", "base")
+	r.write("alpha.txt", "unstaged\n")
+	r.write("beta.txt", "staged\n")
+	r.git("add", "beta.txt")
+	r.write("new.txt", "untracked\n")
+	m := newE2EModel(t, r)
+	selectE2EPath(t, m, "alpha.txt", rowUnstaged)
+	index := r.git("diff", "--cached")
+	worktree := r.git("diff")
+
+	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("s"))
+	if m.tree.Cursor() != "status/staged" {
+		t.Fatalf("gs did not jump to staged changes: %q", m.tree.Cursor())
+	}
+	selectE2EPath(t, m, "alpha.txt", rowUnstaged)
+	sendE2EKey(t, m, keyMsg("y"))
+	sendE2EKey(t, m, keyMsg("s"))
+	if got := r.git("diff", "--cached"); got != index {
+		t.Fatalf("navigation/copy prefix staged selected changes:\n%s", got)
+	}
+	if got := r.git("diff"); got != worktree {
+		t.Fatalf("navigation/copy prefix changed worktree:\n%s", got)
+	}
+
+	sendE2EKey(t, m, keyMsg("/"))
+	for _, key := range "txt" {
+		sendE2EKey(t, m, keyMsg(string(key)))
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
+	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("n"))
+	if m.tree.Cursor() != "status/untracked" {
+		t.Fatalf("gn repeated search instead of jumping: %q", m.tree.Cursor())
+	}
+}
+
 func selectE2EPath(t *testing.T, m *Model, path string, kind rowKind) {
 	t.Helper()
 	// Status sections remember their folds across refreshes. Reveal the fixture
@@ -256,10 +298,8 @@ func TestE2EStageUnstageDiscardCommitAndSwitchBranchByKeys(t *testing.T) {
 	}
 
 	r.write("tracked.txt", "committed through UI\n")
-	// Toggle to Magit keys so g refreshes immediately; no timers or sleeps are
-	// involved in this end-to-end driver.
-	sendE2EKey(t, m, keyMsg("f2"))
 	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("r"))
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: 's', Text: "S", Mod: tea.ModShift}))
 	sendE2EKey(t, m, keyMsg("c"))
 	sendE2EKey(t, m, keyMsg("c"))

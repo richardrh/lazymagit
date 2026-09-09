@@ -14,7 +14,7 @@ func RenderLedger() (string, error) {
 		return "", err
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "# Magit v4.7 status keybinding ledger\n\nGenerated from the vendored manifest for Magit %s (`%s`, `%s`, clean checkout). Run `go run ./internal/keymap/cmd/keymapdoc` to update or add `-check` to verify drift.\n\n", m.Upstream.Version, m.Upstream.Tag, m.Upstream.Commit)
+	fmt.Fprintf(&out, "# Magit v4.7 status keybinding ledger\n\nGenerated from the vendored manifest for Magit %s (`%s`, `%s`, clean checkout). Run `go run ./internal/keymap/cmd/keymapdoc` to update or add `-check` to verify drift.\n\n> The stock Magit keys and canonical inputs below are retained for provenance and catalog integrity; runtime dispatch uses the Doom scheme. See [README Keys](../README.md#keys), [Doom Magit](https://raw.githubusercontent.com/doomemacs/modules/main/modules/tools/magit/config.el), and [Evil Collection Magit](https://raw.githubusercontent.com/emacs-evil/evil-collection/master/modes/magit/evil-collection-magit.el).\n\n", m.Upstream.Version, m.Upstream.Tag, m.Upstream.Commit)
 	out.WriteString("| # | Upstream key | Canonical input | Upstream command | Kind | Domain | Layer | Source | Classification | Current status |\n|---:|---|---|---|---|---|---|---|---|---|\n")
 	count := renderTopLedger(&out, m)
 	occurrences := 0

@@ -53,21 +53,20 @@ func (m *Model) focusedInteractiveAction(key string) (selectedRow row, action gi
 	if !ok || selected.path == "" {
 		return row{}, 0, false
 	}
-	action, ok = interactiveChangeAction(m.scheme, key, selected.kind)
+	action, ok = interactiveChangeAction(key, selected.kind)
 	return selected, action, ok
 }
 
-func interactiveChangeAction(scheme keyScheme, key string, kind rowKind) (gitbackend.InteractiveChangeAction, bool) {
-	discardKey := map[keyScheme]string{schemeVim: "x", schemeMagit: "k"}[scheme]
+func interactiveChangeAction(key string, kind rowKind) (gitbackend.InteractiveChangeAction, bool) {
 	type actionKey struct {
 		key  string
 		kind rowKind
 	}
 	actions := map[actionKey]gitbackend.InteractiveChangeAction{
-		{"s", rowUnstaged}:        gitbackend.InteractiveChangeStage,
-		{"u", rowStaged}:          gitbackend.InteractiveChangeUnstage,
-		{discardKey, rowUnstaged}: gitbackend.InteractiveChangeDiscardUnstaged,
-		{discardKey, rowStaged}:   gitbackend.InteractiveChangeDiscardStaged,
+		{"s", rowUnstaged}: gitbackend.InteractiveChangeStage,
+		{"u", rowStaged}:   gitbackend.InteractiveChangeUnstage,
+		{"x", rowUnstaged}: gitbackend.InteractiveChangeDiscardUnstaged,
+		{"x", rowStaged}:   gitbackend.InteractiveChangeDiscardStaged,
 	}
 	action, ok := actions[actionKey{key, kind}]
 	return action, ok
@@ -156,7 +155,7 @@ func (m *Model) handlePatchRangeKey(key string) bool {
 	if key == "space" && m.detailRangeStart >= 0 {
 		return m.pinPatchRange()
 	}
-	delta := patchRangeDelta(m.scheme, key)
+	delta := patchRangeDelta(key)
 	if delta == 0 {
 		return false
 	}
@@ -186,11 +185,7 @@ func (m *Model) togglePatchRange() bool {
 		m.detailLine = changed[0]
 	}
 	m.detailRangeStart, m.detailRangeEnd = m.detailLine, m.detailLine
-	movement := "j/k"
-	if m.scheme == schemeMagit {
-		movement = "n/p"
-	}
-	m.setMessage("Line selection active; " + movement + " extend, Space add region, s/u/x review, v cancel")
+	m.setMessage("Line selection active; j/k extend, Space add region, s/u/x review, v cancel")
 	return true
 }
 
@@ -211,19 +206,12 @@ func (m *Model) pinPatchRange() bool {
 	}
 	m.detailSelections = append(m.detailSelections, gitbackend.InteractiveChangeSelection{Hunk: hunk, Start: start, End: end})
 	m.detailRangeStart, m.detailRangeEnd = -1, -1
-	movement := "j/k"
-	if m.scheme == schemeMagit {
-		movement = "n/p"
-	}
-	m.setMessage(fmt.Sprintf("Region added (%d); %s move, v select another, s/u/x review", len(m.detailSelections), movement))
+	m.setMessage(fmt.Sprintf("Region added (%d); j/k move, v select another, s/u/x review", len(m.detailSelections)))
 	return true
 }
 
-func patchRangeDelta(scheme keyScheme, key string) int {
-	if scheme == schemeVim {
-		return map[string]int{"j": 1, "k": -1}[key]
-	}
-	return map[string]int{"n": 1, "p": -1}[key]
+func patchRangeDelta(key string) int {
+	return map[string]int{"j": 1, "k": -1}[key]
 }
 
 func (m *Model) movePatchRange(delta int) {

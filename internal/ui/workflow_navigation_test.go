@@ -15,7 +15,7 @@ import (
 func navigationUIModel() *Model {
 	m := New(nil)
 	m.loading = false
-	m.scheme = schemeMagit
+
 	m.width, m.height = 100, 18
 	m.install(snapshot{
 		summary: gitbackend.Summary{Branch: "main", Head: "0123456789abcdef", Upstream: "origin/main", Ahead: 2, Behind: 1},
@@ -29,49 +29,60 @@ func navigationUIModel() *Model {
 	return m
 }
 
-func TestNavigationKeysDriveTreeAndPreserveVimJ(t *testing.T) {
+func TestDoomSectionNavigationPreservesJKMovement(t *testing.T) {
 	m := navigationUIModel()
 	unstaged := sectionmodel.SectionID("status/unstaged")
-	file := sectionmodel.SectionID("status/unstaged/file/one.txt")
-	m.tree.SetCursor(file)
-
-	if _, handled := m.handleNavigationKey(keyMsg("^")); !handled || m.tree.Cursor() != unstaged {
-		t.Fatalf("parent key handled=%v cursor=%q", handled, m.tree.Cursor())
+	m.tree.SetCursor("status/unstaged/file/one.txt")
+	_, _ = m.Update(keyMsg("g"))
+	_, _ = m.Update(keyMsg("h"))
+	if m.tree.Cursor() != unstaged {
+		t.Fatalf("gh cursor = %q", m.tree.Cursor())
 	}
-	if _, handled := m.handleNavigationKey(keyMsg("ctrl+tab")); !handled || !m.tree.IsFolded(unstaged) {
-		t.Fatalf("local cycle handled=%v folded=%v", handled, m.tree.IsFolded(unstaged))
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("c"))
+	if !m.tree.IsFolded(unstaged) {
+		t.Fatal("zc did not close the section")
 	}
-	if _, handled := m.handleNavigationKey(keyMsg("ctrl+tab")); !handled || m.tree.IsFolded(unstaged) {
-		t.Fatalf("second local cycle did not reveal children")
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("c"))
+	if !m.tree.IsFolded(unstaged) {
+		t.Fatal("repeating zc must not reopen the section")
 	}
-	if _, handled := m.handleNavigationKey(keyMsg("alt+n")); !handled || m.tree.Cursor() != "status/staged" {
-		t.Fatalf("next sibling handled=%v cursor=%q", handled, m.tree.Cursor())
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("o"))
+	if m.tree.IsFolded(unstaged) {
+		t.Fatal("zo did not open the section")
 	}
-
-	m.scheme = schemeVim
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("o"))
+	if m.tree.IsFolded(unstaged) {
+		t.Fatal("repeating zo must not close the section")
+	}
+	_, _ = m.Update(keyMsg("]"))
+	if m.tree.Cursor() != "status/staged" {
+		t.Fatalf("] cursor = %q", m.tree.Cursor())
+	}
 	before := m.tree.Cursor()
-	if cmd, handled := m.handleNavigationKey(keyMsg("j")); handled || cmd != nil || m.tree.Cursor() != before {
-		t.Fatal("navigation domain stole Vim j collision")
-	}
-	m.scheme = schemeMagit
-	if cmd, handled := m.handleNavigationKey(keyMsg("j")); handled || cmd != nil {
-		t.Fatal("navigation domain stole Magit j transient prefix")
-	}
 	_, _ = m.Update(keyMsg("j"))
-	if m.resolver.ActiveTransient() != "magit-status-jump" {
-		t.Fatalf("Magit j did not open status-jump transient: %q", m.resolver.ActiveTransient())
+	if m.tree.Cursor() == before || m.resolver.ActiveTransient() != "" {
+		t.Fatal("j must move down, not open a transient")
+	}
+	_, _ = m.Update(keyMsg("k"))
+	if m.tree.Cursor() != before || m.mode == modeConfirm {
+		t.Fatal("k must move up, not discard")
 	}
 }
 
 func TestDepthGlobalCycleVisitAndInformationRender(t *testing.T) {
 	m := navigationUIModel()
 	m.tree.SetCursor("status/unstaged")
-	if _, handled := m.handleNavigationKey(keyMsg("1")); !handled || !m.tree.IsFolded("status/unstaged") {
-		t.Fatal("local level one did not collapse selected tree")
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("1"))
+	if !m.tree.IsFolded("status/unstaged") {
+		t.Fatal("z1 did not collapse sections")
 	}
-	if _, handled := m.handleNavigationKey(keyMsg("alt+2")); !handled {
-		t.Fatal("global level two was not handled")
-	}
+	_, _ = m.Update(keyMsg("z"))
+	_, _ = m.Update(keyMsg("2"))
 	if got := m.tree.VisibleSectionIDs(); len(got) < 4 {
 		t.Fatalf("global level two did not reveal children: %v", got)
 	}
@@ -99,37 +110,20 @@ func TestDetailContextScrollAndOSC52ClipboardPayloads(t *testing.T) {
 	if _, handled := m.handleNavigationKey(tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace})); !handled || m.detailOffset != 0 {
 		t.Fatalf("backspace scroll handled=%v offset=%d", handled, m.detailOffset)
 	}
-	if _, handled := m.handleNavigationKey(keyMsg("-")); !handled || strings.Contains(m.detail, " before") || strings.Contains(m.detail, " after") {
+	if _, handled := m.handleNavigationKey(keyMsg("=")); !handled || strings.Contains(m.detail, " before") || strings.Contains(m.detail, " after") {
 		t.Fatalf("less-context output = %q", m.detail)
 	}
 
 	m.tree.SetCursor("status/unstaged/file/one.txt")
-	cmd, handled := m.handleNavigationKey(keyMsg("ctrl+w"))
-	if !handled || cmd == nil || clipboardPayload(cmd) != "one.txt" || !strings.Contains(m.message, "OSC52") {
-		t.Fatalf("section copy handled=%v payload=%q message=%q", handled, clipboardPayload(cmd), m.message)
+	_, _ = m.Update(keyMsg("y"))
+	_, cmd := m.Update(keyMsg("s"))
+	if cmd == nil || clipboardPayload(cmd) != "one.txt" || !strings.Contains(m.message, "OSC52") {
+		t.Fatalf("section copy payload=%q message=%q", clipboardPayload(cmd), m.message)
 	}
-	cmd, handled = m.handleNavigationKey(keyMsg("alt+w"))
-	if !handled || cmd == nil || clipboardPayload(cmd) != "0123456789abcdef" {
-		t.Fatalf("revision copy handled=%v payload=%q", handled, clipboardPayload(cmd))
-	}
-}
-
-func TestNavigationKeysRouteThroughModelUpdate(t *testing.T) {
-	m := navigationUIModel()
-	m.tree.SetCursor("status/unstaged/file/one.txt")
-	_, _ = m.Update(keyMsg("^"))
-	if m.tree.Cursor() != "status/unstaged" {
-		t.Fatalf("Model.Update did not route parent navigation: %q", m.tree.Cursor())
-	}
-	_, _ = m.Update(keyMsg("ctrl+tab"))
-	if !m.tree.IsFolded("status/unstaged") {
-		t.Fatal("Model.Update did not route section cycling")
-	}
-	_, _ = m.Update(keyMsg("ctrl+tab"))
-	m.tree.SetCursor("status/unstaged/file/one.txt")
-	_, cmd := m.Update(keyMsg("ctrl+w"))
-	if cmd == nil || clipboardPayload(cmd) != "one.txt" {
-		t.Fatalf("Model.Update did not route copy command: %q", clipboardPayload(cmd))
+	_, _ = m.Update(keyMsg("y"))
+	_, cmd = m.Update(keyMsg("b"))
+	if cmd == nil || clipboardPayload(cmd) != "0123456789abcdef" {
+		t.Fatalf("revision copy payload=%q", clipboardPayload(cmd))
 	}
 }
 
@@ -157,7 +151,7 @@ func TestVisitTerminalRowsAndCycleSelectedDetail(t *testing.T) {
 func TestEditBrowseAndNextReferenceStayInsideTerminalStatus(t *testing.T) {
 	m := New(nil)
 	m.loading = false
-	m.scheme = schemeMagit
+
 	m.showCommit = func(_ context.Context, id string) (string, error) {
 		return "commit " + id + "\n\nterminal detail", nil
 	}
@@ -217,32 +211,29 @@ func TestDiffContextKeysReloadSelectedFileDiff(t *testing.T) {
 	r.write("notes.txt", "zero\none\ntwo\nCHANGED\nfour\nfive\nsix\n")
 	m := newE2EModel(t, r)
 	selectE2EPath(t, m, "notes.txt", rowUnstaged)
-	m.scheme = schemeMagit
 
 	sendE2EKey(t, m, keyMsg("+"))
 	if m.diffContext != 6 || !strings.Contains(m.detail, " four") || !strings.Contains(m.message, "6 lines") {
 		t.Fatalf("more context=%d detail=%q message=%q", m.diffContext, m.detail, m.message)
 	}
-	sendE2EKey(t, m, keyMsg("-"))
+	sendE2EKey(t, m, keyMsg("="))
 	if m.diffContext != defaultDiffContext || !strings.Contains(m.message, "3 lines") {
 		t.Fatalf("less context=%d message=%q", m.diffContext, m.message)
 	}
 	sendE2EKey(t, m, keyMsg("+"))
-	sendE2EKey(t, m, keyMsg("0"))
+	sendE2EKey(t, m, keyMsg("g"))
+	sendE2EKey(t, m, keyMsg("="))
 	if m.diffContext != defaultDiffContext || !strings.Contains(m.message, "Default diff context") {
 		t.Fatalf("default context=%d message=%q", m.diffContext, m.message)
 	}
 }
 
 func TestStatusJumpTransientRoutesExactProjectedSections(t *testing.T) {
-	for key, section := range map[string]string{"z": "status/stashes", "n": "status/untracked", "u": "status/unstaged", "s": "status/staged", "fu": "status/unpulled", "pu": "status/unpushed"} {
+	for key, section := range map[string]string{"n": "status/untracked", "u": "status/unstaged", "s": "status/staged", "fu": "status/unpulled", "pu": "status/unpushed"} {
 		m := navigationUIModel()
 		m.repo = &gitbackend.Repository{}
-		m.scheme = schemeMagit
-		_, _ = m.Update(keyMsg("j"))
-		if m.resolver.ActiveTransient() != "magit-status-jump" {
-			t.Fatalf("j did not open status jump transient")
-		}
+
+		_, _ = m.Update(keyMsg("g"))
 		for _, token := range strings.Split(key, "") {
 			_, _ = m.Update(keyMsg(token))
 		}

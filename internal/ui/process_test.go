@@ -73,9 +73,13 @@ func TestProcessPanelLayoutScrollCloseAndEmptyCopy(t *testing.T) {
 	if cmd == nil || m.message != "Clipboard copy requested" {
 		t.Fatalf("non-empty copy cmd=%v message=%q", cmd != nil, m.message)
 	}
-	_, _ = m.Update(keyMsg("$"))
+	_, _ = m.Update(keyMsg("`"))
+	if m.mode != modeProcess {
+		t.Fatal("backtick must not recursively open or close the process pane")
+	}
+	_, _ = m.Update(keyMsg("q"))
 	if m.mode != modeStatus {
-		t.Fatal("$ did not close process pane")
+		t.Fatal("q did not close process pane")
 	}
 }
 
@@ -203,7 +207,7 @@ func TestPushDestinationCollectorPersistsOnlyAfterReviewedPush(t *testing.T) {
 	m := New(repo)
 	m.loading = false
 	m.install(snapshot{summary: summary, remotes: remotes})
-	_, _ = m.Update(keyMsg("P"))
+	_, _ = m.Update(keyMsg("p"))
 	_, cmd := m.Update(keyMsg("p"))
 	if cmd == nil {
 		t.Fatal("push without pushRemote did not load its reviewed chooser")

@@ -1,0 +1,49 @@
+baseURL: https://richardrh.github.io/lazymagit/
+title: lazymagit
+locale: en-US
+enableRobotsTXT: true
+
+disableKinds:
+  - taxonomy
+  - term
+
+module:
+  hugoVersion:
+    extended: true
+    min: 0.158.0
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  highlight:
+    noClasses: false
+
+menu:
+  main:
+    - name: Documentation
+      pageRef: /docs
+      weight: 1
+    - name: GitHub
+      url: https://github.com/richardrh/lazymagit
+      weight: 2
+      params:
+        icon: github
+    - name: Search
+      weight: 3
+      params:
+        type: search
+
+params:
+  description: A standalone Go TUI for a Magit-style Git workflow.
+
+  navbar:
+    displayTitle: true
+    displayLogo: false
+
+  footer:
+    displayCopyright: true
+    displayPoweredBy: true
+
+  editURL:
+    enable: true
+    base: https://github.com/richardrh/lazymagit/edit/master/doc/content

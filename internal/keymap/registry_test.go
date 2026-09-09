@@ -117,57 +117,63 @@ func TestTransientCatalogIsExactCompleteOccurrenceMultiset(t *testing.T) {
 	}
 }
 
-func TestPortableNavigationBindingsAreClassifiedAndKeepSchemeCollisions(t *testing.T) {
-	magit := []struct {
+func TestDoomBindingsRemapMagitCollisionsWithoutLosingStockProvenance(t *testing.T) {
+	for _, test := range []struct {
 		sequence []string
 		command  CommandID
-		parity   Parity
 	}{
-		{[]string{"ctrl+c", "tab"}, CommandSectionCycle, ParityPartial},
-		{[]string{"ctrl+tab"}, CommandSectionCycle, ParityPartial},
-		{[]string{"shift+tab"}, CommandSectionCycleGlobal, ParityPartial},
-		{[]string{"^"}, CommandSectionParent, ParityPartial},
-		{[]string{"alt+p"}, CommandSiblingPrevious, ParityPartial},
-		{[]string{"alt+n"}, CommandSiblingNext, ParityPartial},
-		{[]string{"4"}, CommandLocalDepth4, ParityPartial},
-		{[]string{"alt+1"}, CommandGlobalDepth1, ParityPartial},
-		{[]string{"alt+2"}, CommandGlobalDepth2, ParityPartial},
-		{[]string{"alt+3"}, CommandGlobalDepth3, ParityPartial},
-		{[]string{"alt+4"}, CommandGlobalDepth4, ParityPartial},
-		{[]string{"enter"}, CommandVisitThing, ParityPartial},
-		{[]string{"ctrl+enter"}, CommandVisitThing, ParityPartial},
-		{[]string{"alt+tab"}, CommandCycleDiffs, ParityAdapted},
-		{[]string{"backspace"}, CommandDetailBackward, ParityPartial},
-		{[]string{"+"}, CommandDiffMoreContext, ParityPartial},
-		{[]string{"-"}, CommandDiffLessContext, ParityPartial},
-		{[]string{"0"}, CommandDiffDefaultContext, ParityPartial},
-		{[]string{"ctrl+c", "ctrl+e"}, CommandEditThing, ParityAdapted},
-		{[]string{"ctrl+c", "ctrl+o"}, CommandBrowseThing, ParityAdapted},
-		{[]string{"ctrl+c", "ctrl+r"}, CommandNextReference, ParityAdapted},
-	}
-	for _, test := range magit {
-		binding, ok := Find(SchemeMagit, ContextStatus, test.sequence...)
-		if !ok || binding.Handler != HandlerExecute || binding.Command != test.command || binding.Parity != test.parity {
-			t.Errorf("Magit %v = %+v, want execute %s/%s", test.sequence, binding, test.command, test.parity)
+		{[]string{"j"}, CommandMoveDown}, {[]string{"k"}, CommandMoveUp},
+		{[]string{"g", "g"}, CommandFirst}, {[]string{"G"}, CommandLast},
+		{[]string{"g", "r"}, CommandRefresh}, {[]string{"g", "R"}, CommandRefresh},
+		{[]string{"g", "z"}, CommandRefresh}, {[]string{"x"}, CommandDiscard},
+		{[]string{"p"}, "transient.push"}, {[]string{"o"}, "magit.reset-quickly"},
+		{[]string{"O"}, "transient.reset"}, {[]string{"X"}, "file.untrack"},
+		{[]string{"-"}, "magit.revert-no-commit"}, {[]string{"_"}, "transient.revert"},
+		{[]string{"|"}, "magit.git-command"}, {[]string{"'"}, "transient.submodule"},
+		{[]string{"\""}, "transient.subtree"}, {[]string{"="}, CommandDiffLessContext},
+		{[]string{"~"}, CommandDiffDefaultContext}, {[]string{"Z"}, "transient.stash"},
+		{[]string{"h"}, CommandOpenDispatcher}, {[]string{"y", "y"}, CommandCopyLine},
+		{[]string{"*"}, "transient.worktree"}, {[]string{"z", "1"}, CommandGlobalDepth1},
+		{[]string{"z", "o"}, CommandSectionOpen}, {[]string{"z", "C"}, CommandSectionCloseRecursive},
+		{[]string{"z", "t"}, CommandViewportTop}, {[]string{"ctrl+d"}, CommandHalfPageDown},
+		{[]string{"ctrl+u"}, CommandHalfPageUp}, {[]string{"ctrl+f"}, CommandPageDown},
+		{[]string{"ctrl+b"}, CommandPageUp}, {[]string{"Q"}, CommandQuitAll},
+	} {
+		binding, ok := Find(SchemeDoom, ContextStatus, test.sequence...)
+		if !ok || binding.Command != test.command || binding.Handler != HandlerExecute && !strings.HasPrefix(string(binding.Command), "transient.") {
+			t.Errorf("Doom %v = %+v, want %s", test.sequence, binding, test.command)
 		}
 	}
-	for _, sequence := range [][]string{{"ctrl+c", "ctrl+e"}, {"ctrl+c", "ctrl+o"}, {"ctrl+c", "ctrl+r"}} {
-		if binding, ok := Find(SchemeVim, ContextStatus, sequence...); ok {
-			t.Errorf("Vim Ctrl-c quit collision exposed %v as %+v", sequence, binding)
+	for _, sequence := range [][]string{{"1"}, {"2"}, {"3"}, {"4"}, {"alt+1"}, {"alt+2"}, {"alt+3"}, {"alt+4"}, {"P"}, {"ctrl+g"}, {":"}} {
+		if _, ok := Find(SchemeDoom, ContextStatus, sequence...); ok {
+			t.Errorf("shadowed Doom sequence exposed: %v", sequence)
 		}
-	}
-
-	if binding, ok := Find(SchemeVim, ContextStatus, "j"); !ok || binding.Command != CommandMoveDown {
-		t.Fatalf("Vim j collision = %+v", binding)
-	}
-	if binding, ok := Find(SchemeVim, ContextStatus, "x"); !ok || binding.Command != CommandDiscard {
-		t.Fatalf("Vim x collision = %+v", binding)
-	}
-	if _, ok := Find(SchemeVim, ContextStatus, "n"); ok {
-		t.Fatal("Magit n must not displace Vim navigation")
 	}
 	if binding, ok := Find(SchemeMagit, ContextStatus, "j"); !ok || binding.Handler != HandlerPrefix || binding.UpstreamCommand != "magit-status-jump" {
-		t.Fatalf("Magit j collision = %+v", binding)
+		t.Fatalf("Magit j provenance = %+v", binding)
+	}
+	if binding, ok := Find(SchemeMagit, ContextStatus, "P"); !ok || binding.Handler != HandlerPrefix || binding.UpstreamCommand != "magit-push" {
+		t.Fatalf("Magit P provenance = %+v", binding)
+	}
+}
+
+func TestDoomTransientSuffixesRetainStockKeys(t *testing.T) {
+	for _, test := range []struct {
+		transient, key string
+	}{
+		{"magit-push", "p"}, {"magit-stash", "v"}, {"magit-worktree", "b"},
+	} {
+		bindings := BindingsForTransient(SchemeDoom, test.transient)
+		var found bool
+		for _, binding := range bindings {
+			if binding.LocalSequence != nil && strings.Join(binding.LocalSequence, "") == test.key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s lost stock suffix %q", test.transient, test.key)
+		}
 	}
 }
 
@@ -264,7 +270,7 @@ func TestSelfNamedSuffixesAreTerminalOrUnavailable(t *testing.T) {
 }
 
 func TestEveryAvailableCatalogSequenceResolvesToItsRegisteredCommand(t *testing.T) {
-	for _, scheme := range []Scheme{SchemeVim, SchemeMagit} {
+	for _, scheme := range []Scheme{SchemeDoom, SchemeMagit} {
 		ctx := Context{View: ViewStatus, Section: SectionUnstaged, Scheme: scheme}
 		for _, binding := range Registry() {
 			if binding.Scheme != scheme || binding.Handler != HandlerExecute {

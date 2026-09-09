@@ -73,8 +73,8 @@ func TestHandleStatusSearchKeyDirectRoutes(t *testing.T) {
 
 func TestHandleGlobalKeyDirectRoutes(t *testing.T) {
 	quit := New(nil)
-	if cmd, handled := quit.handleGlobalKey("ctrl+c"); !handled || cmd == nil {
-		t.Fatal("Vim ctrl+c did not quit")
+	if cmd, handled := quit.handleGlobalKey("ctrl+c"); handled || cmd != nil {
+		t.Fatal("Ctrl-c must remain available as a Magit command prefix")
 	}
 
 	graph := New(nil)
@@ -103,15 +103,8 @@ func TestHandleGlobalKeyDirectRoutes(t *testing.T) {
 		t.Fatalf("workflow escape handled=%v loading=%v message=%q", handled, loading.workflowLoading, loading.message)
 	}
 
-	toggle := New(nil)
-	toggle.mode = modeHelp
-	if cmd, handled := toggle.handleGlobalKey("f2"); !handled || cmd != nil || toggle.scheme != schemeMagit || toggle.mode != modeStatus {
-		t.Fatalf("first scheme toggle handled=%v scheme=%v mode=%v", handled, toggle.scheme, toggle.mode)
-	}
-	if _, handled := toggle.handleGlobalKey("f2"); !handled || toggle.scheme != schemeVim {
-		t.Fatalf("second scheme toggle handled=%v scheme=%v", handled, toggle.scheme)
-	}
-	if cmd, handled := toggle.handleGlobalKey("unrelated"); handled || cmd != nil {
+	other := New(nil)
+	if cmd, handled := other.handleGlobalKey("unrelated"); handled || cmd != nil {
 		t.Fatal("global handler accepted unrelated key")
 	}
 }
@@ -131,7 +124,7 @@ func TestHandleHelpKeyDirectRoutes(t *testing.T) {
 
 	prefix := New(nil)
 	prefix.mode = modeHelp
-	if cmd := prefix.handleHelpKey("c"); cmd != nil || prefix.mode != modeStatus || prefix.resolver.PendingPrefix() != "c" {
+	if cmd := prefix.handleHelpKey("c"); cmd != nil || prefix.mode != modeStatus || prefix.resolver.ActiveTransient() != "magit-commit" {
 		t.Fatalf("help prefix cmd=%v mode=%v pending=%q", cmd, prefix.mode, prefix.resolver.PendingPrefix())
 	}
 
@@ -235,7 +228,7 @@ func TestPerformChangeCommandDirectRoutes(t *testing.T) {
 		t.Fatalf("Vim discard handled=%v cmd=%v mode=%v", handled, cmd, vimDiscard.mode)
 	}
 	magitDiscard := changeTargetModel()
-	magitDiscard.scheme = schemeMagit
+
 	selectTargetRow(magitDiscard, rowStaged)
 	if _, handled := magitDiscard.performChangeCommand(keymap.CommandDiscard); !handled || magitDiscard.mode != modeConfirm {
 		t.Fatalf("Magit staged discard handled=%v mode=%v", handled, magitDiscard.mode)
