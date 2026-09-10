@@ -9,17 +9,25 @@ import (
 )
 
 func messageKey(text string) tea.KeyPressMsg {
-	if text == "enter" {
+	switch text {
+	case "enter":
 		return tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter})
-	}
-	if text == "esc" {
+	case "esc":
 		return tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape})
-	}
-	if text == "backspace" {
+	case "backspace":
 		return tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace})
+	case "left", "right", "up", "down", "home", "end":
+		return tea.KeyPressMsg(tea.Key{Code: map[string]rune{"left": tea.KeyLeft, "right": tea.KeyRight, "up": tea.KeyUp, "down": tea.KeyDown, "home": tea.KeyHome, "end": tea.KeyEnd}[text]})
+	case "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "ctrl+s":
+		r := []rune(text)
+		return tea.KeyPressMsg(tea.Key{Code: r[5], Mod: tea.ModCtrl})
+	case "alt+d", "alt+k":
+		r := []rune(text)
+		return tea.KeyPressMsg(tea.Key{Code: r[4], Mod: tea.ModAlt})
 	}
 	r := []rune(text)
 	return tea.KeyPressMsg(tea.Key{Code: r[0], Text: text})
+
 }
 
 func TestMessageBufferUnicodeInsertionPasteAndUndo(t *testing.T) {
@@ -167,19 +175,84 @@ func TestMessageBufferNormalCommandsAndMotionBoundaries(t *testing.T) {
 		})
 	}
 
+	motionCases := []struct {
+		name  string
+		text  string
+		setup []string
+		key   string
+		line  int
+		col   int
+	}{
+		{name: "line start", text: "one\ntwo", key: "0", line: 1, col: 0},
+		{name: "line end", text: "one\ntwo", key: "$", line: 1, col: 2},
+		{name: "first nonblank", text: "  one\ntwo", setup: []string{"g", "g"}, key: "^", line: 0, col: 2},
+		{name: "next line", text: "one\ntwo\nthree", setup: []string{"g", "g"}, key: "j", line: 1, col: 0},
+		{name: "previous line", text: "one\ntwo", key: "k", line: 0, col: 2},
+		{name: "counted next line", text: "one\ntwo\nthree", setup: []string{"g", "g", "2"}, key: "j", line: 2, col: 0},
+		{name: "first line", text: "one\ntwo", key: "gg", line: 0, col: 0},
+		{name: "last line", text: "one\ntwo", key: "G", line: 1, col: 0},
+		{name: "next word", text: "one two\nthree", setup: []string{"g", "g"}, key: "w", line: 0, col: 4},
+		{name: "previous word", text: "one two\nthree", setup: []string{"g", "g", "w"}, key: "b", line: 0, col: 0},
+		{name: "word end", text: "one two\nthree", setup: []string{"g", "g"}, key: "e", line: 0, col: 2},
+	}
+	for _, test := range motionCases {
+		t.Run(test.name, func(t *testing.T) {
+			b := NewMessageBuffer(test.text)
+			b.HandleKey(messageKey("esc"))
+			for _, key := range test.setup {
+				b.HandleKey(messageKey(key))
+			}
+			b.HandleKey(messageKey(test.key))
+			if line, col := b.Cursor(); line != test.line || col != test.col {
+				t.Fatalf("cursor = %d:%d, want %d:%d", line, col, test.line, test.col)
+			}
+		})
+	}
+
+	page := NewMessageBuffer(strings.TrimSuffix(strings.Repeat("line\n", 30), "\n"))
+	page.HandleKey(messageKey("esc"))
+	page.HandleKey(messageKey("ctrl+u"))
+	if line, _ := page.Cursor(); line != 19 {
+		t.Fatalf("ctrl+u moved to line %d, want 19", line)
+	}
+	page.HandleKey(messageKey("ctrl+d"))
+	if line, _ := page.Cursor(); line != 29 {
+		t.Fatalf("ctrl+d moved to line %d, want 29", line)
+	}
+	page.HandleKey(messageKey("ctrl+b"))
+	if line, _ := page.Cursor(); line != 9 {
+		t.Fatalf("ctrl+b moved to line %d, want 9", line)
+	}
+	page.HandleKey(messageKey("ctrl+f"))
+	if line, _ := page.Cursor(); line != 29 {
+		t.Fatalf("ctrl+f moved to line %d, want 29", line)
+	}
+
+	invalid := NewMessageBuffer("one two\nthree")
+	invalid.HandleKey(messageKey("esc"))
+	invalid.HandleKey(messageKey("g"))
+	invalid.HandleKey(messageKey("x"))
+	if invalid.Text() != "one two\nthree" {
+		t.Fatalf("invalid prefix changed text: %q", invalid.Text())
+	}
+
+	insert := NewMessageBuffer("ab")
+	insert.HandleKey(messageKey("enter"))
+	if insert.Text() != "ab\n" {
+		t.Fatalf("enter insertion = %q", insert.Text())
+	}
+	insert.SetText("ab")
+	insert.HandleKey(messageKey("delete"))
+	if insert.Text() != "ab" {
+		t.Fatalf("delete at end changed text: %q", insert.Text())
+	}
+	insert.HandleKey(messageKey("left"))
+	if _, col := insert.Cursor(); col != 1 {
+		t.Fatalf("left insertion motion moved to column %d, want 1", col)
+	}
+
 	b := NewMessageBuffer("one two\nthree")
-	for _, key := range []string{"esc", "g", "x", "g", "g", "2", "d", "w"} {
-		b.HandleKey(messageKey(key))
-	}
-	if b.Text() != "three" {
-		t.Fatalf("invalid g prefix or counted delete changed text incorrectly: %q", b.Text())
-	}
-	for _, key := range []string{"0", "^", "$", "end", "j", "down", "k", "up", "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "G", "g", "g", "w", "b", "e"} {
-		b.HandleKey(messageKey(key))
-	}
-	if line, column := b.Cursor(); line < 0 || column < 0 {
-		t.Fatalf("motion produced invalid cursor %d:%d", line, column)
-	}
+	b.HandleKey(messageKey("esc"))
 	b.HandleKey(messageKey("v"))
 	b.HandleKey(messageKey("V"))
 	if b.Mode() != "V-LINE" {
