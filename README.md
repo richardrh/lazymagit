@@ -89,6 +89,10 @@ CGO_ENABLED=0 go build -o lazymagit ./cmd/lazymagit
 threshold check, and generated-keybinding drift checks. To run only the Go
 tests, use `go test ./...`.
 
+The CRAP quality gate currently rejects scores above 100. Accepted scores are
+tracked in `internal/quality/crap-baseline.json` so later changes cannot add
+new violations or worsen existing ones.
+
 The resulting executable contains the Go application and TUI dependencies in
 one binary. Like Magit itself, it invokes the system Git executable for Git
 semantics, hooks, configuration, and authentication.
