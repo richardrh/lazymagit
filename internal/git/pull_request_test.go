@@ -132,6 +132,43 @@ func TestCreatedPullRequestKeepsIdentityWhenRefreshFails(t *testing.T) {
 	}
 }
 
+func TestPullRequestForUIRejectsAmbiguousOpenPullRequests(t *testing.T) {
+	logPath, _ := fakeGH(t, "if [ \"$1\" = pr ] && [ \"$2\" = list ]; then printf '%s' '[{\"number\":1,\"url\":\"u1\",\"headRefName\":\"main\"},{\"number\":2,\"url\":\"u2\",\"headRefName\":\"main\"}]'; exit 0; fi\n")
+	r := newTestRepo(t)
+	r.write("tracked", "text\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.PullRequestForUI(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "multiple open PRs") {
+		t.Fatalf("ambiguous pull request error = %v", err)
+	}
+	log, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if strings.Contains(string(log), "pr edit") {
+		t.Fatalf("ambiguous lookup attempted mutation: %s", log)
+	}
+}
+
+func TestPullRequestForUIRejectsReturnedHeadMismatch(t *testing.T) {
+	fakeGH(t, "if [ \"$1\" = pr ] && [ \"$2\" = list ]; then printf '%s' '[{\"number\":1,\"url\":\"u1\",\"headRefName\":\"other\"}]'; exit 0; fi\n")
+	r := newTestRepo(t)
+	r.write("tracked", "text\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.PullRequestForUI(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "current branch") {
+		t.Fatalf("head mismatch error = %v", err)
+	}
+}
+
 func TestSubmitPullRequestEditUsesReviewedIdentity(t *testing.T) {
 	logPath, _ := fakeGH(t, "if [ \"$1\" = pr ] && [ \"$2\" = view ]; then printf '%s' '{\"number\":7,\"url\":\"https://github.com/owner/repo/pull/7\",\"title\":\"old\",\"body\":\"old\",\"baseRefName\":\"main\",\"headRefName\":\"main\",\"isDraft\":false}'; exit 0; fi\nif [ \"$1\" = pr ] && [ \"$2\" = edit ]; then cat >/dev/null; exit 0; fi\n")
 	r := newTestRepo(t)
@@ -151,7 +188,42 @@ func TestSubmitPullRequestEditUsesReviewedIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(log), "pr edit 7 --repo owner/repo --title new title --body-file - --base main") {
-		t.Fatalf("edit invocation missing reviewed values: %s", log)
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	viewIndex, editIndex := -1, -1
+	for index, line := range lines {
+		if strings.HasPrefix(line, "pr view 7 ") && viewIndex == -1 {
+			viewIndex = index
+		}
+		if strings.HasPrefix(line, "pr edit 7 ") && editIndex == -1 {
+			editIndex = index
+		}
+	}
+	if viewIndex == -1 || editIndex == -1 || viewIndex >= editIndex {
+		t.Fatalf("reviewed view did not precede edit: %q", lines)
+	}
+	if !strings.Contains(lines[editIndex], "pr edit 7 --repo owner/repo --title new title --body-file - --base main") {
+		t.Fatalf("edit invocation missing reviewed values: %s", lines[editIndex])
+	}
+}
+
+func TestSubmitPullRequestEditRejectsStaleHeadBeforeMutation(t *testing.T) {
+	logPath, _ := fakeGH(t, "if [ \"$1\" = pr ] && [ \"$2\" = view ]; then printf '%s' '{\"number\":7,\"url\":\"https://github.com/owner/repo/pull/7\",\"title\":\"old\",\"body\":\"old\",\"baseRefName\":\"main\",\"headRefName\":\"other\",\"isDraft\":false}'; exit 0; fi\nif [ \"$1\" = pr ] && [ \"$2\" = edit ]; then printf '%s' > \"$GH_TEST_BODY\"; exit 0; fi\n")
+	r := newTestRepo(t)
+	r.write("tracked", "text\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = repo.SubmitPullRequest(context.Background(), PullRequest{Number: 7, Title: "title", Body: "body", Base: "main", Head: "main"})
+	if err == nil || !strings.Contains(err.Error(), "belongs to") {
+		t.Fatalf("stale pull request error = %v", err)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(log), "pr edit 7") {
+		t.Fatalf("stale pull request was mutated: %s", log)
 	}
 }
