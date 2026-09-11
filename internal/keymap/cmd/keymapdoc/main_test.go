@@ -43,8 +43,20 @@ func TestRepositoryRootFromNestedDirectoryAndMissingModule(t *testing.T) {
 	if err := os.Chdir(nested); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := repositoryRoot(); err != nil || got != root {
-		t.Fatalf("repositoryRoot() = %q, %v", got, err)
+	got, err := repositoryRoot()
+	if err != nil {
+		t.Fatalf("repositoryRoot() error = %v", err)
+	}
+	want, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = filepath.EvalSymlinks(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("repositoryRoot() = %q, want %q", got, want)
 	}
 	missing := t.TempDir()
 	if err := os.Chdir(missing); err != nil {

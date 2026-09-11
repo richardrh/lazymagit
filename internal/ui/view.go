@@ -50,7 +50,7 @@ func (m *Model) renderMainBody(bodyHeight int) string {
 	var body string
 	if bodyHeight < 3 {
 		body = fitBlock("Repository status", m.width, bodyHeight)
-	} else if m.width >= 96 {
+	} else if m.width >= 96 && !m.splitHorizontal {
 		left := max(36, m.width*43/100)
 		right := m.width - left
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
@@ -58,7 +58,7 @@ func (m *Model) renderMainBody(bodyHeight int) string {
 			m.renderDetailPanel(right, bodyHeight),
 		)
 	} else if bodyHeight >= 7 {
-		panelHeight := bodyHeight - 1 // The newline between stacked panels.
+		panelHeight := bodyHeight - 1
 		statusHeight := max(3, panelHeight*55/100)
 		statusHeight = min(statusHeight, panelHeight-3)
 		detailHeight := panelHeight - statusHeight
@@ -170,6 +170,9 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 	if m.compactDetailCursorSelected(index) {
 		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 	}
+	if styled, ok := m.inspectionRowStyle(style, index); ok {
+		return styled
+	}
 	if rangeLow >= 0 && index >= rangeLow && index <= rangeHigh {
 		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
 	}
@@ -180,6 +183,27 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 		return style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
 	}
 	return compactDiffLineStyle(style, line)
+}
+
+func (m *Model) inspectionRowStyle(style lipgloss.Style, index int) (lipgloss.Style, bool) {
+	if m.graphActive {
+		if entry, ok := m.graphEntries[index]; ok {
+			if entry.Decorations != "" {
+				return style.Foreground(colorGold), true
+			}
+			return style.Foreground(colorPurple), true
+		}
+	}
+	if m.blameActive {
+		if blame, ok := m.blameEntries[index]; ok {
+			if len(blame.CommitID) == 0 {
+				return style.Foreground(colorMuted), true
+			}
+			colors := [...]color.Color{colorCyan, colorPurple, colorGreen}
+			return style.Foreground(colors[int(blame.CommitID[0])%len(colors)]), true
+		}
+	}
+	return style, false
 }
 
 func (m *Model) compactDetailCursorSelected(index int) bool {
@@ -390,13 +414,13 @@ func (m *Model) footerLeft(scheme string) string {
 	if m.mode == modeWorkflow && m.workflow != nil && m.workflow.message != nil {
 		return m.messageFooter()
 	}
+	if m.mode != modeStatus && m.mode != modeProcess {
+		return modeFooter(m.mode)
+	}
 	if m.resolver.PendingPrefix() != "" {
 		return m.pendingFooter(scheme)
 	}
-	if m.mode == modeStatus {
-		return m.statusFooter()
-	}
-	return modeFooter(m.mode)
+	return m.statusFooter()
 }
 
 func (m *Model) pendingFooter(scheme string) string {
@@ -411,13 +435,10 @@ func (m *Model) pendingFooter(scheme string) string {
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
 	if m.graphActive {
-		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  q close")
+		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  alt+| swap split  q close")
 	}
 	if m.blameActive {
-		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
-	}
-	if m.conflictInspectPath != "" {
-		return gold.Render("Conflict") + muted.Render("  1 base inspect-only  2 ours  3 theirs  r review resolution  Esc close")
+		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  alt+| swap split  Esc close")
 	}
 	if m.revisionActive {
 		controls := "  Alt-p first parent  Esc close"
