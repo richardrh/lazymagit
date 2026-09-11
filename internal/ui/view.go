@@ -170,26 +170,8 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 	if m.compactDetailCursorSelected(index) {
 		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
 	}
-	if entry, ok := m.graphEntries[index]; m.graphActive && ok {
-		if entry.Decorations != "" {
-			return style.Foreground(colorGold)
-		}
-		return style.Foreground(colorPurple)
-	}
-	if blame, ok := m.blameEntries[index]; m.blameActive && ok {
-		// Stable per-commit coloring makes adjacent blame ownership changes visible
-		// without turning source content into a rainbow.
-		if len(blame.CommitID) == 0 {
-			return style.Foreground(colorMuted)
-		}
-		switch blame.CommitID[0] % 3 {
-		case 0:
-			return style.Foreground(colorCyan)
-		case 1:
-			return style.Foreground(colorPurple)
-		default:
-			return style.Foreground(colorGreen)
-		}
+	if styled, ok := m.inspectionRowStyle(style, index); ok {
+		return styled
 	}
 	if rangeLow >= 0 && index >= rangeLow && index <= rangeHigh {
 		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
@@ -201,6 +183,27 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 		return style.Foreground(colorOnAccent).Background(colorPurple).Bold(true)
 	}
 	return compactDiffLineStyle(style, line)
+}
+
+func (m *Model) inspectionRowStyle(style lipgloss.Style, index int) (lipgloss.Style, bool) {
+	if m.graphActive {
+		if entry, ok := m.graphEntries[index]; ok {
+			if entry.Decorations != "" {
+				return style.Foreground(colorGold), true
+			}
+			return style.Foreground(colorPurple), true
+		}
+	}
+	if m.blameActive {
+		if blame, ok := m.blameEntries[index]; ok {
+			if len(blame.CommitID) == 0 {
+				return style.Foreground(colorMuted), true
+			}
+			colors := [...]color.Color{colorCyan, colorPurple, colorGreen}
+			return style.Foreground(colors[int(blame.CommitID[0])%len(colors)]), true
+		}
+	}
+	return style, false
 }
 
 func (m *Model) compactDetailCursorSelected(index int) bool {
