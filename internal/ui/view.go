@@ -50,7 +50,7 @@ func (m *Model) renderMainBody(bodyHeight int) string {
 	var body string
 	if bodyHeight < 3 {
 		body = fitBlock("Repository status", m.width, bodyHeight)
-	} else if m.width >= 96 {
+	} else if m.width >= 96 && !m.splitHorizontal {
 		left := max(36, m.width*43/100)
 		right := m.width - left
 		body = lipgloss.JoinHorizontal(lipgloss.Top,
@@ -58,7 +58,7 @@ func (m *Model) renderMainBody(bodyHeight int) string {
 			m.renderDetailPanel(right, bodyHeight),
 		)
 	} else if bodyHeight >= 7 {
-		panelHeight := bodyHeight - 1 // The newline between stacked panels.
+		panelHeight := bodyHeight - 1
 		statusHeight := max(3, panelHeight*55/100)
 		statusHeight = min(statusHeight, panelHeight-3)
 		detailHeight := panelHeight - statusHeight
@@ -169,6 +169,27 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 	style := lipgloss.NewStyle().Foreground(colorText)
 	if m.compactDetailCursorSelected(index) {
 		return style.Foreground(colorOnAccent).Background(colorCyan).Bold(true)
+	}
+	if entry, ok := m.graphEntries[index]; m.graphActive && ok {
+		if entry.Decorations != "" {
+			return style.Foreground(colorGold)
+		}
+		return style.Foreground(colorPurple)
+	}
+	if blame, ok := m.blameEntries[index]; m.blameActive && ok {
+		// Stable per-commit coloring makes adjacent blame ownership changes visible
+		// without turning source content into a rainbow.
+		if len(blame.CommitID) == 0 {
+			return style.Foreground(colorMuted)
+		}
+		switch blame.CommitID[0] % 3 {
+		case 0:
+			return style.Foreground(colorCyan)
+		case 1:
+			return style.Foreground(colorPurple)
+		default:
+			return style.Foreground(colorGreen)
+		}
 	}
 	if rangeLow >= 0 && index >= rangeLow && index <= rangeHigh {
 		return style.Foreground(colorOnAccent).Background(colorGold).Bold(index == m.detailLine)
@@ -390,13 +411,13 @@ func (m *Model) footerLeft(scheme string) string {
 	if m.mode == modeWorkflow && m.workflow != nil && m.workflow.message != nil {
 		return m.messageFooter()
 	}
+	if m.mode != modeStatus && m.mode != modeProcess {
+		return modeFooter(m.mode)
+	}
 	if m.resolver.PendingPrefix() != "" {
 		return m.pendingFooter(scheme)
 	}
-	if m.mode == modeStatus {
-		return m.statusFooter()
-	}
-	return modeFooter(m.mode)
+	return m.statusFooter()
 }
 
 func (m *Model) pendingFooter(scheme string) string {
@@ -411,13 +432,10 @@ func (m *Model) pendingFooter(scheme string) string {
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
 	if m.graphActive {
-		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  q close")
+		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  alt+| swap split  q close")
 	}
 	if m.blameActive {
-		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  Esc close")
-	}
-	if m.conflictInspectPath != "" {
-		return gold.Render("Conflict") + muted.Render("  1 base inspect-only  2 ours  3 theirs  r review resolution  Esc close")
+		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  alt+| swap split  Esc close")
 	}
 	if m.revisionActive {
 		controls := "  Alt-p first parent  Esc close"

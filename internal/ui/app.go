@@ -140,22 +140,23 @@ type Model struct {
 	snapshot snapshot
 	resolver *keymap.Resolver
 
-	width, height int
-	loading       bool
-	busy          bool
-	compact       bool
-	searching     bool
-	searchQuery   string
-	searchMatches []sectionmodel.SectionID
-	searchIndex   int
-	message       string
-	isError       bool
-	detail        string
-	detailID      sectionmodel.SectionID
-	mode          mode
-	themeNames    []string
-	themeCursor   int
-	themeName     string
+	width, height   int
+	loading         bool
+	busy            bool
+	compact         bool
+	splitHorizontal bool
+	searching       bool
+	searchQuery     string
+	searchMatches   []sectionmodel.SectionID
+	searchIndex     int
+	message         string
+	isError         bool
+	detail          string
+	detailID        sectionmodel.SectionID
+	mode            mode
+	themeNames      []string
+	themeCursor     int
+	themeName       string
 
 	input                 string
 	branches              []gitbackend.Branch
@@ -1048,6 +1049,12 @@ func (m *Model) handleStatusPreRouting(msg tea.KeyPressMsg, key string) (tea.Cmd
 	}
 	if cmd, handled := m.handleStatusModeKey(msg, key); handled {
 		return cmd, true
+	}
+	if key == "alt+|" {
+		m.splitHorizontal = !m.splitHorizontal
+		m.setMessage(map[bool]string{true: "Windows stacked horizontally", false: "Windows split vertically"}[m.splitHorizontal])
+		m.cancelPrefix()
+		return nil, true
 	}
 	return m.handleStatusNavigation(msg, key)
 }
