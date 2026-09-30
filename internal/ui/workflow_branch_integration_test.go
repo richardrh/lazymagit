@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
 )
 
@@ -31,18 +30,18 @@ func TestBranchCheckoutSearchFiltersAndSwitchesByKeys(t *testing.T) {
 
 	sendE2EKey(t, m, keyMsg("b"))
 	sendE2EKey(t, m, keyMsg("b"))
-	if m.workflow == nil || len(m.workflow.dialog.Fields) != 1 || m.workflow.dialog.Fields[0].Kind != WorkflowSearch {
-		t.Fatalf("b b did not open searchable checkout: %+v", m.workflow)
+	if m.mode != modeBranches || m.workflow != nil {
+		t.Fatalf("b b did not open branch picker: mode=%d workflow=%v", m.mode, m.workflow != nil)
 	}
-	plain := ansi.Strip(m.renderWorkflowOverlay(100, 24))
-	for _, want := range []string{"main (current)", "feature/login", "release", "Checkout"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("branch search omitted %q:\n%s", want, plain)
-		}
+	baseBranch := r.git("branch", "--show-current")
+	for _, char := range "login" {
+		sendE2EKey(t, m, keyMsg(string(char)))
 	}
-	sendE2EKey(t, m, keyMsg("login"))
-	if got := m.workflow.dialog.Fields[0].Value; got != "feature/login" {
-		t.Fatalf("branch filter selected %q", got)
+	if got := m.branchSearch; got != "login" {
+		t.Fatalf("branch filter query = %q", got)
+	}
+	if got := r.git("branch", "--show-current"); got != baseBranch {
+		t.Fatalf("typing search changed branch from %q to %q", baseBranch, got)
 	}
 	sendE2EKey(t, m, keyMsg("enter"))
 	if got := r.git("branch", "--show-current"); got != "feature/login" {
@@ -66,9 +65,19 @@ func TestBranchWorkflowIntegrationCreateSwitchRenameResetDelete(t *testing.T) {
 		t.Fatalf("create-only changed HEAD to %q", got)
 	}
 
-	openBranchWorkflow(t, m, "magit-checkout")
-	setBranchWorkflowValue(t, m, "revision", "topic")
-	executeBranchWorkflow(t, m)
+	binding := branchBinding(t, "magit-checkout")
+	cmd, handled := m.performWorkflow(WorkflowCommand{ID: binding.Command, Occurrence: binding.Occurrence, Prefix: branchPrefix})
+	if !handled || cmd == nil {
+		t.Fatalf("open magit-checkout: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	runE2ECmd(t, m, cmd)
+	if m.mode != modeBranches {
+		t.Fatalf("magit-checkout mode=%d message=%q", m.mode, m.message)
+	}
+	for _, char := range "topic" {
+		sendE2EKey(t, m, keyMsg(string(char)))
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
 	if got := r.git("branch", "--show-current"); got != "topic" {
 		t.Fatalf("checkout selected %q", got)
 	}
@@ -84,9 +93,19 @@ func TestBranchWorkflowIntegrationCreateSwitchRenameResetDelete(t *testing.T) {
 		t.Fatalf("renamed current branch = %q", got)
 	}
 
-	openBranchWorkflow(t, m, "magit-branch-checkout")
-	setBranchWorkflowValue(t, m, "branch", "main")
-	executeBranchWorkflow(t, m)
+	binding = branchBinding(t, "magit-branch-checkout")
+	cmd, handled = m.performWorkflow(WorkflowCommand{ID: binding.Command, Occurrence: binding.Occurrence, Prefix: branchPrefix})
+	if !handled || cmd == nil {
+		t.Fatalf("open magit-branch-checkout: handled=%v cmd=%v", handled, cmd != nil)
+	}
+	runE2ECmd(t, m, cmd)
+	if m.mode != modeBranches || !m.branchLocalOnly {
+		t.Fatalf("magit-branch-checkout mode=%d localOnly=%v", m.mode, m.branchLocalOnly)
+	}
+	for _, char := range "main" {
+		sendE2EKey(t, m, keyMsg(string(char)))
+	}
+	sendE2EKey(t, m, keyMsg("enter"))
 
 	openBranchWorkflow(t, m, "magit-branch-reset")
 	setBranchWorkflowValue(t, m, "branch", "renamed")

@@ -124,39 +124,19 @@ func choiceDefault(choices []WorkflowChoice, preferred string) string {
 }
 
 func branchCheckoutRevision(m *Model, command WorkflowCommand) tea.Cmd {
-	return loadBranchWorkflow(m, "branch/revision choices", func(ctx context.Context) (WorkflowDialog, error) {
-		choices, current, err := branchChoices(ctx, m.repo, true, true)
-		if err != nil {
-			return WorkflowDialog{}, err
-		}
-		if current == "" {
-			current = "HEAD"
-		}
-		choice := 0
-		for i := range choices {
-			if choices[i].Value == current {
-				choice = i
-				break
-			}
-		}
-		return WorkflowDialog{
-			Title: "Checkout branch or revision", Operation: "checkout branch/revision", ActionLabel: "Checkout",
-			Plan:   []string{"Type to filter local and remote-tracking branches", "A custom revision is checked out with detached HEAD"},
-			Fields: []WorkflowField{{Name: "revision", Label: "Search", Kind: WorkflowSearch, Value: current, Choices: choices, Choice: choice, AllowCustom: true, Required: true}},
-			Submit: func(ctx context.Context, values WorkflowValues) error {
-				branches, err := m.repo.Branches(ctx)
-				if err != nil {
-					return err
-				}
-				for _, branch := range branches {
-					if !branch.Remote && branch.Name == values["revision"] {
-						return m.repo.CheckoutBranchWithOptions(ctx, branch.Name, checkoutOptions(command))
-					}
-				}
-				return m.repo.CheckoutRevisionWithOptions(ctx, values["revision"], checkoutOptions(command))
-			},
-		}, nil
-	})
+	return openBranchPicker(m, false, command)
+}
+
+func openBranchPicker(m *Model, localOnly bool, command WorkflowCommand) tea.Cmd {
+	if err := requireBranchRepository(m); err != nil {
+		m.setError(err)
+		return nil
+	}
+	m.branchLocalOnly = localOnly
+	m.branchCheckoutOptions = checkoutOptions(command)
+	m.busy = true
+	m.setMessage("Loading branches…")
+	return m.loadBranchesCmd(localOnly)
 }
 
 func branchCheckoutRemote(m *Model, command WorkflowCommand) tea.Cmd {
@@ -200,23 +180,7 @@ func remoteBranchLeaf(ref string) string {
 }
 
 func branchCheckoutLocal(m *Model, command WorkflowCommand) tea.Cmd {
-	return loadBranchWorkflow(m, "local branches", func(ctx context.Context) (WorkflowDialog, error) {
-		choices, current, err := branchChoices(ctx, m.repo, false, true)
-		if err != nil {
-			return WorkflowDialog{}, err
-		}
-		if err := requireChoices(choices, "local branches"); err != nil {
-			return WorkflowDialog{}, err
-		}
-		return WorkflowDialog{
-			Title: "Checkout local branch (adapted)", Operation: "checkout local branch",
-			Plan:   []string{"Adapted: choose an existing local branch; remote guessing is not performed"},
-			Fields: []WorkflowField{{Name: "branch", Label: "Local branch", Kind: WorkflowSelect, Value: choiceDefault(choices, current), Choices: choices, Required: true}},
-			Submit: func(ctx context.Context, values WorkflowValues) error {
-				return m.repo.CheckoutBranchWithOptions(ctx, values["branch"], checkoutOptions(command))
-			},
-		}, nil
-	})
+	return openBranchPicker(m, true, command)
 }
 
 func checkoutOptions(command WorkflowCommand) gitbackend.CheckoutOptions {

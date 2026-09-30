@@ -115,3 +115,51 @@ func TestMoveBranchCursorClampsAtBothEnds(t *testing.T) {
 		t.Fatalf("empty branch cursor = %d", m.branchCursor)
 	}
 }
+
+func TestBranchPreviewRejectsStaleSelectionResults(t *testing.T) {
+	m := New(nil)
+	m.mode = modeBranches
+	m.stateGeneration = 3
+	m.branchPreviewRequest = 7
+	m.branchPreviewTarget = "target"
+	m.branchPreviewLoading = true
+	m.handleBranchPreviewMsg(branchPreviewMsg{
+		request: 6, state: 3, target: "old",
+		preview: gitbackend.BranchSwitchPreview{Target: "old"},
+	})
+	if !m.branchPreviewLoading || m.branchPreview.Target != "" {
+		t.Fatalf("stale branch preview installed: loading=%v target=%q", m.branchPreviewLoading, m.branchPreview.Target)
+	}
+	m.handleBranchPreviewMsg(branchPreviewMsg{
+		request: 7, state: 3, target: "target",
+		preview: gitbackend.BranchSwitchPreview{Target: "target"},
+	})
+	if m.branchPreviewLoading || m.branchPreview.Target != "target" {
+		t.Fatalf("current branch preview missing: loading=%v target=%q", m.branchPreviewLoading, m.branchPreview.Target)
+	}
+}
+func TestBranchPreviewUsesPageKeysOnly(t *testing.T) {
+	m := New(nil)
+	m.mode = modeBranches
+	m.branches = []gitbackend.Branch{{Name: "one"}, {Name: "two"}}
+	m.refreshBranchVisible()
+	m.branchPreview = gitbackend.BranchSwitchPreview{Target: "two"}
+	m.branchCursor = 0
+
+	m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgDown}))
+	if m.branchPreviewOffset != 5 || m.branchCursor != 0 {
+		t.Fatalf("PageDown changed unexpected state: offset=%d cursor=%d", m.branchPreviewOffset, m.branchCursor)
+	}
+	m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: 'b', Mod: tea.ModCtrl}))
+	if m.branchPreviewOffset != 5 {
+		t.Fatalf("Ctrl-b still scrolled branch preview: offset=%d", m.branchPreviewOffset)
+	}
+	m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: 'f', Mod: tea.ModCtrl}))
+	if m.branchPreviewOffset != 5 {
+		t.Fatalf("Ctrl-f still scrolled branch preview: offset=%d", m.branchPreviewOffset)
+	}
+	m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: tea.KeyPgUp}))
+	if m.branchPreviewOffset != 0 || m.branchCursor != 0 {
+		t.Fatalf("PageUp changed unexpected state: offset=%d cursor=%d", m.branchPreviewOffset, m.branchCursor)
+	}
+}

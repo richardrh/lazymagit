@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
 	"github.com/richardrh/lazymagit/internal/keymap"
@@ -134,14 +135,21 @@ func TestStageTwoSimpleUIResiduals(t *testing.T) {
 
 	m := New(nil)
 	m.branches = []gitbackend.Branch{{Name: "one"}, {Name: "two"}}
+	m.refreshBranchVisible()
 	m.branchCursor = 0
-	_, _ = m.handleBranchKey("down")
-	_, _ = m.handleBranchKey("k")
-	_, _ = m.handleBranchKey("unknown")
-	if m.branchCursor != 0 {
-		t.Fatalf("branch cursor = %d", m.branchCursor)
+	_ = m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: tea.KeyDown}))
+	if m.branchCursor != 1 {
+		t.Fatalf("branch cursor after down = %d", m.branchCursor)
 	}
-	_, _ = m.handleBranchKey("esc")
+	_ = m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: tea.KeyUp}))
+	if m.branchCursor != 0 {
+		t.Fatalf("branch cursor after up = %d", m.branchCursor)
+	}
+	_ = m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: 'q', Text: "q"}))
+	if m.branchSearch != "q" {
+		t.Fatalf("branch search = %q", m.branchSearch)
+	}
+	_ = m.handleBranchKeyMsg(tea.KeyPressMsg(tea.Key{Code: tea.KeyEscape}))
 	if m.mode != modeStatus {
 		t.Fatalf("branch close mode = %v", m.mode)
 	}
@@ -265,10 +273,6 @@ func TestStageTwoPushAndRenderHelpers(t *testing.T) {
 		if got := ansi.Strip(modeFooter(current)); got == "" {
 			t.Errorf("modeFooter(%v) is empty", current)
 		}
-	}
-	m.mode, m.branches, m.branchCursor = modeBranches, nil, 0
-	if _, content := m.basicOverlayContent(40, 10); !strings.Contains(content, "No local branches") {
-		t.Fatalf("branch overlay = %q", content)
 	}
 	m.mode, m.remoteField, m.remoteFetch = modeAddRemote, 1, false
 	if _, content := m.basicOverlayContent(40, 10); !strings.Contains(content, "Fetch after add: no") || !strings.Contains(content, "URL: █") {
