@@ -1391,8 +1391,7 @@ func (m *Model) appendCommitText(text string) {
 }
 
 func (m *Model) handleBranchKeyMsg(msg tea.KeyPressMsg) tea.Cmd {
-	key := msg.String()
-	switch key {
+	switch msg.String() {
 	case "esc":
 		return m.closeBranches()
 	case "down":
@@ -1405,28 +1404,48 @@ func (m *Model) handleBranchKeyMsg(msg tea.KeyPressMsg) tea.Cmd {
 		return m.switchSelectedBranch()
 	case "pgdown":
 		m.branchPreviewOffset += 5
-		return nil
 	case "pgup":
 		m.branchPreviewOffset = max(0, m.branchPreviewOffset-5)
-		return nil
-	case "backspace":
-		if m.branchSearch == "" {
-			return nil
-		}
-		_, size := utf8.DecodeLastRuneInString(m.branchSearch)
-		m.branchSearch = m.branchSearch[:len(m.branchSearch)-size]
-		m.branchCursor = 0
-		m.refreshBranchVisible()
-		return m.loadBranchPreviewCmd()
-	case "ctrl+u":
-		if m.branchSearch == "" {
-			return nil
-		}
-		m.branchSearch = ""
-		m.branchCursor = 0
-		m.refreshBranchVisible()
-		return m.loadBranchPreviewCmd()
+	default:
+		return m.handleBranchSearchKey(msg)
 	}
+	return nil
+}
+
+func (m *Model) handleBranchSearchKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "backspace":
+		return m.eraseBranchSearch()
+	case "ctrl+u":
+		return m.clearBranchSearch()
+	default:
+		return m.appendBranchSearch(msg)
+	}
+}
+
+func (m *Model) eraseBranchSearch() tea.Cmd {
+	if m.branchSearch == "" {
+		return nil
+	}
+	_, size := utf8.DecodeLastRuneInString(m.branchSearch)
+	m.branchSearch = m.branchSearch[:len(m.branchSearch)-size]
+	m.branchCursor = 0
+	m.refreshBranchVisible()
+	return m.loadBranchPreviewCmd()
+}
+
+func (m *Model) clearBranchSearch() tea.Cmd {
+	if m.branchSearch == "" {
+		return nil
+	}
+	m.branchSearch = ""
+	m.branchCursor = 0
+	m.refreshBranchVisible()
+	return m.loadBranchPreviewCmd()
+}
+
+func (m *Model) appendBranchSearch(msg tea.KeyPressMsg) tea.Cmd {
+	key := msg.String()
 	text := msg.Key().Text
 	if text == "" && len([]rune(key)) == 1 {
 		text = key

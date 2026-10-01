@@ -41,27 +41,9 @@ func (r *Repository) PreviewBranchSwitch(ctx context.Context, target string) (Br
 	if strings.TrimSpace(target) == "" {
 		return BranchSwitchPreview{}, errors.New("branch target is empty")
 	}
-	branches, err := r.Branches(ctx)
+	selected, err := r.previewBranchTarget(ctx, target)
 	if err != nil {
-		return BranchSwitchPreview{}, fmt.Errorf("list branches: %w", err)
-	}
-	var selected Branch
-	found := false
-	for _, branch := range branches {
-		if branch.Name == target {
-			selected, found = branch, true
-			break
-		}
-	}
-	selectedName := target
-	if !found {
-		selected = Branch{Name: target}
-	} else if !selected.Remote && selected.Upstream == "" {
-		remote, remoteErr := r.output(ctx, "config", "--get", "branch."+target+".remote")
-		merge, mergeErr := r.output(ctx, "config", "--get", "branch."+target+".merge")
-		if remoteErr == nil && mergeErr == nil {
-			selected.Upstream = trimLine(remote) + "/" + strings.TrimPrefix(trimLine(merge), "refs/heads/")
-		}
+		return BranchSwitchPreview{}, err
 	}
 	selectedID := selected.ID
 	if selectedID == "" {
@@ -70,146 +52,246 @@ func (r *Repository) PreviewBranchSwitch(ctx context.Context, target string) (Br
 			return BranchSwitchPreview{}, fmt.Errorf("resolve branch target: %w", err)
 		}
 	}
-	summary, err := r.Summary(ctx)
+	preview, summary, err := r.previewBranchMetadata(ctx, selected, selectedID)
 	if err != nil {
-		return BranchSwitchPreview{}, fmt.Errorf("read repository summary: %w", err)
-	}
-	currentID := summary.Head
-	preview := BranchSwitchPreview{
-		Target:         selectedName,
-		Current:        summary.Branch,
-		TargetUpstream: selected.Upstream,
-		TargetID:       selectedID,
-		TargetRemote:   selected.Remote,
-	}
-	if preview.Current == "" || preview.Current == "(detached)" {
-		preview.Current = "HEAD"
-	}
-	latest, err := r.QueryLog(ctx, LogQuery{Revision: selectedID, Limit: 1, OutputLimit: 1 << 20})
-	if err != nil {
-		return BranchSwitchPreview{}, fmt.Errorf("read target commit: %w", err)
-	}
-	if len(latest.Items) > 0 {
-		preview.Latest = latest.Items[0]
-	}
-	if !selected.Remote {
-		if description, descErr := r.BranchDescription(ctx, selectedName); descErr == nil {
-			preview.Description = description
-		} else if !isExitError(descErr) {
-			return BranchSwitchPreview{}, fmt.Errorf("read branch description: %w", descErr)
-		}
-	}
-	if worktrees, wtErr := r.Worktrees(ctx); wtErr == nil {
-		for _, worktree := range worktrees {
-			if worktree.Branch == selectedName && worktree.Path != r.WorkTree() {
-				preview.OtherWorktree = worktree.Path
-				break
-			}
-		}
-	} else if !isExitError(wtErr) {
-		return BranchSwitchPreview{}, fmt.Errorf("read worktrees: %w", wtErr)
+		return BranchSwitchPreview{}, err
 	}
 	if err := r.populateTargetUpstreamPreview(ctx, &preview, selected.Upstream); err != nil {
 		return BranchSwitchPreview{}, err
 	}
-	if currentID == "" || currentID == "(initial)" || summary.Unborn {
-		var graphErr error
-		preview.GraphLines, preview.GraphTruncated, graphErr = r.branchGraphLines(ctx, []string{selectedID}, selectedID, "", "")
-		if graphErr != nil {
-			return BranchSwitchPreview{}, graphErr
-		}
-		return preview, nil
+	if err := r.populateBranchSwitchHistory(ctx, &preview, summary); err != nil {
+		return BranchSwitchPreview{}, err
 	}
-	currentID, err = r.resolveCommitOID(ctx, currentID)
+	if err := r.populateBranchSwitchConflicts(ctx, &preview); err != nil {
+		return BranchSwitchPreview{}, err
+	}
+	return preview, nil
+}
+
+func (r *Repository) previewBranchTarget(ctx context.Context, target string) (Branch, error) {
+	branches, err := r.Branches(ctx)
 	if err != nil {
-		return BranchSwitchPreview{}, fmt.Errorf("resolve current HEAD: %w", err)
+		return Branch{}, fmt.Errorf("list branches: %w", err)
+	}
+	for _, branch := range branches {
+		if branch.Name == target {
+			if !branch.Remote && branch.Upstream == "" {
+				branch.Upstream = r.configuredBranchUpstream(ctx, target)
+			}
+			return branch, nil
+		}
+	}
+	return Branch{Name: target}, nil
+}
+
+func (r *Repository) configuredBranchUpstream(ctx context.Context, target string) string {
+	remote, remoteErr := r.output(ctx, "config", "--get", "branch."+target+".remote")
+	merge, mergeErr := r.output(ctx, "config", "--get", "branch."+target+".merge")
+	if remoteErr != nil || mergeErr != nil {
+		return ""
+	}
+	return trimLine(remote) + "/" + strings.TrimPrefix(trimLine(merge), "refs/heads/")
+}
+
+func (r *Repository) previewBranchMetadata(ctx context.Context, selected Branch, selectedID string) (BranchSwitchPreview, Summary, error) {
+	summary, err := r.Summary(ctx)
+	if err != nil {
+		return BranchSwitchPreview{}, Summary{}, fmt.Errorf("read repository summary: %w", err)
+	}
+	current := summary.Branch
+	if current == "" || current == "(detached)" {
+		current = "HEAD"
+	}
+	preview := BranchSwitchPreview{
+		Target:         selected.Name,
+		Current:        current,
+		TargetUpstream: selected.Upstream,
+		TargetID:       selectedID,
+		TargetRemote:   selected.Remote,
+	}
+	if err := r.populatePreviewLatest(ctx, &preview, selectedID); err != nil {
+		return BranchSwitchPreview{}, Summary{}, err
+	}
+	if err := r.populatePreviewDescription(ctx, &preview, selected); err != nil {
+		return BranchSwitchPreview{}, Summary{}, err
+	}
+	if err := r.populatePreviewWorktree(ctx, &preview, selected.Name); err != nil {
+		return BranchSwitchPreview{}, Summary{}, err
+	}
+	return preview, summary, nil
+}
+
+func (r *Repository) populatePreviewLatest(ctx context.Context, preview *BranchSwitchPreview, selectedID string) error {
+	latest, err := r.QueryLog(ctx, LogQuery{Revision: selectedID, Limit: 1, OutputLimit: 1 << 20})
+	if err != nil {
+		return fmt.Errorf("read target commit: %w", err)
+	}
+	if len(latest.Items) > 0 {
+		preview.Latest = latest.Items[0]
+	}
+	return nil
+}
+
+func (r *Repository) populatePreviewDescription(ctx context.Context, preview *BranchSwitchPreview, selected Branch) error {
+	if selected.Remote {
+		return nil
+	}
+	description, err := r.BranchDescription(ctx, selected.Name)
+	if err == nil {
+		preview.Description = description
+		return nil
+	}
+	if isExitError(err) {
+		return nil
+	}
+	return fmt.Errorf("read branch description: %w", err)
+}
+
+func (r *Repository) populatePreviewWorktree(ctx context.Context, preview *BranchSwitchPreview, selectedName string) error {
+	worktrees, err := r.Worktrees(ctx)
+	if err != nil {
+		if isExitError(err) {
+			return nil
+		}
+		return fmt.Errorf("read worktrees: %w", err)
+	}
+	for _, worktree := range worktrees {
+		if worktree.Branch == selectedName && worktree.Path != r.WorkTree() {
+			preview.OtherWorktree = worktree.Path
+			break
+		}
+	}
+	return nil
+}
+
+func (r *Repository) populateBranchSwitchHistory(ctx context.Context, preview *BranchSwitchPreview, summary Summary) error {
+	currentID := summary.Head
+	if currentID == "" || currentID == "(initial)" || summary.Unborn {
+		var err error
+		preview.GraphLines, preview.GraphTruncated, err = r.branchGraphLines(ctx, []string{preview.TargetID}, preview.TargetID, "", "")
+		return err
+	}
+	currentID, err := r.populateBranchSwitchDivergence(ctx, preview, currentID)
+	if err != nil {
+		return err
+	}
+	return r.populateBranchSwitchBase(ctx, preview, currentID)
+}
+
+func (r *Repository) populateBranchSwitchDivergence(ctx context.Context, preview *BranchSwitchPreview, currentID string) (string, error) {
+	currentID, err := r.resolveCommitOID(ctx, currentID)
+	if err != nil {
+		return "", fmt.Errorf("resolve current HEAD: %w", err)
 	}
 	preview.CurrentID = currentID
-	counts, err := r.output(ctx, "rev-list", "--left-right", "--count", currentID+"..."+selectedID)
+	counts, err := r.output(ctx, "rev-list", "--left-right", "--count", currentID+"..."+preview.TargetID)
 	if err != nil {
-		return BranchSwitchPreview{}, fmt.Errorf("compare branches: %w", err)
+		return "", fmt.Errorf("compare branches: %w", err)
 	}
 	preview.CurrentAhead, preview.TargetAhead, err = parseBranchCounts(counts)
 	if err != nil {
-		return BranchSwitchPreview{}, err
+		return "", err
 	}
-	base, baseErr := r.output(ctx, "merge-base", currentID, selectedID)
+	return currentID, nil
+}
+
+func (r *Repository) populateBranchSwitchBase(ctx context.Context, preview *BranchSwitchPreview, currentID string) error {
+	base, baseErr := r.output(ctx, "merge-base", currentID, preview.TargetID)
 	if baseErr == nil {
 		preview.BaseID = trimLine(base)
 		if preview.BaseID != "" {
-			preview.ChangeSummary, err = r.branchSwitchDiff(ctx, preview.BaseID, selectedID)
+			var err error
+			preview.ChangeSummary, err = r.branchSwitchDiff(ctx, preview.BaseID, preview.TargetID)
 			if err != nil {
-				return BranchSwitchPreview{}, err
+				return err
 			}
 		}
 	} else if !isExitError(baseErr) {
-		return BranchSwitchPreview{}, fmt.Errorf("find shared base: %w", baseErr)
+		return fmt.Errorf("find shared base: %w", baseErr)
 	} else {
 		preview.NoCommonAncestor = true
 	}
-	preview.GraphLines, preview.GraphTruncated, err = r.branchGraphLines(ctx, []string{currentID, selectedID}, selectedID, currentID, preview.BaseID)
-	if err != nil {
-		return BranchSwitchPreview{}, err
-	}
-	if status, statusErr := r.Status(ctx); statusErr == nil && len(status.Files) > 0 && currentID != "" {
-		changed, changedErr := r.output(ctx, "diff", "--name-only", "--no-renames", "-z", currentID, selectedID, "--")
-		if changedErr != nil {
-			return BranchSwitchPreview{}, fmt.Errorf("find checkout conflicts: %w", changedErr)
-		}
-		changedPaths := make(map[string]bool)
-		for _, path := range strings.Split(string(changed), "\x00") {
-			if path != "" {
-				changedPaths[path] = true
-			}
-		}
-		dirty, dirtyErr := r.output(ctx, "diff", "--name-only", "--no-renames", "-z", selectedID, "--")
-		if dirtyErr != nil {
-			return BranchSwitchPreview{}, fmt.Errorf("find local checkout changes: %w", dirtyErr)
-		}
-		dirtyPaths := make(map[string]bool)
-		for _, path := range strings.Split(string(dirty), "\x00") {
-			if path != "" {
-				dirtyPaths[path] = true
-			}
-		}
-		needTargetTree := false
-		for _, file := range status.Files {
-			if file.Unstaged == ChangeUntracked {
-				needTargetTree = true
-				break
-			}
-		}
-		targetFiles := make(map[string]bool)
-		if needTargetTree {
-			targetTree, treeErr := r.output(ctx, "ls-tree", "-r", "--name-only", "-z", selectedID, "--")
-			if treeErr != nil {
-				return BranchSwitchPreview{}, fmt.Errorf("find target files: %w", treeErr)
-			}
-			for _, path := range strings.Split(string(targetTree), "\x00") {
-				if path != "" {
-					targetFiles[path] = true
-				}
-			}
-		}
-		for _, file := range status.Files {
-			if file.Unstaged == ChangeUntracked {
-				if pathTreeCollision(file.Path, targetFiles) {
-					preview.PotentialBlockingPaths = append(preview.PotentialBlockingPaths, file.Path)
-				}
-				continue
-			}
-			if file.Staged == ChangeNone && file.Unstaged == ChangeNone {
-				continue
-			}
-			if changedPaths[file.Path] && dirtyPaths[file.Path] || changedPaths[file.OriginalPath] && dirtyPaths[file.OriginalPath] {
-				preview.PotentialBlockingPaths = append(preview.PotentialBlockingPaths, file.Path)
-			}
-		}
-	} else if statusErr != nil && !isExitError(statusErr) {
-		return BranchSwitchPreview{}, fmt.Errorf("read checkout status: %w", statusErr)
-	}
+	var err error
+	preview.GraphLines, preview.GraphTruncated, err = r.branchGraphLines(ctx, []string{currentID, preview.TargetID}, preview.TargetID, currentID, preview.BaseID)
+	return err
+}
 
-	return preview, nil
+func (r *Repository) populateBranchSwitchConflicts(ctx context.Context, preview *BranchSwitchPreview) error {
+	if preview.CurrentID == "" {
+		return nil
+	}
+	status, err := r.Status(ctx)
+	if err != nil {
+		if isExitError(err) {
+			return nil
+		}
+		return fmt.Errorf("read checkout status: %w", err)
+	}
+	if len(status.Files) == 0 {
+		return nil
+	}
+	changed, err := r.output(ctx, "diff", "--name-only", "--no-renames", "-z", preview.CurrentID, preview.TargetID, "--")
+	if err != nil {
+		return fmt.Errorf("find checkout conflicts: %w", err)
+	}
+	dirty, err := r.output(ctx, "diff", "--name-only", "--no-renames", "-z", preview.TargetID, "--")
+	if err != nil {
+		return fmt.Errorf("find local checkout changes: %w", err)
+	}
+	targetFiles, err := r.targetTreeFiles(ctx, preview.TargetID, status.Files)
+	if err != nil {
+		return err
+	}
+	preview.PotentialBlockingPaths = branchSwitchBlockingPaths(status.Files, nulPaths(changed), nulPaths(dirty), targetFiles)
+	return nil
+}
+
+func (r *Repository) targetTreeFiles(ctx context.Context, targetID string, files []FileStatus) (map[string]bool, error) {
+	needTargetTree := false
+	for _, file := range files {
+		if file.Unstaged == ChangeUntracked {
+			needTargetTree = true
+			break
+		}
+	}
+	if !needTargetTree {
+		return nil, nil
+	}
+	targetTree, err := r.output(ctx, "ls-tree", "-r", "--name-only", "-z", targetID, "--")
+	if err != nil {
+		return nil, fmt.Errorf("find target files: %w", err)
+	}
+	return nulPaths(targetTree), nil
+}
+
+func nulPaths(output []byte) map[string]bool {
+	paths := make(map[string]bool)
+	for _, path := range strings.Split(string(output), "\x00") {
+		if path != "" {
+			paths[path] = true
+		}
+	}
+	return paths
+}
+
+func branchSwitchBlockingPaths(files []FileStatus, changedPaths, dirtyPaths, targetFiles map[string]bool) []string {
+	var blocking []string
+	for _, file := range files {
+		if branchSwitchPathBlocked(file, changedPaths, dirtyPaths, targetFiles) {
+			blocking = append(blocking, file.Path)
+		}
+	}
+	return blocking
+}
+
+func branchSwitchPathBlocked(file FileStatus, changedPaths, dirtyPaths, targetFiles map[string]bool) bool {
+	if file.Unstaged == ChangeUntracked {
+		return pathTreeCollision(file.Path, targetFiles)
+	}
+	if file.Staged == ChangeNone && file.Unstaged == ChangeNone {
+		return false
+	}
+	return changedPaths[file.Path] && dirtyPaths[file.Path] || changedPaths[file.OriginalPath] && dirtyPaths[file.OriginalPath]
 }
 
 func (r *Repository) branchGraphLines(ctx context.Context, revisions []string, targetID, currentID, baseID string) ([]string, bool, error) {

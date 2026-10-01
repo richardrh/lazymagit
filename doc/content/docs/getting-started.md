@@ -30,7 +30,9 @@ Run it against the current directory or pass a repository path:
 ```
 
 `make check` runs formatting, vet, race-enabled tests, the complexity threshold
-check, and generated-keybinding drift checks.
+check, and generated-keybinding drift checks. `go test ./...` alone does not run
+the complexity/coverage baseline or keybinding-drift checks; run `make check`
+before opening a pull request.
 
 ## Themes
 

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -101,6 +102,101 @@ func TestTransientAvailabilityAndConditionHelpers(t *testing.T) {
 	}
 }
 
+func TestCommitAgeFormatsStableDurationBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		age  time.Duration
+		want string
+	}{
+		{"seconds", 59 * time.Second, "just now"},
+		{"minute", 60 * time.Second, "1m ago"},
+		{"hour-minus-one-second", 59*time.Minute + 59*time.Second, "59m ago"},
+		{"hour", 60 * time.Minute, "1h ago"},
+		{"month-minus-one-hour", 30*24*time.Hour - time.Hour, "29d ago"},
+		{"month", 30 * 24 * time.Hour, "1mo ago"},
+		{"year-minus-one-hour", 365*24*time.Hour - time.Hour, "12mo ago"},
+		{"year", 365 * 24 * time.Hour, "1y ago"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatCommitAge(test.age); got != test.want {
+				t.Fatalf("formatCommitAge(%s) = %q, want %q", test.age, got, test.want)
+			}
+		})
+	}
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	if got := commitDuration(time.Time{}, now); got >= 0 {
+		t.Fatalf("zero commit date duration = %s, want unknown marker", got)
+	}
+	if got := commitDuration(now.Add(time.Minute), now); got != 0 {
+		t.Fatalf("future commit duration = %s, want zero", got)
+	}
+}
+
+func TestBranchPickerPreviewMaintainsIdentityWhileScrolling(t *testing.T) {
+	m := New(nil)
+	m.width, m.height = 100, 30
+	m.mode = modeBranches
+	m.branches = []gitbackend.Branch{
+		{Name: "main", Current: true},
+		{Name: "feature/login"},
+		{Name: "origin/release", Remote: true},
+	}
+	m.refreshBranchVisible()
+	m.branchCursor = 1
+	m.branchPreview = gitbackend.BranchSwitchPreview{
+		Target: "feature/login", Current: "main", CurrentID: "current", BaseID: "base",
+		TargetID: "target", TargetRemote: false, TargetUpstream: "origin/feature/login",
+		Latest:      gitbackend.LogEntry{ID: "target", Subject: "add login", AuthorName: "dev"},
+		TargetAhead: 2, CurrentAhead: 1, UpstreamAhead: 3, UpstreamBehind: 1, HasUpstream: true,
+		ChangeSummary:          gitbackend.BranchSwitchDiff{Files: 2, Insertions: 4, Deletions: 1},
+		Description:            gitbackend.ConfiguredValue{Set: true, Value: "review branch"},
+		OtherWorktree:          "/tmp/login",
+		PotentialBlockingPaths: []string{"shared.txt"},
+		GraphLines:             []string{"* target [target] add login", "|/", "o base [base]"},
+	}
+	preview := ansi.Strip(m.renderBranchPreview(50, 8))
+	if !strings.Contains(preview, "feature/login") || !strings.Contains(preview, "add login") {
+		t.Fatalf("preview omitted selected branch identity/content: %q", preview)
+	}
+	m.branchPreviewOffset = 100
+	scrolled := ansi.Strip(m.renderBranchPreview(50, 8))
+	if preview == scrolled || !strings.Contains(scrolled, "feature/login") {
+		t.Fatalf("preview did not scroll while retaining title: before=%q after=%q", preview, scrolled)
+	}
+	picker := ansi.Strip(m.renderBranchPicker(100, 30))
+	rows := strings.Split(picker, "\n")
+	if len(rows) > 30 {
+		t.Fatalf("branch picker exceeded terminal height: %d", len(rows))
+	}
+	for _, row := range rows {
+		if ansi.StringWidth(row) > 100 {
+			t.Fatalf("branch picker exceeded terminal width: %d", ansi.StringWidth(row))
+		}
+	}
+	if !strings.Contains(picker, "* main") || !strings.Contains(picker, "feature/login") {
+		t.Fatalf("branch picker lost branch identity/current marker: %q", picker)
+	}
+	m.branchPreviewLoading = true
+	loading := ansi.Strip(m.renderBranchPreview(50, 8))
+	if !strings.Contains(loading, "feature/login") || strings.Contains(loading, "add login") {
+		t.Fatalf("loading preview retained stale details: %q", loading)
+	}
+	m.branchPreviewLoading = false
+	m.branchPreviewErr = "preview failed"
+	m.branchSearch = "missing"
+	m.branchVisible = nil
+	errorView := ansi.Strip(m.renderBranchPreview(50, 8))
+	if !strings.Contains(errorView, "preview failed") || !strings.Contains(errorView, "feature/login") {
+		t.Fatalf("error preview lost identity/state: %q", errorView)
+	}
+	m.branchPreviewErr = ""
+	m.branchPreview.Target = ""
+	empty := ansi.Strip(m.renderBranchPreview(50, 8))
+	if strings.Contains(empty, "feature/login") {
+		t.Fatalf("empty preview retained stale target identity: %q", empty)
+	}
+}
 func TestNavigationHelperDispatch(t *testing.T) {
 	m := navigationUIModel()
 	for _, command := range []keymap.CommandID{keymap.CommandSectionCycle, keymap.CommandSectionCycleGlobal, keymap.CommandLocalDepth1, keymap.CommandGlobalDepth2, keymap.CommandDescribeSection} {

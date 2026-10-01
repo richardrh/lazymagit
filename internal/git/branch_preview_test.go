@@ -25,6 +25,7 @@ func TestPreviewBranchSwitchSeparatesDivergenceUpstreamAndDirtyConflicts(t *test
 	r.commitAll("main change")
 	r.write("shared.txt", "local overlap\n")
 	r.write("unrelated.txt", "local only\n")
+	r.git("config", "branch.target.description", "target review")
 	r.git("add", "unrelated.txt")
 	repo, err := Discover(r.dir)
 	if err != nil {
@@ -53,7 +54,7 @@ func TestPreviewBranchSwitchSeparatesDivergenceUpstreamAndDirtyConflicts(t *test
 	if !hasJoin {
 		t.Fatalf("graph lost diverged join connector: %#v", preview.GraphLines)
 	}
-	if preview.TargetID != target || preview.BaseID != base || preview.ChangeSummary.Files != 2 || preview.ChangeSummary.Insertions != 2 {
+	if preview.TargetID != target || preview.BaseID != base || preview.ChangeSummary.Files != 2 || preview.ChangeSummary.Insertions != 2 || !preview.Description.Set || preview.Description.Value != "target review" {
 		t.Fatalf("target/base summary = %#v", preview)
 	}
 }
@@ -80,5 +81,49 @@ func TestPreviewBranchSwitchReportsNoCommonAncestor(t *testing.T) {
 	}
 	if preview.Latest.Subject != "unrelated root" {
 		t.Fatalf("latest target subject = %q", preview.Latest.Subject)
+	}
+}
+
+func TestPathTreeCollisionRecognizesFileAndDirectoryConflicts(t *testing.T) {
+	targetFiles := map[string]bool{
+		"docs/readme.md": true,
+		"src":            true,
+	}
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "docs/readme.md", want: true},
+		{path: "docs", want: true},
+		{path: "src", want: true},
+		{path: "src/main.go", want: false},
+		{path: "test", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.path, func(t *testing.T) {
+			if got := pathTreeCollision(test.path, targetFiles); got != test.want {
+				t.Fatalf("pathTreeCollision(%q) = %v, want %v", test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func TestPreviewBranchSwitchAcceptsRevisionTargets(t *testing.T) {
+	r := newTestRepo(t)
+	r.write("base.txt", "base\n")
+	r.commitAll("base")
+	repo, err := Discover(r.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := repo.PreviewBranchSwitch(context.Background(), "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.Target != "HEAD" || preview.TargetID == "" || preview.CurrentID == "" {
+		t.Fatalf("revision target preview = %#v", preview)
+	}
+	if _, err := repo.PreviewBranchSwitch(context.Background(), ""); err == nil {
+		t.Fatal("empty branch target unexpectedly succeeded")
 	}
 }
