@@ -314,16 +314,12 @@ func TestE2EStageUnstageDiscardCommitAndSwitchBranchByKeys(t *testing.T) {
 
 	sendE2EKey(t, m, keyMsg("b"))
 	sendE2EKey(t, m, keyMsg("b"))
-	if m.mode != modeWorkflow || m.workflow == nil {
-		t.Fatalf("b b mode = %d", m.mode)
-	}
-	for m.workflow.dialog.Fields[0].Value != "" {
-		sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyBackspace}))
+	if m.mode != modeBranches || m.workflow != nil {
+		t.Fatalf("b b mode = %d workflow=%v", m.mode, m.workflow != nil)
 	}
 	for _, char := range "feature" {
 		sendE2EKey(t, m, keyMsg(string(char)))
 	}
-	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyTab}))
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	if got := r.git("branch", "--show-current"); got != "feature" {
 		t.Fatalf("selected branch = %q", got)

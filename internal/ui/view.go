@@ -1,17 +1,17 @@
 package ui
 
 import (
-	"fmt"
-	"image/color"
-	"path/filepath"
-	"strings"
-
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"fmt"
 	"github.com/charmbracelet/x/ansi"
 	gitbackend "github.com/richardrh/lazymagit/internal/git"
 	"github.com/richardrh/lazymagit/internal/keymap"
 	sectionmodel "github.com/richardrh/lazymagit/internal/model"
+	"image/color"
+	"path/filepath"
+	"strings"
+	"time"
 )
 
 func (m *Model) View() tea.View {
@@ -470,6 +470,8 @@ func modeFooter(current mode) string {
 	switch current {
 	case modeCommit, modeConfirm, modeAddRemote:
 		text = "Esc cancel"
+	case modeBranches:
+		text = "Esc cancel  ↑/↓ select  type search  PageUp/PageDown preview  Enter switch"
 	case modeWorkflow:
 		text = "Tab/↑/↓ field  Enter edit/submit  Esc cancel"
 	case modeHelp:
@@ -489,11 +491,14 @@ func (m *Model) renderOverlay(height int) string {
 	if m.mode == modeRemotes {
 		return m.renderRemoteOverlay(height)
 	}
+	if m.mode == modeBranches {
+		return m.renderBranchPicker(m.width, height)
+	}
 	if m.width < 4 || height < 3 {
 		return fitBlock("", m.width, height)
 	}
 	width := m.width
-	innerW, innerH := width-4, height-2 // Horizontal padding and border; vertical border.
+	innerW, innerH := width-4, height-2
 	if m.mode == modeHelp {
 		return renderDispatcher(m.dispatcherCatalog(), m.width, height, m.transientOffset)
 	}
@@ -505,6 +510,248 @@ func (m *Model) renderOverlay(height int) string {
 	text := fitBlock(heading+"\n\n"+content, innerW, innerH)
 	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
 		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).Render(text)
+}
+
+func (m *Model) renderBranchPicker(width, height int) string {
+	if width < 4 || height < 3 {
+		return fitBlock("Switch branch", width, height)
+	}
+	innerW, innerH := width-4, height-2
+	heading := lipgloss.NewStyle().Foreground(colorPurple).Bold(true).Render(" Switch branch ")
+	search := lipgloss.NewStyle().Foreground(colorCyan).Render("Search: ") +
+		sanitizeSingleLine(m.branchSearch) + "█"
+	bodyH := max(1, innerH-3)
+	controls := lipgloss.NewStyle().Foreground(colorMuted).Render("↑/↓ select  type search  PageUp/PageDown preview  Enter switch  Esc cancel")
+	if innerW < 70 {
+		list := m.renderBranchList(innerW, max(1, bodyH/2))
+		preview := m.renderBranchPreview(innerW, max(1, bodyH-bodyH/2))
+		content := heading + "\n" + search + "\n" + list + "\n" + preview + "\n" + controls
+		return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
+			Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).
+			Render(fitBlock(content, innerW, innerH))
+	}
+	leftW := max(28, innerW*38/100)
+	rightW := innerW - leftW - 1
+	list := m.renderBranchList(leftW, bodyH)
+	preview := m.renderBranchPreview(rightW, bodyH)
+	columns := lipgloss.JoinHorizontal(lipgloss.Top, list, " ", preview)
+	content := heading + "\n" + search + "\n" + columns + "\n" + controls
+	return lipgloss.NewStyle().Width(width).Height(height).Padding(0, 1).
+		Border(lipgloss.DoubleBorder()).BorderForeground(colorPurple).
+		Render(fitBlock(content, innerW, innerH))
+}
+
+func (m *Model) renderBranchList(width, height int) string {
+	innerW, innerH := max(1, width-2), max(1, height-2)
+	lines := m.branchListLines(innerW, innerH)
+	return panelStyle(width, height).Render(fitBlock(strings.Join(lines, "\n"), innerW, innerH))
+}
+
+func (m *Model) branchListLines(width, height int) []string {
+	lines := []string{lipgloss.NewStyle().Foreground(colorCyan).Bold(true).Render("Branches")}
+	branches := m.filteredBranches()
+	if len(branches) == 0 {
+		return append(lines, m.branchListEmptyLines()...)
+	}
+	start := max(0, min(m.branchCursor-(height-2)/2, len(branches)-height+1))
+	end := min(len(branches), start+max(1, height-1))
+	for i := start; i < end; i++ {
+		lines = append(lines, m.branchListRow(branches[i], i == m.branchCursor, width))
+	}
+	return lines
+}
+
+func (m *Model) branchListEmptyLines() []string {
+	label := "No branches match the search."
+	if m.branchLocalOnly {
+		label = "No local branches match the search."
+	}
+	lines := []string{label}
+	if strings.TrimSpace(m.branchSearch) != "" && !m.branchLocalOnly {
+		lines = append(lines, "Enter tries a detached revision.")
+	}
+	return lines
+}
+
+func (m *Model) branchListRow(branch gitbackend.Branch, selected bool, width int) string {
+	mark := "  "
+	if branch.Current {
+		mark = "* "
+	}
+	label := branch.Name
+	if branch.Remote {
+		label += "  [remote • detached]"
+	} else if branch.Current {
+		label += "  [current]"
+	}
+	style := lipgloss.NewStyle().Foreground(colorText)
+	if selected {
+		style = style.Reverse(true).Bold(true)
+	} else if branch.Remote {
+		style = style.Foreground(colorMuted)
+	}
+	return style.Render(truncate(mark+sanitizeSingleLine(label), width))
+}
+
+func (m *Model) renderBranchPreview(width, height int) string {
+	innerW, innerH := max(1, width-2), max(1, height-2)
+	lines := []string{m.branchPreviewTitle(innerW)}
+	var done bool
+	lines, done = m.appendBranchPreviewState(lines)
+	if done {
+		return panelStyle(width, height).Render(fitBlock(strings.Join(lines, "\n"), innerW, innerH))
+	}
+	lines = m.appendBranchPreviewDetails(lines, innerW)
+	offset := min(max(0, m.branchPreviewOffset), max(0, len(lines)-innerH))
+	start := min(len(lines), 1+offset)
+	visible := append(lines[:1], lines[start:]...)
+	if len(visible) > innerH {
+		visible = visible[:innerH]
+	}
+	return panelStyle(width, height).Render(fitBlock(strings.Join(visible, "\n"), innerW, innerH))
+}
+
+func (m *Model) branchPreviewTitle(width int) string {
+	title := "Preview"
+	if m.branchPreview.Target != "" {
+		title += " · " + sanitizeSingleLine(m.branchPreview.Target)
+	}
+	return lipgloss.NewStyle().Foreground(colorCyan).Bold(true).Render(truncate(title, width))
+}
+
+func (m *Model) appendBranchPreviewState(lines []string) ([]string, bool) {
+	if m.branchPreviewLoading {
+		return append(lines, "Loading branch preview…"), true
+	}
+	if m.branchPreviewErr != "" {
+		lines = append(lines, "Preview unavailable:", m.branchPreviewErr)
+		_, selected := m.selectedBranch()
+		if !selected && !m.branchLocalOnly && strings.TrimSpace(m.branchSearch) != "" {
+			lines = append(lines, "Enter tries a detached revision.")
+		}
+		return lines, true
+	}
+	if m.branchPreview.Target == "" {
+		return append(lines, "Select a branch to inspect."), true
+	}
+	return lines, false
+}
+
+func (m *Model) appendBranchPreviewDetails(lines []string, width int) []string {
+	p := &m.branchPreview
+	outcome := "Switches local branch"
+	if p.TargetRemote || (!m.branchLocalOnly && len(m.filteredBranches()) == 0) {
+		outcome = "Checks out detached HEAD"
+	}
+	lines = append(lines, outcome)
+	lines = appendBranchPreviewCommitLines(lines, p, width)
+	lines = append(lines, "")
+	lines = appendBranchPreviewHistoryLines(lines, p)
+	lines = appendBranchPreviewUpstreamLines(lines, p)
+	lines = appendBranchPreviewMetadataLines(lines, p)
+	return appendBranchPreviewGraphLines(lines, p, width)
+}
+
+func appendBranchPreviewCommitLines(lines []string, p *gitbackend.BranchSwitchPreview, width int) []string {
+	if p.Latest.ID == "" {
+		return append(lines, "Latest commit: unavailable")
+	}
+	valueWidth := max(1, width-8)
+	return append(lines,
+		"Latest: "+truncate(sanitizeSingleLine(p.Latest.Subject), valueWidth),
+		"Author: "+truncate(sanitizeSingleLine(p.Latest.AuthorName), valueWidth)+"  "+commitAge(p.Latest.CommitDate),
+	)
+}
+
+func appendBranchPreviewHistoryLines(lines []string, p *gitbackend.BranchSwitchPreview) []string {
+	if p.CurrentID == "" {
+		return append(lines, "Current history: unavailable (unborn HEAD)")
+	}
+	return append(lines, fmt.Sprintf("Compared with %s: %d ahead · %d behind", sanitizeSingleLine(p.Current), p.TargetAhead, p.CurrentAhead))
+}
+
+func appendBranchPreviewUpstreamLines(lines []string, p *gitbackend.BranchSwitchPreview) []string {
+	switch {
+	case p.UpstreamUnavailable:
+		return append(lines, "Target upstream: configured but unavailable")
+	case p.HasUpstream:
+		return append(lines, fmt.Sprintf("Target upstream %s: +%d / -%d", sanitizeSingleLine(p.TargetUpstream), p.UpstreamAhead, p.UpstreamBehind))
+	default:
+		return append(lines, "Target upstream: none")
+	}
+}
+
+func appendBranchPreviewMetadataLines(lines []string, p *gitbackend.BranchSwitchPreview) []string {
+	if p.NoCommonAncestor {
+		lines = append(lines, "History: no shared base")
+	} else if p.BaseID != "" {
+		lines = append(lines, "History: shared base "+shortID(p.BaseID))
+		if p.ChangeSummary.Files == 0 {
+			lines = append(lines, "Changes since base: none")
+		} else {
+			lines = append(lines, fmt.Sprintf("Changes since base: %d files, +%d/-%d", p.ChangeSummary.Files, p.ChangeSummary.Insertions, p.ChangeSummary.Deletions))
+		}
+	}
+	if p.Description.Set && strings.TrimSpace(p.Description.Value) != "" {
+		lines = append(lines, "Description: "+sanitizeSingleLine(p.Description.Value))
+	}
+	if p.OtherWorktree != "" {
+		lines = append(lines, "Blocked: checked out in "+sanitizeSingleLine(p.OtherWorktree))
+	}
+	if len(p.PotentialBlockingPaths) > 0 {
+		lines = append(lines, "Possible local-change conflict: "+sanitizeSingleLine(strings.Join(p.PotentialBlockingPaths, ", ")))
+	}
+	return lines
+}
+
+func appendBranchPreviewGraphLines(lines []string, p *gitbackend.BranchSwitchPreview, width int) []string {
+	if len(p.GraphLines) == 0 {
+		return lines
+	}
+	graphTitle := "History graph:"
+	if p.GraphTruncated {
+		graphTitle = "History graph (partial):"
+	}
+	lines = append(lines, "", graphTitle)
+	for _, graph := range p.GraphLines {
+		lines = append(lines, truncate(sanitizeSingleLine(graph), width))
+	}
+	return lines
+}
+
+func commitAge(date time.Time) string {
+	return formatCommitAge(commitDuration(date, time.Now()))
+}
+
+func commitDuration(date, now time.Time) time.Duration {
+	if date.IsZero() {
+		return -1
+	}
+	age := now.Sub(date)
+	if age < 0 {
+		return 0
+	}
+	return age
+}
+
+func formatCommitAge(age time.Duration) string {
+	if age < 0 {
+		return "unknown age"
+	}
+	switch {
+	case age < time.Minute:
+		return "just now"
+	case age < time.Hour:
+		return fmt.Sprintf("%dm ago", int(age/time.Minute))
+	case age < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(age/time.Hour))
+	case age < 30*24*time.Hour:
+		return fmt.Sprintf("%dd ago", int(age/(24*time.Hour)))
+	case age < 365*24*time.Hour:
+		return fmt.Sprintf("%dmo ago", int(age/(30*24*time.Hour)))
+	default:
+		return fmt.Sprintf("%dy ago", int(age/(365*24*time.Hour)))
+	}
 }
 
 func (m *Model) renderTransientOverlay(height int) (string, bool) {
@@ -522,8 +769,6 @@ func (m *Model) basicOverlayContent(innerW, innerH int) (string, string) {
 		return " Commit message ", "Create commit\n\n> " + sanitizeSingleLine(m.input) + "█\n\nEnter commit  •  Esc cancel"
 	case modeConfirm:
 		return " Confirm discard ", discardConfirmationText(m.confirmPath, m.confirmPaths)
-	case modeBranches:
-		return " Switch branch ", m.branchOverlayContent(innerW, innerH)
 	case modeAddRemote:
 		return " Add remote ", m.addRemoteOverlayContent()
 	case modeTheme:
@@ -542,27 +787,6 @@ func discardConfirmationText(fallback string, paths []string) string {
 		lines = append(lines, "• "+sanitizeSingleLine(path))
 	}
 	return "Permanently discard changes to:\n\n" + strings.Join(lines, "\n") + "\n\n[y] yes    [n] no"
-}
-
-func (m *Model) branchOverlayContent(innerW, innerH int) string {
-	var lines []string
-	start := max(0, m.branchCursor-(innerH-4)/2)
-	end := min(len(m.branches), start+max(1, innerH-4))
-	for i := start; i < end; i++ {
-		mark := "  "
-		if m.branches[i].Current {
-			mark = "* "
-		}
-		line := mark + sanitizeSingleLine(m.branches[i].Name)
-		if i == m.branchCursor {
-			line = lipgloss.NewStyle().Reverse(true).Bold(true).Render(truncate(line, innerW))
-		}
-		lines = append(lines, line)
-	}
-	if len(lines) == 0 {
-		lines = append(lines, "No local branches")
-	}
-	return strings.Join(lines, "\n") + "\n\nEnter switch  •  q back"
 }
 
 func (m *Model) addRemoteOverlayContent() string {

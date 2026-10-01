@@ -67,6 +67,38 @@ func TestWorkflowSearchKeyboardAndStyledActions(t *testing.T) {
 	}
 }
 
+func TestWorkflowSearchEditingHandlesUnicodeAndCustomRevision(t *testing.T) {
+	field := WorkflowField{
+		Kind: WorkflowSearch,
+		Choices: []WorkflowChoice{
+			{Value: "main", Label: "main"},
+			{Value: "feature/login", Label: "feature/login"},
+		},
+		AllowCustom: true,
+	}
+	if !editWorkflowSearch(&field, "", "фича") {
+		t.Fatal("unicode search text was not accepted")
+	}
+	if field.Search != "фича" || field.Value != "фича" || field.Choice != 0 {
+		t.Fatalf("custom unicode revision = %+v", field)
+	}
+	if !editWorkflowSearch(&field, "backspace", "") {
+		t.Fatal("unicode backspace was not handled")
+	}
+	if field.Search != "фич" || field.Value != "фич" || field.Choice != 0 {
+		t.Fatalf("unicode backspace state = %+v", field)
+	}
+	field.Search = "feature"
+	field.Choice = 1
+	updateWorkflowSearch(&field, 0)
+	if !editWorkflowSearch(&field, "ctrl+h", "") {
+		t.Fatal("ctrl+h was not handled")
+	}
+	if field.Search != "featur" || field.Value != "feature/login" || field.Choice != 0 {
+		t.Fatalf("cursor reset after edit = %+v", field)
+	}
+}
+
 func TestUIHandlerAndInfixInvariants(t *testing.T) {
 	m := New(&gitbackend.Repository{})
 	if err := m.ValidateUIHandlers(); err != nil {

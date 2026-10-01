@@ -30,7 +30,9 @@ Run it against the current directory or pass a repository path:
 ```
 
 `make check` runs formatting, vet, race-enabled tests, the complexity threshold
-check, and generated-keybinding drift checks.
+check, and generated-keybinding drift checks. `go test ./...` alone does not run
+the complexity/coverage baseline or keybinding-drift checks; run `make check`
+before opening a pull request.
 
 ## Themes
 
@@ -65,6 +67,21 @@ Names are case-insensitive; spaces and underscores are treated like hyphens.
 | Push transient | `p` or `P` |
 | Commands/help | `?` |
 | Quit | `q` or `Q` |
+
+## Branch switching
+
+From the status view, `b b` opens the searchable branch picker for local and
+remote-tracking refs. `b l` opens the same picker restricted to local branches.
+Use ↑/↓ to select a branch; typing filters without consuming branch-name
+characters such as `j` or `k`. The live preview shows the latest commit subject,
+author and age, the selected branch's comparison with the current branch,
+target-upstream status, merge-base change summary, history graph, configured
+description, and checkout constraints. Remote refs are checked out detached by
+`b b`; custom revisions entered in its search field also remain detached.
+
+Press `PageDown`/`PageUp` to scroll the preview at small terminal heights,
+`Enter` to switch, and `Esc` to cancel. `b r` retains the separate workflow
+that creates a local branch tracking a selected remote-tracking ref.
 
 See the [complete keybinding ledger](/docs/keybindings/) and the
 [compatibility notes](/docs/compatibility/) for the full behavior and known

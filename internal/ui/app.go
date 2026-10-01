@@ -80,6 +80,13 @@ type branchesMsg struct {
 	branches []gitbackend.Branch
 	err      error
 }
+type branchPreviewMsg struct {
+	request uint64
+	state   uint64
+	target  string
+	preview gitbackend.BranchSwitchPreview
+	err     error
+}
 
 // graphMsg carries the immutable all-refs graph result back to the UI thread.
 // It is distinct from diffMsg because graph rows remain selectable after load.
@@ -160,7 +167,18 @@ type Model struct {
 
 	input                 string
 	branches              []gitbackend.Branch
+	branchVisible         []gitbackend.Branch
 	branchCursor          int
+	branchLocalOnly       bool
+	branchSearch          string
+	branchCheckoutOptions gitbackend.CheckoutOptions
+	branchPreview         gitbackend.BranchSwitchPreview
+	branchPreviewTarget   string
+	branchPreviewErr      string
+	branchPreviewLoading  bool
+	branchPreviewOffset   int
+	branchPreviewRequest  uint64
+	branchPreviewCancel   context.CancelFunc
 	confirmPath           string
 	confirmPaths          []string
 	detailRequest         uint64
@@ -332,6 +350,8 @@ func (m *Model) handleAppMessage(message tea.Msg) (tea.Cmd, bool) {
 		return m.handleWorkflowLoadMsg(msg), true
 	case branchesMsg:
 		return m.handleBranchesMsg(msg), true
+	case branchPreviewMsg:
+		return m.handleBranchPreviewMsg(msg), true
 	default:
 		return nil, false
 	}
@@ -501,14 +521,39 @@ func (m *Model) handleBranchesMsg(msg branchesMsg) tea.Cmd {
 		return nil
 	}
 	m.branches = msg.branches
+	m.branchSearch = ""
+	m.refreshBranchVisible()
+	m.branchPreview = gitbackend.BranchSwitchPreview{}
+	m.branchPreviewErr = ""
+	m.branchPreviewLoading = false
 	m.branchCursor = 0
-	for i, b := range m.branches {
+	for i, b := range m.branchVisible {
 		if b.Current {
 			m.branchCursor = i
 			break
 		}
 	}
 	m.setMode(modeBranches)
+	m.setMessage("Select a branch; Enter switches")
+	return m.loadBranchPreviewCmd()
+}
+
+func (m *Model) handleBranchPreviewMsg(msg branchPreviewMsg) tea.Cmd {
+	if msg.request != m.branchPreviewRequest || msg.state != m.stateGeneration || msg.target != m.branchPreviewTarget || m.mode != modeBranches || !m.appActive() {
+		return nil
+	}
+	m.branchPreviewLoading = false
+	if m.branchPreviewCancel != nil {
+		m.branchPreviewCancel()
+		m.branchPreviewCancel = nil
+	}
+	if msg.err != nil {
+		m.branchPreview = gitbackend.BranchSwitchPreview{Target: msg.target}
+		m.branchPreviewErr = sanitizeSingleLine(msg.err.Error())
+		return nil
+	}
+	m.branchPreviewErr = ""
+	m.branchPreview = msg.preview
 	return nil
 }
 
@@ -708,15 +753,14 @@ func (m *Model) handleModeKey(msg tea.KeyPressMsg, key string) (tea.Cmd, bool) {
 	case modeCommit:
 		_, cmd := m.handleCommitKey(msg)
 		return cmd, true
-	case modeBranches:
-		_, cmd := m.handleBranchKey(key)
-		return cmd, true
 	case modeAddRemote:
 		_, cmd := m.handleAddRemoteKey(msg)
 		return cmd, true
 	case modeRemotes:
 		_, cmd := m.handleRemoteKey(key)
 		return cmd, true
+	case modeBranches:
+		return m.handleBranchKeyMsg(msg), true
 	case modeProcess:
 		return m.routeProcessKey(msg, key), true
 	case modeWorkflow:
@@ -1346,36 +1390,183 @@ func (m *Model) appendCommitText(text string) {
 	}
 }
 
-func (m *Model) handleBranchKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "q", "esc":
-		return m, m.closeBranches()
-	case "j", "n", "down":
+func (m *Model) handleBranchKeyMsg(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		return m.closeBranches()
+	case "down":
 		m.moveBranchCursor(1)
-	case "k", "p", "up":
+		return m.loadBranchPreviewCmd()
+	case "up":
 		m.moveBranchCursor(-1)
+		return m.loadBranchPreviewCmd()
 	case "enter":
-		return m, m.switchSelectedBranch()
+		return m.switchSelectedBranch()
+	case "pgdown":
+		m.branchPreviewOffset += 5
+	case "pgup":
+		m.branchPreviewOffset = max(0, m.branchPreviewOffset-5)
+	default:
+		return m.handleBranchSearchKey(msg)
 	}
-	return m, nil
+	return nil
+}
+
+func (m *Model) handleBranchSearchKey(msg tea.KeyPressMsg) tea.Cmd {
+	switch msg.String() {
+	case "backspace":
+		return m.eraseBranchSearch()
+	case "ctrl+u":
+		return m.clearBranchSearch()
+	default:
+		return m.appendBranchSearch(msg)
+	}
+}
+
+func (m *Model) eraseBranchSearch() tea.Cmd {
+	if m.branchSearch == "" {
+		return nil
+	}
+	_, size := utf8.DecodeLastRuneInString(m.branchSearch)
+	m.branchSearch = m.branchSearch[:len(m.branchSearch)-size]
+	m.branchCursor = 0
+	m.refreshBranchVisible()
+	return m.loadBranchPreviewCmd()
+}
+
+func (m *Model) clearBranchSearch() tea.Cmd {
+	if m.branchSearch == "" {
+		return nil
+	}
+	m.branchSearch = ""
+	m.branchCursor = 0
+	m.refreshBranchVisible()
+	return m.loadBranchPreviewCmd()
+}
+
+func (m *Model) appendBranchSearch(msg tea.KeyPressMsg) tea.Cmd {
+	key := msg.String()
+	text := msg.Key().Text
+	if text == "" && len([]rune(key)) == 1 {
+		text = key
+	}
+	if text == "" || msg.Key().Mod&(tea.ModCtrl|tea.ModAlt) != 0 || strings.ContainsAny(text, "\x00\r\n") {
+		return nil
+	}
+	m.branchSearch += text
+	m.branchCursor = 0
+	m.refreshBranchVisible()
+	return m.loadBranchPreviewCmd()
 }
 
 func (m *Model) closeBranches() tea.Cmd {
+	if m.branchPreviewCancel != nil {
+		m.branchPreviewCancel()
+		m.branchPreviewCancel = nil
+	}
+	m.branchPreviewLoading = false
+	m.branchSearch = ""
 	m.setMode(modeStatus)
 	return m.loadDetailCmd()
 }
 
+func (m *Model) refreshBranchVisible() {
+	query := strings.ToLower(strings.TrimSpace(m.branchSearch))
+	m.branchVisible = m.branchVisible[:0]
+	for _, branch := range m.branches {
+		if m.branchLocalOnly && branch.Remote {
+			continue
+		}
+		if query != "" && !strings.Contains(strings.ToLower(branch.Name), query) {
+			continue
+		}
+		m.branchVisible = append(m.branchVisible, branch)
+	}
+}
+
+func (m *Model) filteredBranches() []gitbackend.Branch {
+	if len(m.branches) == 0 {
+		m.branchVisible = nil
+		return nil
+	}
+	if m.branchVisible == nil {
+		m.refreshBranchVisible()
+	}
+	return m.branchVisible
+}
+
+func (m *Model) selectedBranch() (gitbackend.Branch, bool) {
+	branches := m.filteredBranches()
+	if m.branchCursor < 0 || m.branchCursor >= len(branches) {
+		return gitbackend.Branch{}, false
+	}
+	return branches[m.branchCursor], true
+}
+
 func (m *Model) moveBranchCursor(delta int) {
-	m.branchCursor = min(max(0, m.branchCursor+delta), max(0, len(m.branches)-1))
+	branches := m.filteredBranches()
+	m.branchCursor = min(max(0, m.branchCursor+delta), max(0, len(branches)-1))
+}
+
+func (m *Model) branchPreviewTargetValue() string {
+	if branch, ok := m.selectedBranch(); ok {
+		return branch.Name
+	}
+	if !m.branchLocalOnly {
+		return strings.TrimSpace(m.branchSearch)
+	}
+	return ""
+}
+
+func (m *Model) loadBranchPreviewCmd() tea.Cmd {
+	target := m.branchPreviewTargetValue()
+	m.branchPreviewTarget = target
+	m.branchPreviewRequest++
+	request, state := m.branchPreviewRequest, m.stateGeneration
+	if m.branchPreviewCancel != nil {
+		m.branchPreviewCancel()
+		m.branchPreviewCancel = nil
+	}
+	m.branchPreview = gitbackend.BranchSwitchPreview{Target: target}
+	m.branchPreviewErr = ""
+	m.branchPreviewOffset = 0
+	m.branchPreviewLoading = target != ""
+	if target == "" || m.repo == nil {
+		m.branchPreviewLoading = false
+		return nil
+	}
+	ctx, cancel := context.WithCancel(m.appCtx)
+	m.branchPreviewCancel = cancel
+	return func() tea.Msg {
+		preview, err := m.repo.PreviewBranchSwitch(ctx, target)
+		return branchPreviewMsg{request: request, state: state, target: target, preview: preview, err: err}
+	}
 }
 
 func (m *Model) switchSelectedBranch() tea.Cmd {
-	if len(m.branches) == 0 {
+	branch, found := m.selectedBranch()
+	target := strings.TrimSpace(m.branchSearch)
+	if found {
+		target = branch.Name
+	} else if m.branchLocalOnly {
+		m.branchPreviewErr = "No local branch matches the search."
 		return nil
 	}
-	branch := m.branches[m.branchCursor]
+	if target == "" || m.repo == nil {
+		return nil
+	}
+	if m.branchPreviewCancel != nil {
+		m.branchPreviewCancel()
+		m.branchPreviewCancel = nil
+	}
+	m.branchPreviewLoading = false
 	m.setMode(modeStatus)
-	return m.startOperation("switch branch", func(ctx context.Context) error { return m.repo.SwitchBranch(ctx, branch.Name) })
+	return m.startOperation("switch branch", func(ctx context.Context) error {
+		if found && !branch.Remote {
+			return m.repo.CheckoutBranchWithOptions(ctx, target, m.branchCheckoutOptions)
+		}
+		return m.repo.CheckoutRevisionWithOptions(ctx, target, m.branchCheckoutOptions)
+	})
 }
 
 type detailScrollBehavior struct {
@@ -1624,8 +1815,10 @@ func (m *Model) performRepositoryCommand(command keymap.CommandID) (tea.Cmd, boo
 	case keymap.CommandSwitchBranch:
 		if m.canOperate() {
 			m.busy = true
+			m.branchLocalOnly = false
+			m.branchCheckoutOptions = gitbackend.CheckoutOptions{}
 			m.setMessage("Loading branches…")
-			return m.loadBranchesCmd(), true
+			return m.loadBranchesCmd(false), true
 		}
 	case keymap.CommandAddRemote:
 		if m.canOperate() {
@@ -1812,6 +2005,10 @@ func (m *Model) shutdown() {
 	m.cancelPrefix()
 	m.cancelDetail()
 	m.cancelWorkflowLoad()
+	if m.branchPreviewCancel != nil {
+		m.branchPreviewCancel()
+		m.branchPreviewCancel = nil
+	}
 	if m.workflow != nil && m.workflow.cancel != nil {
 		m.workflow.cancel()
 	}
@@ -2054,7 +2251,7 @@ func (m *Model) loadDetailCmd() tea.Cmd {
 	}
 }
 
-func (m *Model) loadBranchesCmd() tea.Cmd {
+func (m *Model) loadBranchesCmd(localOnly bool) tea.Cmd {
 	m.branchRequest++
 	request := m.branchRequest
 	state := m.stateGeneration
@@ -2064,12 +2261,15 @@ func (m *Model) loadBranchesCmd() tea.Cmd {
 		if err != nil {
 			return branchesMsg{request: request, state: state, err: err}
 		}
-		local := all[:0]
-		for _, branch := range all {
-			if !branch.Remote {
-				local = append(local, branch)
+		if localOnly {
+			local := all[:0]
+			for _, branch := range all {
+				if !branch.Remote {
+					local = append(local, branch)
+				}
 			}
+			all = local
 		}
-		return branchesMsg{request: request, state: state, branches: local}
+		return branchesMsg{request: request, state: state, branches: all}
 	}
 }
