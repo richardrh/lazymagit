@@ -1,4 +1,4 @@
-.PHONY: check gofmt-check vet test-race crap-check keymapdoc-check
+.PHONY: check gofmt-check vet test-race crap-check keymapdoc-check golden-update
 
 check: gofmt-check vet test-race crap-check keymapdoc-check
 
@@ -17,10 +17,12 @@ crap-check:
 		go test -coverprofile="$$profile" ./... && \
 		go run ./internal/quality/cmd/crap -coverprofile "$$profile" -threshold 12.000000001
 
-# Once keymapdoc exposes -check, replace this probe with an unconditional call.
+# keymapdoc exposes -check, so the ledger is verified unconditionally rather
+# than through the probe that used to guard for it.
 keymapdoc-check:
-	@if grep -Eq 'flag\.(Bool|BoolVar).*"check"' internal/keymap/cmd/keymapdoc/main.go; then \
-		go run ./internal/keymap/cmd/keymapdoc -check; \
-	else \
-		echo "keymapdoc: -check not supported; skipping"; \
-	fi
+	go run ./internal/keymap/cmd/keymapdoc -check
+
+# Rewrites the rendered-screen goldens under internal/ui/testdata. Review the
+# diff before committing: a golden change is a visible-surface change.
+golden-update:
+	go test ./internal/ui -run Golden -update

@@ -26,8 +26,13 @@ func (m *Model) render() string {
 		return fitBlock("lazymagit\nTerminal too small", max(1, m.width), max(1, m.height))
 	}
 	header := m.renderHeader()
+	tabs := ""
+	tabRows := m.tabStripRows()
+	if tabRows == 1 {
+		tabs = m.renderTabStrip()
+	}
 	footer := m.renderFooter()
-	bodyHeight := m.height - 4
+	bodyHeight := m.height - 4 - tabRows
 	var body string
 	if m.mode == modeProcess && m.processPanelHeight() > 0 {
 		processHeight := m.processPanelHeight()
@@ -40,10 +45,16 @@ func (m *Model) render() string {
 	if (m.mode != modeStatus && m.mode != modeProcess) || cataloguedPrefix {
 		body = m.renderOverlay(bodyHeight)
 	}
+	if tabRows == 1 {
+		header += "\n" + tabs
+	}
 	return fitBlock(header+"\n"+body+"\n"+footer, m.width, m.height)
 }
 
 func (m *Model) renderMainBody(bodyHeight int) string {
+	if m.logTab {
+		return m.renderLogTabBody(bodyHeight)
+	}
 	if m.compact {
 		return m.renderCompactMainBody(bodyHeight)
 	}
@@ -186,14 +197,6 @@ func (m *Model) compactDetailStyle(line string, index, rangeLow, rangeHigh int) 
 }
 
 func (m *Model) inspectionRowStyle(style lipgloss.Style, index int) (lipgloss.Style, bool) {
-	if m.graphActive {
-		if entry, ok := m.graphEntries[index]; ok {
-			if entry.Decorations != "" {
-				return style.Foreground(colorGold), true
-			}
-			return style.Foreground(colorPurple), true
-		}
-	}
 	if m.blameActive {
 		if blame, ok := m.blameEntries[index]; ok {
 			if len(blame.CommitID) == 0 {
@@ -207,7 +210,7 @@ func (m *Model) inspectionRowStyle(style lipgloss.Style, index int) (lipgloss.St
 }
 
 func (m *Model) compactDetailCursorSelected(index int) bool {
-	return (m.graphActive && index == m.graphCursor) || (m.blameActive && index == m.blameCursor)
+	return m.blameActive && index == m.blameCursor
 }
 
 func compactDiffLineStyle(style lipgloss.Style, line string) lipgloss.Style {
@@ -434,16 +437,16 @@ func (m *Model) pendingFooter(scheme string) string {
 
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
-	if m.graphActive {
-		return gold.Render("Graph") + muted.Render("  j/k select  Enter inspect  A cherry-pick  _ revert  O reset  alt+| swap split  q close")
+	if m.logTab && !m.inspectionActive {
+		return m.logTabFooter()
 	}
 	if m.blameActive {
 		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  alt+| swap split  Esc close")
 	}
 	if m.revisionActive {
 		controls := "  Alt-p first parent  Esc close"
-		if m.graphReturn != nil {
-			controls = "  Alt-p first parent  Esc return graph"
+		if m.logTab {
+			controls = "  Alt-p first parent  Esc return Log tab"
 		}
 		return gold.Render("Revision") + muted.Render(controls)
 	}
@@ -455,7 +458,7 @@ func (m *Model) statusFooter() string {
 }
 
 func (m *Model) appendOptionalFooter(left string, style lipgloss.Style) string {
-	optional := []string{"F2 Themes", "gr Refresh", "z Folds", "` Processes", "j/k Move", "[/] Siblings", "v/V Select", "Alt-r PR", "Alt-b Blame", "Alt-g Graph", "Alt-M Mark", "? Commands", "Q Quit"}
+	optional := []string{"F2 Themes", "gr Refresh", "z Folds", "` Processes", "j/k Move", "[/] Siblings", "v/V Select", "Alt-l Log", "Alt-r PR", "Alt-b Blame", "Alt-g All refs", "Alt-M Mark", "Alt-c Compare", "? Commands", "Q Quit"}
 	for _, item := range optional {
 		candidate := left + "  " + style.Render(item)
 		if ansi.StringWidth(candidate) <= m.width {

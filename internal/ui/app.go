@@ -88,14 +88,23 @@ type branchPreviewMsg struct {
 	err     error
 }
 
-// graphMsg carries the immutable all-refs graph result back to the UI thread.
-// It is distinct from diffMsg because graph rows remain selectable after load.
-type graphMsg struct {
-	id      sectionmodel.SectionID
+// logTabMsg carries the Log tab's commit list back to the UI thread. The tab
+// owns an ordered slice rather than an index into rendered detail text, so
+// rows stay selectable and stable across re-renders and resizes.
+type logTabMsg struct {
 	request uint64
 	title   string
+	entries []gitbackend.LogEntry
+	err     error
+}
+
+// logDetailMsg carries the selected commit's patch for the Log tab's detail
+// pane. It is distinct from diffMsg because a log row has no status section ID
+// to key the request on.
+type logDetailMsg struct {
+	request uint64
+	id      string
 	text    string
-	entries map[int]gitbackend.LogEntry
 	err     error
 }
 
@@ -116,14 +125,6 @@ type blameMsg struct {
 	text    string
 	entries map[int]gitbackend.BlameLine
 	err     error
-}
-
-type graphInspection struct {
-	detail  string
-	id      sectionmodel.SectionID
-	entries map[int]gitbackend.LogEntry
-	cursor  int
-	offset  int
 }
 
 type blameInspection struct {
@@ -195,13 +196,20 @@ type Model struct {
 	detailSelections      []gitbackend.InteractiveChangeSelection
 	markedFiles           map[fileMark]bool
 	inspectionActive      bool
-	graphActive           bool
-	graphCursor           int
-	graphEntries          map[int]gitbackend.LogEntry
+	logTab                bool
+	logEntries            []gitbackend.LogEntry
+	logCursor             int
+	logOffset             int
+	logTitle              string
+	logQuery              gitbackend.LogQuery
+	markedCommits         []string
+	logListRequest        uint64
+	logDetailRequest      uint64
+	logDetailID           string
+	logDetailCancel       context.CancelFunc
 	revisionActive        bool
 	revisionID            string
 	revisionParents       []string
-	graphReturn           *graphInspection
 	blameActive           bool
 	blameCursor           int
 	blameEntries          map[int]gitbackend.BlameLine
@@ -359,8 +367,11 @@ func (m *Model) handleAppMessage(message tea.Msg) (tea.Cmd, bool) {
 
 func (m *Model) handleDetailMessage(message tea.Msg) (tea.Cmd, bool) {
 	switch msg := message.(type) {
-	case graphMsg:
-		return m.handleGraphMsg(msg), true
+	case logTabMsg:
+		return m.handleLogTabMsg(msg), true
+	case logDetailMsg:
+		m.handleLogDetailMsg(msg)
+		return nil, true
 	case revisionMsg:
 		return m.handleRevisionMsg(msg), true
 	case blameMsg:
@@ -376,6 +387,7 @@ func (m *Model) handleWindowSizeMsg(msg tea.WindowSizeMsg) tea.Cmd {
 	m.width, m.height = msg.Width, msg.Height
 	m.clampDetailOffset()
 	m.clampTransientOffset()
+	m.clampLogOffset()
 	m.clampProcessOffset()
 	return nil
 }
@@ -575,48 +587,6 @@ func (m *Model) handleRevisionMsg(msg revisionMsg) tea.Cmd {
 	return nil
 }
 
-func (m *Model) handleGraphMsg(msg graphMsg) tea.Cmd {
-	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
-		return nil
-	}
-	m.cancelDetail()
-	title := msg.title
-	if title == "" {
-		title = "History"
-	}
-	m.detailID, m.detail = msg.id, sanitizeDiff(title+"\n\n"+msg.text)
-	m.detailOffset, m.graphEntries, m.graphActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
-	m.graphCursor = -1
-	if msg.err != nil {
-		m.installGraphFailure(msg)
-	} else {
-		m.installGraphCursor(msg.entries)
-	}
-	m.resetDetailSelection()
-	return nil
-}
-
-func (m *Model) installGraphFailure(msg graphMsg) {
-	failure := "Unable to load history:\n"
-	if msg.title == "" || msg.title == "All refs graph" {
-		failure = "Unable to load graph:\n"
-	}
-	m.detail = failure + sanitizeSingleLine(msg.err.Error())
-	m.graphEntries = nil
-}
-
-func (m *Model) installGraphCursor(entries map[int]gitbackend.LogEntry) {
-	for line := range entries {
-		if m.graphCursor < 0 || line < m.graphCursor {
-			m.graphCursor = line
-		}
-	}
-	if m.graphCursor >= 0 {
-		m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-	}
-}
-
 func (m *Model) handleBlameMsg(msg blameMsg) tea.Cmd {
 	if msg.request != m.detailRequest || msg.id != m.tree.Cursor() || m.mode != modeStatus || !m.appActive() {
 		return nil
@@ -624,7 +594,6 @@ func (m *Model) handleBlameMsg(msg blameMsg) tea.Cmd {
 	m.cancelDetail()
 	m.detailID, m.detail = msg.id, sanitizeDiff(msg.title+"\n\n"+msg.text)
 	m.detailOffset, m.blameEntries, m.blameActive = 0, msg.entries, msg.err == nil && len(msg.entries) > 0
-	m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
 	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
 	m.blameCursor = firstBlameLine(msg.entries)
 	if msg.err != nil {
@@ -709,29 +678,47 @@ func (m *Model) handleGlobalKey(key string) (tea.Cmd, bool) {
 }
 
 func (m *Model) handleInspectionEscape() (tea.Cmd, bool) {
-	if m.revisionActive && m.graphReturn != nil {
-		m.restoreGraphInspection()
-		m.setMessage("Returned to graph")
-		return nil, true
-	}
-	if m.revisionActive && m.blameReturn != nil {
+	switch {
+	case m.revisionActive && m.blameReturn != nil:
 		m.restoreBlameInspection()
 		m.setMessage("Returned to blame")
 		return nil, true
-	}
-	if !m.inspectionActive {
+	case m.revisionActive && m.logTab:
+		m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
+		m.inspectionActive = false
+		m.setMessage("Returned to Log tab")
+		return m.loadLogDetailCmd(), true
+	case m.logTab && m.inspectionActive:
+		m.closeInspection()
+		return m.loadLogDetailCmd(), true
+	case m.logTab:
+		m.leaveLogTab()
+		return m.loadDetailCmd(), true
+	case !m.inspectionActive:
 		return nil, false
 	}
 	m.closeInspection()
 	return m.loadDetailCmd(), true
 }
 
+// leaveLogTab returns to the Status tab, keeping the loaded log list cached so
+// re-entering the tab does not refetch.
+func (m *Model) leaveLogTab() {
+	m.logTab = false
+	m.cancelLogDetail()
+	m.setMessage("Status tab")
+}
+
+// closeInspection drops every inspection overlay. It deliberately leaves the
+// Log tab alone: the tab is a view, not an inspection, and a comparison opened
+// from it must be closable without discarding the tab.
 func (m *Model) closeInspection() {
-	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = false, false, nil, -1
+	m.inspectionActive = false
 	m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
 	m.conflictInspectPath, m.conflictResolution = "", ""
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
+	m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
 	m.setMessage("Inspection closed")
+
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1662,7 +1649,7 @@ func (m *Model) clampDetailOffset() {
 }
 
 func (m *Model) detailViewportHeight() int {
-	bodyHeight := m.height - 4
+	bodyHeight := m.height - 4 - m.tabStripRows()
 	if bodyHeight < 3 {
 		return 0
 	}
@@ -1701,21 +1688,33 @@ func (m *Model) perform(command keymap.CommandID) tea.Cmd {
 	return nil
 }
 
+// movementKey maps a Doom movement command to the raw key that the Log tab and
+// inspection handlers expect, so both share one mapping.
+func movementKey(command keymap.CommandID) string {
+	switch command {
+	case keymap.CommandMoveDown:
+		return "j"
+	case keymap.CommandMoveUp:
+		return "k"
+	case keymap.CommandFirst:
+		return "home"
+	case keymap.CommandLast:
+		return "end"
+	}
+	return ""
+}
+
 func (m *Model) performMovementCommand(command keymap.CommandID) (tea.Cmd, bool) {
-	if m.graphActive || m.blameActive {
-		key := ""
-		switch command {
-		case keymap.CommandMoveDown:
-			key = "j"
-		case keymap.CommandMoveUp:
-			key = "k"
-		case keymap.CommandFirst:
-			key = "home"
-		case keymap.CommandLast:
-			key = "end"
+	if key := movementKey(command); key != "" {
+		if m.logTab {
+			if cmd, handled := m.handleLogTabKey(key); handled {
+				return cmd, true
+			}
 		}
-		if key != "" {
-			return m.handleInspectionNavigationKey(key)
+		if m.blameActive {
+			if cmd, handled := m.handleInspectionNavigationKey(key); handled {
+				return cmd, true
+			}
 		}
 	}
 	switch command {
@@ -1734,12 +1733,7 @@ func (m *Model) performMovementCommand(command keymap.CommandID) (tea.Cmd, bool)
 func (m *Model) performDisplayCommand(command keymap.CommandID) (tea.Cmd, bool) {
 	switch command {
 	case keymap.CommandRefresh:
-		if !m.canOperate() {
-			return nil, true
-		}
-		m.busy = true
-		m.setMessage("Refreshing…")
-		return m.refreshOperationCmd("refresh", nil), true
+		return m.performRefresh(), true
 	case keymap.CommandToggleSection:
 		id := m.tree.Cursor()
 		m.tree.ToggleFold(id)
@@ -1764,6 +1758,20 @@ func (m *Model) performDisplayCommand(command keymap.CommandID) (tea.Cmd, bool) 
 		return nil, false
 	}
 	return nil, true
+}
+
+// performRefresh reloads whichever surface is on screen. The Log tab is not
+// showing the status snapshot, so it refreshes its own query instead.
+func (m *Model) performRefresh() tea.Cmd {
+	if !m.canOperate() {
+		return nil
+	}
+	if m.logTab {
+		return openLogTab(m, m.logTitle, m.logQuery)
+	}
+	m.busy = true
+	m.setMessage("Refreshing…")
+	return m.refreshOperationCmd("refresh", nil)
 }
 
 func (m *Model) performChangeCommand(command keymap.CommandID) (tea.Cmd, bool) {

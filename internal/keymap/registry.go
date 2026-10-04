@@ -94,6 +94,15 @@ const (
 	CommandGraph CommandID = "inspect.graph"
 	// CommandPullRequest opens the terminal GitHub PR message composer.
 	CommandPullRequest CommandID = "forge.pull-request"
+	// CommandLogTab opens the terminal's Log view. Magit has no status/log tab
+	// split, and its M-1..M-4 and TAB keys are deliberately left unbound by the
+	// Doom scheme, so the tab joins the alt+ inspection namespace instead.
+	CommandLogTab CommandID = "tab.log"
+	// CommandMarkCommit and CommandCompareCommits are the Log tab's select-a-set
+	// verb. Magit binds SPC to diff paging and C-c is a live prefix, so both
+	// commands join the alt+ inspection namespace.
+	CommandMarkCommit     CommandID = "log.mark-commit"
+	CommandCompareCommits CommandID = "log.compare-commits"
 )
 
 type View uint8
@@ -330,6 +339,9 @@ func buildRegistry() []Binding {
 	out = append(out, portable("alt+b", CommandBlame, "Blame selected file")...)
 	out = append(out, portable("alt+g", CommandGraph, "Browse all-refs graph")...)
 	out = append(out, portable("alt+r", CommandPullRequest, "Compose GitHub pull request")...)
+	out = append(out, portable("alt+l", CommandLogTab, "Open Log tab")...)
+	out = append(out, portable("alt+m", CommandMarkCommit, "Mark commit")...)
+	out = append(out, portable("alt+c", CommandCompareCommits, "Compare marked commits")...)
 	out = append(out, transientBindings(m)...)
 	return out
 }

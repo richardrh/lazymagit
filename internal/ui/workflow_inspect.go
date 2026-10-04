@@ -107,7 +107,6 @@ func init() {
 		}
 		// Alt-b is a terminal extension; Ctrl-b remains Doom's page-up motion.
 		handlers[keymap.CommandBlame] = inspectBlame
-		handlers[keymap.CommandGraph] = inspectGraph
 		return handlers
 	})
 	RegisterWorkflowCapabilities(capabilitiesForTransient("magit-diff", map[string][]string{
@@ -159,10 +158,10 @@ func loadInspection(m *Model, title string, loader inspectLoader) tea.Cmd {
 		return nil
 	}
 	m.cancelDetail()
-	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.inspectionActive = true
 	m.blameActive, m.blameEntries, m.blameCursor, m.blameReturn = false, nil, -1, nil
 	m.conflictInspectPath, m.conflictResolution = "", ""
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
+	m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id := m.detailRequest, m.tree.Cursor()
@@ -195,8 +194,8 @@ func selectedInspectRevision(m *Model) string {
 }
 
 func activeInspectionRevision(m *Model) string {
-	if m.graphActive {
-		return m.graphEntries[m.graphCursor].ID
+	if revision := m.activeLogRevision(); revision != "" {
+		return revision
 	}
 	if m.revisionActive {
 		return m.revisionID
@@ -273,7 +272,7 @@ func inspectRevision(m *Model, revision string) tea.Cmd {
 		return nil
 	}
 	m.cancelDetail()
-	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
+	m.inspectionActive = true
 	m.revisionActive, m.revisionID, m.revisionParents = false, "", nil
 	m.detailOffset = 0
 	m.detailRequest++
@@ -313,8 +312,7 @@ func loadBlameInspection(m *Model, path string) tea.Cmd {
 	}
 	m.cancelDetail()
 	m.inspectionActive, m.blameActive, m.blameEntries, m.blameCursor = true, false, nil, -1
-	m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn, m.blameReturn = false, "", nil, nil, nil
+	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
 	m.detailOffset = 0
 	m.detailRequest++
 	request, id, title := m.detailRequest, m.tree.Cursor(), "Blame "+sanitizeSingleLine(path)
@@ -332,104 +330,11 @@ func loadBlameInspection(m *Model, path string) tea.Cmd {
 	}
 }
 
-// inspectGraph is a bounded all-refs graph browser. Git computes lanes from
-// the full ref topology, while this UI renders its sanitized ASCII graph and
-// decorations in the pageable terminal detail pane.
-func inspectGraph(m *Model, _ WorkflowCommand) tea.Cmd {
-	query := gitbackend.LogQuery{All: true, Graph: true, Decorations: true, Limit: inspectItemLimit, OutputLimit: inspectOutputLimit}
-	return loadGraphInspection(m, "All refs graph", query)
-}
-
-func loadGraphInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
-	if !m.canOperate() {
-		return nil
-	}
-	m.cancelDetail()
-	m.inspectionActive, m.graphActive, m.graphEntries, m.graphCursor = true, false, nil, -1
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
-	m.detailOffset = 0
-	m.detailRequest++
-	request, id := m.detailRequest, m.tree.Cursor()
-	title = sanitizeSingleLine(title)
-	m.detailID, m.detail = id, "Loading "+title+"…"
-	m.setMessage("Loading " + title + "…")
-	ctx, cancel := context.WithCancel(m.appCtx)
-	m.detailCtx, m.detailCancel = ctx, cancel
-	return func() tea.Msg {
-		result, err := m.repo.QueryLog(ctx, query)
-		if err != nil {
-			return graphMsg{id: id, request: request, title: title, err: err}
-		}
-		text, entries := graphResultText(result)
-		return graphMsg{id: id, request: request, title: title, text: text, entries: entries}
-	}
-}
-
-func graphResultText(result gitbackend.LogResult) (string, map[int]gitbackend.LogEntry) {
-	lines := make([]string, 0, len(result.Items)+1)
-	entries := make(map[int]gitbackend.LogEntry, len(result.Items))
-	if result.Truncated {
-		lines = append(lines, strings.TrimSuffix(truncationNote(true), "\n"))
-	}
-	// The detail view prepends the title and a blank line, so graph rows begin
-	// at line two. The map makes only real commit rows selectable.
-	for _, item := range result.Items {
-		entries[len(lines)+2] = item
-		lines = append(lines, logEntryText(item))
-	}
-	return strings.Join(lines, "\n"), entries
-}
-
-func (m *Model) handleGraphKey(key string) (tea.Cmd, bool) {
-	lines := make([]int, 0, len(m.graphEntries))
-	for line := range m.graphEntries {
-		lines = append(lines, line)
-	}
-	sort.Ints(lines)
-	if len(lines) == 0 {
-		return nil, false
-	}
-	index := sort.SearchInts(lines, m.graphCursor)
-	if index == len(lines) || lines[index] != m.graphCursor {
-		index = 0
-	}
-	switch key {
-	case "up", "k":
-		index = max(0, index-1)
-	case "down", "j":
-		index = min(len(lines)-1, index+1)
-	case "ctrl+d":
-		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()/2))
-	case "ctrl+u":
-		index = max(0, index-max(1, m.detailViewportHeight()/2))
-	case "ctrl+f":
-		index = min(len(lines)-1, index+max(1, m.detailViewportHeight()))
-	case "ctrl+b":
-		index = max(0, index-max(1, m.detailViewportHeight()))
-	case "home":
-		index = 0
-	case "end":
-		index = len(lines) - 1
-	case "enter":
-		entry := m.graphEntries[m.graphCursor]
-		m.graphReturn = m.captureGraphInspection()
-		m.graphActive, m.graphEntries, m.graphCursor = false, nil, -1
-		return inspectRevision(m, entry.ID), true
-	default:
-		return nil, false
-	}
-	m.graphCursor = lines[index]
-	m.detailOffset = min(m.graphCursor, m.detailMaximumOffset())
-	m.setMessage("Graph commit " + m.graphEntries[m.graphCursor].ShortID + " selected; Enter inspects, A cherry-picks, _ reverts, O resets")
-	return nil, true
-}
-
 func (m *Model) handleInspectionNavigationKey(key string) (tea.Cmd, bool) {
 	handlers := []struct {
 		active bool
 		handle func(string) (tea.Cmd, bool)
 	}{
-		{m.graphActive, m.handleGraphKey},
 		{m.blameActive, m.handleBlameKey},
 		{m.conflictInspectPath != "", m.handleConflictInspectionKey},
 		{m.revisionActive, m.handleRevisionKey},
@@ -535,25 +440,6 @@ func (m *Model) restoreBlameInspection() {
 	m.detail, m.detailID, m.detailOffset = state.detail, state.id, state.offset
 	m.blameEntries, m.blameCursor, m.blameActive = state.entries, state.cursor, true
 	m.revisionActive, m.revisionID, m.revisionParents, m.blameReturn = false, "", nil, nil
-	m.clampDetailOffset()
-}
-
-func (m *Model) captureGraphInspection() *graphInspection {
-	entries := make(map[int]gitbackend.LogEntry, len(m.graphEntries))
-	for line, entry := range m.graphEntries {
-		entries[line] = entry
-	}
-	return &graphInspection{detail: m.detail, id: m.detailID, entries: entries, cursor: m.graphCursor, offset: m.detailOffset}
-}
-
-func (m *Model) restoreGraphInspection() {
-	if m.graphReturn == nil {
-		return
-	}
-	state := m.graphReturn
-	m.detail, m.detailID, m.detailOffset = state.detail, state.id, state.offset
-	m.graphEntries, m.graphCursor, m.graphActive = state.entries, state.cursor, true
-	m.revisionActive, m.revisionID, m.revisionParents, m.graphReturn = false, "", nil, nil
 	m.clampDetailOffset()
 }
 
@@ -716,7 +602,7 @@ func logEntryText(item gitbackend.LogEntry) string {
 }
 
 func runLogInspection(m *Model, title string, query gitbackend.LogQuery) tea.Cmd {
-	return loadGraphInspection(m, title, query)
+	return openLogTab(m, title, query)
 }
 
 func inspectLogCurrent(m *Model, command WorkflowCommand) tea.Cmd {

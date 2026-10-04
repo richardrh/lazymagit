@@ -1,0 +1,30 @@
+ LAZYMAGIT  repo  branch main no upstream                                                           
+Status  |  Log  2 commits                                                                           
+╭─────────────────────────────────────────╮╭───────────────────────────────────────────────────────╮
+│  * [OID] UI E2E Test inspection second││commit [OID]        │
+│✓ * [OID] UI E2E Test inspection first ││Author:     UI E2E Test <ui-e2e@example.invalid>       │
+│                                         ││AuthorDate: [STAMP]              │
+│                                         ││Commit:     UI E2E Test <ui-e2e@example.invalid>       │
+│                                         ││CommitDate: [STAMP]              │
+│                                         ││                                                       │
+│                                         ││    inspection first                                   │
+│                                         ││---                                                    │
+│                                         ││ story.txt | 1 +                                       │
+│                                         ││ 1 file changed, 1 insertion(+)                        │
+│                                         ││                                                       │
+│                                         ││diff --git a/story.txt b/story.txt                     │
+│                                         ││new file mode 100644                                   │
+│                                         ││index [OID]..[OID]                                 │
+│                                         ││--- /dev/null                                          │
+│                                         ││+++ b/story.txt                                        │
+│                                         ││@@ -0,0 +1 @@                                          │
+│                                         ││+one                                                   │
+│                                         ││                                                       │
+│                                         ││                                                       │
+│                                         ││                                                       │
+│                                         ││                                                       │
+│                                         ││                                                       │
+╰─────────────────────────────────────────╯╰───────────────────────────────────────────────────────╯
+Log  j/k select  alt+m mark  alt+c compare  Esc status  alt+| swap split  q close  ([OID] marked…
+                                                                                                    
+                                                                                                    

@@ -42,13 +42,6 @@ func TestCompactDetailRendererStylesAllLineKinds(t *testing.T) {
 	if !strings.Contains(got, "\x1b[") {
 		t.Fatal("compact detail omitted styling")
 	}
-	m.graphActive, m.graphCursor = true, 6
-	m.graphEntries = map[int]gitbackend.LogEntry{
-		6: {ShortID: "abc", Decorations: "HEAD -> main"},
-		7: {ShortID: "def"},
-	}
-	_ = m.renderCompactDetail(40, 7)
-	m.graphActive = false
 	m.blameActive, m.blameEntries = true, map[int]gitbackend.BlameLine{
 		6: {CommitID: "a"},
 		7: {CommitID: "b"},

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/charmbracelet/x/ansi"
 	"strings"
 	"testing"
 
@@ -41,6 +42,18 @@ func assertInspectDetail(t *testing.T, m *Model, values ...string) {
 	}
 }
 
+// assertInspectView checks the rendered screen rather than the raw detail
+// buffer. The Log tab owns its own list, so its assertions belong on the view.
+func assertInspectView(t *testing.T, m *Model, values ...string) {
+	t.Helper()
+	plain := ansi.Strip(m.render())
+	for _, value := range values {
+		if !strings.Contains(plain, value) {
+			t.Fatalf("rendered view omitted %q:\n%s", value, plain)
+		}
+	}
+}
+
 func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 	tests := []struct {
 		name string
@@ -49,7 +62,6 @@ func TestInspectTopLevelFamiliesThroughModelUpdate(t *testing.T) {
 	}{
 		{"d", []string{"d", "d"}, []string{"Unstaged diff", "+working"}},
 		{"D", []string{"D", "g"}, []string{"Unstaged diff", "+working"}},
-		{"l", []string{"l", "l"}, []string{"Log", "inspection second", "inspection first"}},
 		{"yr", []string{"y", "r", "y"}, []string{"References", "Local branches", "main"}},
 		{"Y", []string{"Y"}, []string{"Cherries", "inspection second"}},
 		{"H", []string{"H"}, []string{"Section information", "Section:", "Repository operation: none"}},
@@ -90,7 +102,27 @@ func TestInspectBlameThroughModelUpdate(t *testing.T) {
 	}
 }
 
-func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
+func TestInspectLogTabRoutesMagitLogSuffixes(t *testing.T) {
+	m := newInspectE2EModel(t)
+	sendInspectSequence(t, m, "l", "l")
+	if !m.logTab || len(m.logEntries) != 2 {
+		t.Fatalf("l l did not open the log tab: tab=%t entries=%d", m.logTab, len(m.logEntries))
+	}
+	assertInspectView(t, m, "inspection second", "inspection first")
+	if m.logCursor != 0 {
+		t.Fatalf("log tab opened on row %d, want the newest commit", m.logCursor)
+	}
+	// Selecting a row loads that commit into the detail pane.
+	if !strings.Contains(m.detail, "inspection second") {
+		t.Fatalf("log detail pane omitted the selected commit:\n%s", m.detail)
+	}
+	sendInspectSequence(t, m, "esc")
+	if m.logTab {
+		t.Fatal("Esc did not leave the Log tab")
+	}
+}
+
+func TestInspectAllRefsLogTabThroughModelUpdate(t *testing.T) {
 	r := newUIE2ERepo(t)
 	r.write("base.txt", "base\n")
 	r.git("add", "--", "base.txt")
@@ -107,30 +139,36 @@ func TestInspectAllRefsGraphThroughModelUpdate(t *testing.T) {
 	m := newE2EModel(t, r)
 
 	sendInspectSequence(t, m, "alt+g")
-	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main", "topic", "* ")
-	if !m.graphActive || m.graphCursor < 0 {
-		t.Fatalf("graph was not made selectable: active=%t cursor=%d", m.graphActive, m.graphCursor)
+	if !m.logTab || len(m.logEntries) != 3 || m.logCursor != 0 {
+		t.Fatalf("all-refs log tab not loaded: tab=%t entries=%d cursor=%d", m.logTab, len(m.logEntries), m.logCursor)
 	}
-	first := m.graphCursor
-	sendInspectSequence(t, m, "j")
-	if m.graphCursor == first {
-		t.Fatalf("graph next did not advance from line %d", first)
-	}
-	selected := m.graphCursor
-	sendInspectSequence(t, m, "enter")
-	if m.graphActive || !m.revisionActive {
-		t.Fatalf("opening a graph commit did not enter revision inspection: graph=%t revision=%t", m.graphActive, m.revisionActive)
-	}
-	assertInspectDetail(t, m, "Commit", "graph")
+	assertInspectView(t, m, "graph topic", "graph main", "graph base")
 
-	// The selected topic commit has the base commit as its first parent.
-	sendInspectSequence(t, m, "alt+p")
-	assertInspectDetail(t, m, "Commit", "graph base")
-	sendInspectSequence(t, m, "esc")
-	if !m.graphActive || m.graphCursor != selected {
-		t.Fatalf("Esc did not restore graph selection: active=%t cursor=%d want=%d", m.graphActive, m.graphCursor, selected)
+	first := m.logCursor
+	sendInspectSequence(t, m, "j")
+	if m.logCursor == first {
+		t.Fatalf("log tab next did not advance from row %d", first)
 	}
-	assertInspectDetail(t, m, "All refs graph", "graph topic", "graph main")
+	// Mark the first row, then the second. A third mark is refused so the
+	// compared range can never widen past what the user reviewed.
+	sendInspectSequence(t, m, "g", "g", "alt+m")
+	if len(m.markedCommits) != 1 || m.markedCommits[0] != m.logEntries[0].ID {
+		t.Fatalf("mark did not record the selected commit: %v", m.markedCommits)
+	}
+	// The marked row must be visibly distinguishable in the gutter.
+	assertInspectView(t, m, logMarkGlyph)
+	sendInspectSequence(t, m, "j", "alt+m")
+	if len(m.markedCommits) != 2 {
+		t.Fatalf("second mark rejected: %v", m.markedCommits)
+	}
+	sendInspectSequence(t, m, "j", "alt+m")
+	if len(m.markedCommits) != 2 || !strings.Contains(m.message, "already marked") {
+		t.Fatalf("third mark was not refused: marks=%v message=%q", m.markedCommits, m.message)
+	}
+	sendInspectSequence(t, m, "esc")
+	if m.logTab {
+		t.Fatal("Esc did not return to the Status tab")
+	}
 }
 
 func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
@@ -142,7 +180,7 @@ func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
 	}
 	historyE2EReplaceField(t, m, "HEAD~1")
 	historyE2ESubmit(t, m)
-	assertInspectDetail(t, m, "Log HEAD~1", "inspection first")
+	assertInspectView(t, m, "Log HEAD~1", "inspection first")
 
 	sendInspectSequence(t, m, "l", "B")
 	if m.workflow == nil {
@@ -150,7 +188,7 @@ func TestInspectPromptedLogAndRefsThroughModelUpdate(t *testing.T) {
 	}
 	historyE2EReplaceField(t, m, "main")
 	historyE2ESubmit(t, m)
-	assertInspectDetail(t, m, "Log matching branches", "inspection second")
+	assertInspectView(t, m, "Log matching branches", "inspection second")
 
 	sendInspectSequence(t, m, "y", "r", "o")
 	if m.workflow == nil {
@@ -205,10 +243,10 @@ func TestInspectLogRefreshPropagatesLimitOptionThroughModelUpdate(t *testing.T) 
 	sendInspectSequence(t, m, "L", "-", "n", "1")
 	sendE2EKey(t, m, tea.KeyPressMsg(tea.Key{Code: tea.KeyEnter}))
 	sendInspectSequence(t, m, "g")
-	assertInspectDetail(t, m, "Log", "inspection second")
-	if strings.Contains(m.detail, "inspection first") {
-		t.Fatalf("-n 1 was not propagated:\n%s", m.detail)
+	if len(m.logEntries) != 1 || m.logEntries[0].Subject != "inspection second" {
+		t.Fatalf("-n 1 was not propagated: %d entries %v", len(m.logEntries), m.logEntries)
 	}
+	assertInspectView(t, m, "Log", "inspection second")
 }
 
 func TestInspectionResultViewPagesWithoutLaunchingWork(t *testing.T) {

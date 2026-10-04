@@ -735,26 +735,39 @@ func TestQuitCancelsApplicationLifecycle(t *testing.T) {
 	}
 }
 
-func TestGraphMessagesValidateRequestsAndRenderErrors(t *testing.T) {
+func TestLogTabMessagesValidateRequestsAndRenderErrors(t *testing.T) {
 	m := New(nil)
 	m.loading = false
-	m.detailRequest = 4
-	id := m.tree.Cursor()
+	m.logTab = true
+	m.logListRequest = 4
 
-	_, _ = m.Update(graphMsg{id: id, request: 3, text: "stale"})
-	if m.detail == "stale" || m.graphActive {
-		t.Fatalf("stale graph result changed detail=%q active=%t", m.detail, m.graphActive)
+	if cmd := m.handleLogTabMsg(logTabMsg{request: 3, entries: []gitbackend.LogEntry{{ID: "stale"}}}); cmd != nil {
+		t.Fatal("stale log result produced a command")
+	}
+	if len(m.logEntries) != 0 {
+		t.Fatalf("stale log result installed %d entries", len(m.logEntries))
 	}
 
-	_, _ = m.Update(graphMsg{id: id, request: 4, err: errors.New("query failed")})
-	if !strings.Contains(m.detail, "Unable to load graph") || !strings.Contains(m.detail, "query failed") || m.graphEntries != nil || m.graphActive {
-		t.Fatalf("graph error detail=%q entries=%v active=%t", m.detail, m.graphEntries, m.graphActive)
+	m.handleLogTabMsg(logTabMsg{request: 4, err: errors.New("query failed")})
+	if !strings.Contains(m.detail, "Unable to load log") || !strings.Contains(m.detail, "query failed") || len(m.logEntries) != 0 {
+		t.Fatalf("log error detail=%q entries=%v", m.detail, m.logEntries)
 	}
 
-	entries := map[int]gitbackend.LogEntry{8: {ID: "later"}, 3: {ID: "first"}}
-	_, _ = m.Update(graphMsg{id: id, request: 4, text: "* first\n* later", entries: entries})
-	if !m.graphActive || m.graphCursor != 3 || len(m.graphEntries) != 2 {
-		t.Fatalf("graph success active=%t cursor=%d entries=%v", m.graphActive, m.graphCursor, m.graphEntries)
+	m.handleLogTabMsg(logTabMsg{request: 4, title: "Log", entries: []gitbackend.LogEntry{{ID: "first"}, {ID: "second"}}})
+	if len(m.logEntries) != 2 || m.logCursor != 0 || m.logTitle != "Log" {
+		t.Fatalf("log success entries=%v cursor=%d title=%q", m.logEntries, m.logCursor, m.logTitle)
+	}
+}
+
+func TestLogTabRejectsMarksThatLeftTheLoadedList(t *testing.T) {
+	m := New(nil)
+	m.loading = false
+	m.logTab = true
+	m.logListRequest = 1
+	m.markedCommits = []string{"gone", "kept"}
+	m.handleLogTabMsg(logTabMsg{request: 1, title: "Log", entries: []gitbackend.LogEntry{{ID: "kept"}, {ID: "fresh"}}})
+	if len(m.markedCommits) != 1 || m.markedCommits[0] != "kept" {
+		t.Fatalf("marks after reload = %v, want [kept]", m.markedCommits)
 	}
 }
 
@@ -762,12 +775,12 @@ func TestEscapeClosesInspectionAndCancelsWorkflowLoad(t *testing.T) {
 	inspection := New(nil)
 	inspection.loading = false
 	inspection.inspectionActive = true
-	inspection.graphActive = true
-	inspection.graphEntries = map[int]gitbackend.LogEntry{1: {ID: "one"}}
-	inspection.graphCursor = 1
+	inspection.blameActive = true
+	inspection.blameEntries = map[int]gitbackend.BlameLine{1: {CommitID: "one"}}
+	inspection.blameCursor = 1
 	_, cmd := inspection.Update(keyMsg("esc"))
-	if inspection.inspectionActive || inspection.graphActive || inspection.graphEntries != nil || inspection.graphCursor != -1 || inspection.message != "Inspection closed" {
-		t.Fatalf("inspection escape cmd=%v active=%t graph=%t entries=%v cursor=%d message=%q", cmd != nil, inspection.inspectionActive, inspection.graphActive, inspection.graphEntries, inspection.graphCursor, inspection.message)
+	if inspection.inspectionActive || inspection.blameActive || inspection.blameEntries != nil || inspection.blameCursor != -1 || inspection.message != "Inspection closed" {
+		t.Fatalf("inspection escape cmd=%v active=%t blame=%t entries=%v cursor=%d message=%q", cmd != nil, inspection.inspectionActive, inspection.blameActive, inspection.blameEntries, inspection.blameCursor, inspection.message)
 	}
 
 	workflow := New(nil)
