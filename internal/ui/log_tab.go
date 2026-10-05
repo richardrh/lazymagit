@@ -34,6 +34,19 @@ const logGraphWidth = 10
 // logAuthorWidth is the author column budget in the commit list.
 const logAuthorWidth = 18
 
+// logSubjectBudget is the number of subject columns the layout always protects.
+// It is a floor on the subject, not a target: a longer subject is truncated at
+// render time, which is better than stripping every other column to fit.
+const logSubjectBudget = 16
+
+// logDecorationsWidth caps the ref column so one long branch name cannot push
+// the subject out of the pane.
+const logDecorationsWidth = 24
+
+// logListShare is the percentage of the terminal width the commit list takes in
+// the side-by-side Log tab layout.
+const logListShare = 50
+
 // Fixed column widths shared by every row in the Log tab.
 const (
 	logGutterWidth  = 2
@@ -431,7 +444,10 @@ func (m *Model) renderLogTabBody(bodyHeight int) string {
 		return fitBlock("Log", m.width, bodyHeight)
 	}
 	if m.width >= logTabWidth && !m.splitHorizontal {
-		left := max(36, m.width*43/100)
+		// The list is this tab's primary surface, and its columns are what make
+		// refs and topology readable, so it takes a wider share than the Status
+		// tab gives its section tree.
+		left := max(36, m.width*logListShare/100)
 		right := m.width - left
 		return lipgloss.JoinHorizontal(lipgloss.Top,
 			m.renderLogListPanel(left, bodyHeight),
@@ -515,19 +531,24 @@ func (m *Model) logRowStyle(entry gitbackend.LogEntry, selected, marked bool) li
 // a column set per row would let a long subject drop the date on one row and
 // keep it on the next.
 type logLayout struct {
-	graph  int
-	date   bool
-	author int
+	graph       int
+	decorations int
+	date        bool
+	author      int
 }
 
 // logLayout measures the loaded list and drops columns, least important first,
-// until the widest row fits the pane. The subject is the one column a log row
-// cannot render without, so it is never dropped.
+// until the fixed columns leave room for a useful subject. The subject is the
+// one column a log row cannot render without, so it is never dropped. The
+// layout reserves a subject *budget* rather than demanding that the widest
+// subject fit: requiring a full fit would strip every column in any repository
+// that has one long commit message, which is nearly all of them.
 func (m *Model) logLayout(width int) logLayout {
 	layout := logLayout{}
 	widestSubject := 0
 	for _, entry := range m.logEntries {
 		layout.graph = max(layout.graph, ansi.StringWidth(strings.TrimSpace(entry.Graph)))
+		layout.decorations = max(layout.decorations, ansi.StringWidth(entry.Decorations))
 		layout.author = max(layout.author, ansi.StringWidth(strings.TrimSpace(entry.AuthorName)))
 		if !entry.AuthorDate.IsZero() {
 			layout.date = true
@@ -535,13 +556,21 @@ func (m *Model) logLayout(width int) logLayout {
 		widestSubject = max(widestSubject, ansi.StringWidth(strings.TrimSpace(entry.Subject)))
 	}
 	layout.graph = min(layout.graph, logGraphWidth)
+	layout.decorations = min(layout.decorations, logDecorationsWidth)
 	layout.author = min(layout.author, logAuthorWidth)
-	for layout.width()+1+widestSubject > width {
+	subject := min(widestSubject, logSubjectBudget)
+	// Which branch or tag a commit is on is worth more than who wrote it, and
+	// topology is worth more than either, so refs and lanes are the last columns
+	// to go. The date goes first: a commit list is scanned by subject and ref far
+	// more often than by when the commit landed.
+	for layout.width()+1+subject > width {
 		switch {
 		case layout.date:
 			layout.date = false
 		case layout.author > 0:
 			layout.author = 0
+		case layout.decorations > 0:
+			layout.decorations = 0
 		case layout.graph > 0:
 			layout.graph = 0
 		default:
@@ -556,6 +585,10 @@ func (l logLayout) width() int {
 	width := logGutterWidth + logShortIDWidth
 	if l.graph > 0 {
 		width += 1 + l.graph
+	}
+	if l.decorations > 0 {
+		// The decoration column carries its own brackets.
+		width += 1 + l.decorations + 2
 	}
 	if l.date {
 		width += 1 + logDateWidth
@@ -574,18 +607,56 @@ func (m *Model) logRowText(entry gitbackend.LogEntry, width int, layout logLayou
 	}
 	head := mark + " "
 	if layout.graph > 0 {
-		head += padRight(strings.TrimSpace(entry.Graph), layout.graph) + " "
+		head += fitCell(strings.TrimSpace(entry.Graph), layout.graph) + " "
 	}
-	head += padRight(entry.ShortID, logShortIDWidth)
+	head += fitCell(entry.ShortID, logShortIDWidth)
 	parts := []string{head}
+	// Refs sit beside the short id so that truncating a long subject can never
+	// hide which branch or tag a commit is on.
+	if layout.decorations > 0 {
+		column := strings.Repeat(" ", layout.decorations+2)
+		if entry.Decorations != "" {
+			column = "(" + padRight(fitDecorations(entry.Decorations, layout.decorations), layout.decorations) + ")"
+		}
+		parts = append(parts, column)
+	}
 	if layout.date && !entry.AuthorDate.IsZero() {
 		parts = append(parts, entry.AuthorDate.Format("2006-01-02"))
 	}
 	if layout.author > 0 {
-		parts = append(parts, padRight(strings.TrimSpace(entry.AuthorName), layout.author))
+		parts = append(parts, fitCell(strings.TrimSpace(entry.AuthorName), layout.author))
 	}
 	parts = append(parts, strings.TrimSpace(entry.Subject))
 	return truncate(strings.Join(parts, " "), width)
+}
+
+// fitCell truncates a column value to its width and then pads it, so one
+// over-long value cannot widen that column for every other row.
+func fitCell(value string, width int) string {
+	return padRight(truncate(value, width), width)
+}
+
+// fitDecorations keeps whole ref entries and drops the tail that will not fit,
+// so a ref list never ends mid-name. Truncating the raw string would cut
+// "HEAD -> main, tag: v0.1.0, origin/main" into "HEAD -> main, tag: v0.0", which
+// reads as a different ref than the one Git reported.
+func fitDecorations(decorations string, width int) string {
+	if ansi.StringWidth(decorations) <= width {
+		return decorations
+	}
+	parts := strings.Split(decorations, ", ")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		candidate := append(append([]string{}, kept...), part)
+		if ansi.StringWidth(strings.Join(candidate, ", "))+1 > width {
+			break
+		}
+		kept = candidate
+	}
+	if len(kept) == 0 {
+		return "…"
+	}
+	return strings.Join(kept, ", ") + "…"
 }
 
 // padRight pads a column to an exact display width so the next column starts in
@@ -629,7 +700,13 @@ func (m *Model) renderTabStrip() string {
 func (m *Model) logTabFooter() string {
 	gold := lipgloss.NewStyle().Foreground(colorGold).Bold(true)
 	muted := lipgloss.NewStyle().Foreground(colorMuted)
-	hints := gold.Render("Log") + muted.Render("  j/k select  alt+m mark  alt+c compare  Esc status  alt+| swap split  q close")
+	// Esc closes an open comparison before it leaves the tab, so the hint has to
+	// say which one the next Esc will do.
+	escape := "  Esc status"
+	if m.inspectionActive {
+		escape = "  Esc close comparison"
+	}
+	hints := gold.Render("Log") + muted.Render("  j/k select  alt+m mark  alt+c compare"+escape+"  alt+| swap split  q close")
 	if len(m.markedCommits) > 0 {
 		hints += muted.Render("  (" + m.markedCommitLabel() + " marked)")
 	}

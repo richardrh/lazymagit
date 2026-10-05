@@ -114,4 +114,38 @@ func TestLogTabGoldens(t *testing.T) {
 		m := newInspectE2EModel(t)
 		assertGolden(t, "status-tab", renderGoldenAt(m, goldenWidth, goldenHeight))
 	})
+
+	t.Run("all-refs", func(t *testing.T) {
+		// The linear fixture above has neither merge lanes nor ref decorations,
+		// so it cannot catch a layout that drops either column. This one can.
+		m := newDecoratedMergeE2EModel(t)
+		sendInspectSequence(t, m, "alt+g")
+		if !m.logTab || len(m.logEntries) < 3 {
+			t.Fatalf("all-refs log tab not loaded: tab=%t entries=%d", m.logTab, len(m.logEntries))
+		}
+		assertGolden(t, "logtab-all-refs", renderGoldenAt(m, goldenWidth, goldenHeight))
+	})
+}
+
+// newDecoratedMergeE2EModel builds a repository whose log exercises the two
+// columns a linear history cannot: Git graph lanes from a merge, and ref
+// decorations from a tag and a remote-tracking branch.
+func newDecoratedMergeE2EModel(t *testing.T) *Model {
+	t.Helper()
+	r := newUIE2ERepo(t)
+	r.write("story.txt", "one\n")
+	r.git("add", "--", "story.txt")
+	r.git("commit", "-m", "first commit")
+	r.git("switch", "-c", "feature/typography")
+	r.write("type.md", "typography\n")
+	r.git("add", "--", "type.md")
+	r.git("commit", "-m", "Introduce typography settings with a deliberately long subject line to stress truncation")
+	r.git("switch", "-")
+	r.write("story.txt", "one\ntwo\n")
+	r.git("add", "--", "story.txt")
+	r.git("commit", "-m", "second commit")
+	r.git("merge", "--no-ff", "feature/typography", "-m", "Merge pull request #1 from feature/typography")
+	r.git("tag", "v0.1.0")
+	r.git("update-ref", "refs/remotes/origin/main", "HEAD")
+	return newE2EModel(t, r)
 }

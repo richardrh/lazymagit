@@ -1,30 +1,30 @@
  LAZYMAGIT  repo  branch main no upstream                                                           
 Status  |  Log  Compare [OID]...[OID]  2 commits                                              
-╭─────────────────────────────────────────╮╭───────────────────────────────────────────────────────╮
-│✓ * [OID] UI E2E Test inspection second││Compare [OID]...[OID]                            │
-│✓ * [OID] UI E2E Test inspection first ││                                                       │
-│                                         ││diff --git a/story.txt b/story.txt                     │
-│                                         ││index [OID]..[OID] 100644                          │
-│                                         ││--- a/story.txt                                        │
-│                                         ││+++ b/story.txt                                        │
-│                                         ││@@ -1 +1,2 @@                                          │
-│                                         ││ one                                                   │
-│                                         ││+two                                                   │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-│                                         ││                                                       │
-╰─────────────────────────────────────────╯╰───────────────────────────────────────────────────────╯
-c Commit  f Fetch  p Push  b Branch  F2 Themes  gr Refresh  z Folds  ` Processes  j/k Move  Alt-r P…
+╭────────────────────────────────────────────────╮╭────────────────────────────────────────────────╮
+│✓ * [OID] (HEAD -> main) inspection second    ││Compare [OID]...[OID]                     │
+│✓ * [OID]                inspection first     ││                                                │
+│                                                ││diff --git a/story.txt b/story.txt              │
+│                                                ││index [OID]..[OID] 100644                   │
+│                                                ││--- a/story.txt                                 │
+│                                                ││+++ b/story.txt                                 │
+│                                                ││@@ -1 +1,2 @@                                   │
+│                                                ││ one                                            │
+│                                                ││+two                                            │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+╰────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
+Log  j/k select  alt+m mark  alt+c compare  Esc close comparison  alt+| swap split  q close  ([OID]…
                                                                                                     
                                                                                                     

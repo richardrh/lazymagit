@@ -1,30 +1,30 @@
  LAZYMAGIT  repo  branch main no upstream                                                           
-Status  |  Log  2 commits                                                                           
+Status  |  Log  All refs  4 commits                                                                 
 ╭────────────────────────────────────────────────╮╭────────────────────────────────────────────────╮
-│  * [OID] (HEAD -> main) inspection second    ││commit [OID]…│
-│  * [OID]                inspection first     ││Author:     UI E2E Test <ui-e2e@example.invalid>│
-│                                                ││AuthorDate: [STAMP]       │
+│  *   [OID] Merge pull request #1 from featur…││commit [OID]…│
+│  | * [OID] Introduce typography settings wit…││Merge: [OID] [OID]                          │
+│  * | [OID] second commit                     ││Author:     UI E2E Test <ui-e2e@example.invalid>│
+│  *   [OID] first commit                      ││AuthorDate: [STAMP]       │
 │                                                ││Commit:     UI E2E Test <ui-e2e@example.invalid>│
 │                                                ││CommitDate: [STAMP]       │
 │                                                ││                                                │
-│                                                ││    inspection second                           │
+│                                                ││    Merge pull request #1 from feature/typograp…│
 │                                                ││---                                             │
-│                                                ││ story.txt | 1 +                                │
+│                                                ││ type.md | 1 +                                  │
 │                                                ││ 1 file changed, 1 insertion(+)                 │
 │                                                ││                                                │
-│                                                ││diff --git a/story.txt b/story.txt              │
-│                                                ││index [OID]..[OID] 100644                   │
-│                                                ││--- a/story.txt                                 │
-│                                                ││+++ b/story.txt                                 │
-│                                                ││@@ -1 +1,2 @@                                   │
-│                                                ││ one                                            │
-│                                                ││+two                                            │
-│                                                ││                                                │
+│                                                ││diff --git a/type.md b/type.md                  │
+│                                                ││new file mode 100644                            │
+│                                                ││index [OID]..[OID]                          │
+│                                                ││--- /dev/null                                   │
+│                                                ││+++ b/type.md                                   │
+│                                                ││@@ -0,0 +1 @@                                   │
+│                                                ││+typography                                     │
 │                                                ││                                                │
 │                                                ││                                                │
 │                                                ││                                                │
 │                                                ││                                                │
 ╰────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
-Log  j/k select  alt+m mark  alt+c compare  Esc status  alt+| swap split  q close  Log: 2 commits   
+Log  j/k select  alt+m mark  alt+c compare  Esc status  alt+| swap split  q close  All refs: 4 comm…
                                                                                                     
                                                                                                     

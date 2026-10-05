@@ -437,18 +437,22 @@ func (m *Model) pendingFooter(scheme string) string {
 
 func (m *Model) statusFooter() string {
 	gold, muted := lipgloss.NewStyle().Foreground(colorGold).Bold(true), lipgloss.NewStyle().Foreground(colorMuted)
-	if m.logTab && !m.inspectionActive {
-		return m.logTabFooter()
-	}
-	if m.blameActive {
-		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  alt+| swap split  Esc close")
-	}
 	if m.revisionActive {
 		controls := "  Alt-p first parent  Esc close"
 		if m.logTab {
 			controls = "  Alt-p first parent  Esc return Log tab"
+		} else if m.blameReturn != nil {
+			controls = "  Alt-p first parent  Esc return blame"
 		}
 		return gold.Render("Revision") + muted.Render(controls)
+	}
+	// The Log tab keeps its own hints while a comparison is open over it, so
+	// the footer never advertises Status tab keys that do not apply.
+	if m.logTab {
+		return m.logTabFooter()
+	}
+	if m.blameActive {
+		return gold.Render("Blame") + muted.Render("  ↑/↓ or j/k select  Enter inspect commit  alt+| swap split  Esc close")
 	}
 	var primary []string
 	for _, binding := range keymap.PrimaryBindings(keymap.SchemeDoom) {

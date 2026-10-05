@@ -1,8 +1,8 @@
  LAZYMAGIT  repo  branch main no upstream                   
 Status  |  Log  2 commits                                   
 ╭──────────────────────────────────────────────────────────╮
-│  * [OID] [DATE] UI E2E Test inspection second      │
-│  * [OID] [DATE] UI E2E Test inspection first       │
+│  * [OID] (HEAD -> main) UI E2E Test inspection second  │
+│  * [OID]                UI E2E Test inspection first   │
 ╰──────────────────────────────────────────────────────────╯
 ╭──────────────────────────────────────────────────────────╮
 │commit [OID] [OID]…│

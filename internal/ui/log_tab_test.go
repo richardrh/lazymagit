@@ -390,3 +390,64 @@ func TestLogTabRefreshKeepsSelectionAndOwnQuery(t *testing.T) {
 		t.Fatalf("refresh lost the selection: row %d = %q", m.logCursor, got)
 	}
 }
+
+// TestLogLayoutKeepsRefsAndTopologyUnderALongSubject guards the regression where
+// demanding that the *widest* subject fit stripped every optional column, so a
+// repository with one long commit message rendered as bare short ids: no graph
+// lanes, no refs, no author.
+func TestLogLayoutKeepsRefsAndTopologyUnderALongSubject(t *testing.T) {
+	m := New(nil)
+	when := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	m.logEntries = []gitbackend.LogEntry{
+		{ShortID: "e633c16", Graph: "*   ", Decorations: "HEAD -> main, tag: v0.1.0, origin/main", AuthorName: "Renée Ünicode", AuthorDate: when, Subject: "Merge pull request #1 from feature/typography"},
+		{ShortID: "fe8bcc4", Graph: "| * ", Decorations: "feature/typography", AuthorName: "Renée Ünicode", AuthorDate: when, Subject: "Introduce typography settings with a deliberately long subject line to stress truncation"},
+		{ShortID: "b97fb48", Graph: "* | ", AuthorDate: when, Subject: "Third"},
+	}
+
+	layout := m.logLayout(63)
+	if layout.graph == 0 {
+		t.Error("topology column was dropped by a long subject")
+	}
+	if layout.decorations == 0 {
+		t.Error("ref column was dropped by a long subject")
+	}
+	if layout.width()+1+logSubjectBudget > 63 {
+		t.Errorf("layout still overflows the pane: %+v width=%d", layout, layout.width())
+	}
+	// A pane with no room left keeps the subject, and only the subject.
+	starved := m.logLayout(12)
+	if starved.width()+1 > 12 {
+		t.Errorf("a starved layout still overflows: %+v width=%d", starved, starved.width())
+	}
+}
+
+func TestFitDecorationsDropsWholeRefsOnly(t *testing.T) {
+	full := "HEAD -> main, tag: v0.1.0, origin/main"
+	if got := fitDecorations(full, 40); got != full {
+		t.Errorf("a ref list that already fit was changed: %q", got)
+	}
+	got := fitDecorations(full, 24)
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("a ref list that did not fit was not marked: %q", got)
+	}
+	if strings.Contains(got, "v0.0") {
+		t.Errorf("a ref was cut mid-name, inventing a ref that does not exist: %q", got)
+	}
+	if !strings.HasPrefix(got, "HEAD -> main") {
+		t.Errorf("the leading ref was dropped: %q", got)
+	}
+	if got := fitDecorations("a-single-branch-name-too-long", 8); got != "…" {
+		t.Errorf("an unshrinkable ref list = %q, want the ellipsis alone", got)
+	}
+}
+
+func TestFitCellBoundsEveryColumn(t *testing.T) {
+	for _, width := range []int{1, 4, 9} {
+		if got := fitCell(strings.Repeat("x", 40), width); ansi.StringWidth(got) != width {
+			t.Errorf("fitCell width = %d, want %d (%q)", ansi.StringWidth(got), width, got)
+		}
+	}
+	if got := fitCell("ab", 5); got != "ab   " {
+		t.Errorf("fitCell did not pad to the column width: %q", got)
+	}
+}
