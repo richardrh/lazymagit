@@ -487,8 +487,6 @@ func (m *Model) copySelectedLine() tea.Cmd {
 	if m.inspectionActive || m.detailLine >= 0 {
 		index := m.detailOffset
 		switch {
-		case m.graphActive:
-			index = m.graphCursor
 		case m.blameActive:
 			index = m.blameCursor
 		case m.detailLine >= 0:

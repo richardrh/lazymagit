@@ -527,7 +527,7 @@ func dispatcherCatalog(contexts ...keymap.Context) []dispatcherSection {
 		}},
 		{Title: "Essential commands", Columns: [][]menuEntry{
 			{entry("g", "Refresh current buffer", keymap.CommandRefresh), entry("q", "Close dispatcher", keymap.CommandQuit), {Key: "tab", Display: "Tab", Label: "Toggle section", Available: true, Command: keymap.CommandToggleSection}, {Key: "enter", Display: "Enter", Label: "Visit thing"}},
-			{entry("alt+b", "Blame selected file", keymap.CommandBlame), entry("alt+g", "Browse all-refs graph", keymap.CommandGraph), entry("alt+r", "Compose GitHub pull request", keymap.CommandPullRequest), entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
+			{entry("alt+l", "Open Log tab", keymap.CommandLogTab), entry("alt+m", "Mark commit in Log tab", keymap.CommandMarkCommit), entry("alt+c", "Compare marked commits", keymap.CommandCompareCommits), entry("alt+b", "Blame selected file", keymap.CommandBlame), entry("alt+g", "Browse all-refs log", keymap.CommandGraph), entry("alt+r", "Compose GitHub pull request", keymap.CommandPullRequest), entry("$", "Git processes", keymap.CommandShowProcesses), {Key: "ctrl+x m", Display: "C-x m", Label: "Show all key bindings"}, {Key: "ctrl+x i", Display: "C-x i", Label: "Show Info manual"}},
 		}},
 	}
 	for sectionIndex := range sections {

@@ -1,0 +1,30 @@
+ LAZYMAGIT  repo  branch main no upstream                                                           
+Status  |  Log  All refs  4 commits                                                                 
+╭────────────────────────────────────────────────╮╭────────────────────────────────────────────────╮
+│  *   [OID] Merge pull request #1 from featur…││commit [OID]…│
+│  | * [OID] Introduce typography settings wit…││Merge: [OID] [OID]                          │
+│  * | [OID] second commit                     ││Author:     UI E2E Test <ui-e2e@example.invalid>│
+│  *   [OID] first commit                      ││AuthorDate: [STAMP]       │
+│                                                ││Commit:     UI E2E Test <ui-e2e@example.invalid>│
+│                                                ││CommitDate: [STAMP]       │
+│                                                ││                                                │
+│                                                ││    Merge pull request #1 from feature/typograp…│
+│                                                ││---                                             │
+│                                                ││ type.md | 1 +                                  │
+│                                                ││ 1 file changed, 1 insertion(+)                 │
+│                                                ││                                                │
+│                                                ││diff --git a/type.md b/type.md                  │
+│                                                ││new file mode 100644                            │
+│                                                ││index [OID]..[OID]                          │
+│                                                ││--- /dev/null                                   │
+│                                                ││+++ b/type.md                                   │
+│                                                ││@@ -0,0 +1 @@                                   │
+│                                                ││+typography                                     │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+│                                                ││                                                │
+╰────────────────────────────────────────────────╯╰────────────────────────────────────────────────╯
+Log  j/k select  alt+m mark  alt+c compare  Esc status  alt+| swap split  q close  All refs: 4 comm…
+                                                                                                    
+                                                                                                    

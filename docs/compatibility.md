@@ -83,3 +83,47 @@ failures remain backend errors and are shown through the process pane.
 Magit's Emacs APIs, package extensions, submodule management, worktree management, forge integration, and every transient option are not yet exact-compatible. For an unresolved path, `e` renders bounded base/ours/theirs index blobs and `E t m` provides a reviewed, stale-safe terminal-native ours/theirs checkout followed by staging that exact path. This deliberately never launches an external mergetool, editor, or shell. Base remains inspect-only: stock Git has no base checkout mode, so the UI does not pretend otherwise. Merge continuation is reviewed against the prepared index tree; rebase, cherry-pick, and revert continue/abort controls use their reviewed sequencer state.
 
 The history transients provide reviewed merge, non-interactive rebase, cherry-pick/revert, reset, and bisect paths; revisions are resolved to object IDs and execution rejects stale repository state. Interactive rebase has a terminal-native multiline todo editor with reviewed, revision-bound pick/reword/edit/squash/fixup/drop instructions and active rebase todo editing plus continue/skip/abort. It never invokes `$EDITOR` or a user shell: a sealed lazymagit callback installs the reviewed todo. `exec`, merge-topology commands, aliases, and autosquash rewriting remain unavailable. `bisect run` likewise remains unavailable rather than accepting arbitrary command execution. Unsafe discard of mixed staged and unstaged content is intentionally rejected.
+
+## Terminal-native Log tab
+
+Magit has no notion of a status/log tab split: `l` always opens a transient, and
+the log lives in a separate buffer with its own keymap. A terminal cannot host
+that comfortably, so this client keeps Magit's `l` command and its entire
+transient surface but gives the resulting history a first-class tab.
+
+- `Alt-l` opens the Log tab on the currently inspected revision, or `HEAD`.
+- Every `magit-log` suffix — `l l`, `l a`, `l b`, `l u`, `l o`, `L -n N`, and the
+  rest — loads the Log tab with that query instead of a detail-pane blob.
+- `Alt-g` opens the tab across all refs, replacing the former detail-pane graph
+  overlay.
+- `j`/`k`, `g g`/`G`, and `C-d`/`C-u`/`C-f`/`C-b` move the commit selection and
+  reload the detail pane for the selected commit.
+- `Esc` closes an open comparison, then leaves the tab. The loaded list and its
+  marks are cached, so re-entering the tab does not refetch.
+
+The tab strip is a terminal-native addition, so its keys deliberately avoid the
+pinned Magit manifest. `TAB` is Magit's section toggle and `M-1` through `M-4` are
+Magit's global section-depth commands; the Doom scheme leaves both unbound and
+this client keeps them that way, so there are no number keys. `M-1`/`M-2` in
+particular would have made a convenient tab shortcut and were rejected for
+exactly that reason.
+
+Marking is the terminal extension the tab exists for. `Alt-m` toggles a mark on
+the selected commit, capped at two revisions because that is what one comparison
+can express; a third toggle is refused rather than silently widening the range.
+Marks that disappear when a new query loads are dropped, so a comparison can
+never resolve a revision the user cannot see. `Alt-c` then compares the marked
+set:
+
+- one mark compares that commit against its first parent, two-dot and exact;
+- two marks compare from their merge base, so the diff is the work between the
+  two commits regardless of the order they were marked in.
+
+Ordering uses `git merge-base --is-ancestor` rather than commit timestamps,
+which have one-second resolution and cannot order two commits made in the same
+second. Unrelated branches keep mark order, which merge-base semantics makes
+harmless.
+
+`Alt-m` and `Alt-c` sit in the same `Alt+` namespace as `Alt-b` (blame),
+`Alt-g` (all refs), and `Alt-r` (pull request) because the obvious alternatives
+are taken by Magit: `SPC` is diff paging and `C-c` is a live command prefix.

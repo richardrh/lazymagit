@@ -77,11 +77,26 @@ func TestHandleGlobalKeyDirectRoutes(t *testing.T) {
 		t.Fatal("Ctrl-c must remain available as a Magit command prefix")
 	}
 
-	graph := New(nil)
-	graph.inspectionActive, graph.revisionActive = true, true
-	graph.graphReturn = &graphInspection{detail: "graph", entries: map[int]gitbackend.LogEntry{}, cursor: -1}
-	if cmd, handled := graph.handleGlobalKey("esc"); !handled || cmd != nil || !graph.graphActive || graph.message != "Returned to graph" {
-		t.Fatalf("graph escape handled=%v cmd=%v active=%v message=%q", handled, cmd, graph.graphActive, graph.message)
+	logTab := New(nil)
+	logTab.logTab, logTab.inspectionActive, logTab.revisionActive = true, true, true
+	logTab.logEntries = []gitbackend.LogEntry{{ID: "a", ShortID: "a"}}
+	logTab.logCursor = 0
+	if _, handled := logTab.handleGlobalKey("esc"); !handled || !logTab.logTab || logTab.revisionActive || logTab.message != "Returned to Log tab" {
+		t.Fatalf("log tab escape handled=%v tab=%v revision=%v message=%q", handled, logTab.logTab, logTab.revisionActive, logTab.message)
+	}
+
+	logOnly := New(nil)
+	logOnly.logTab = true
+	logOnly.logEntries = []gitbackend.LogEntry{{ID: "a", ShortID: "a"}}
+	if _, handled := logOnly.handleGlobalKey("esc"); !handled || logOnly.logTab || logOnly.message != "Status tab" {
+		t.Fatalf("log tab close handled=%v tab=%v message=%q", handled, logOnly.logTab, logOnly.message)
+	}
+
+	compared := New(nil)
+	compared.logTab, compared.inspectionActive = true, true
+	compared.logEntries = []gitbackend.LogEntry{{ID: "a", ShortID: "a"}}
+	if _, handled := compared.handleGlobalKey("esc"); !handled || !compared.logTab || compared.inspectionActive {
+		t.Fatalf("comparison escape handled=%v tab=%v inspection=%v", handled, compared.logTab, compared.inspectionActive)
 	}
 
 	blame := New(nil)
@@ -92,7 +107,7 @@ func TestHandleGlobalKeyDirectRoutes(t *testing.T) {
 	}
 
 	inspection := New(nil)
-	inspection.inspectionActive, inspection.graphActive, inspection.blameActive, inspection.revisionActive = true, true, true, true
+	inspection.inspectionActive, inspection.blameActive, inspection.revisionActive = true, true, true
 	if _, handled := inspection.handleGlobalKey("esc"); !handled || inspection.inspectionActive || inspection.message != "Inspection closed" {
 		t.Fatalf("inspection escape handled=%v active=%v message=%q", handled, inspection.inspectionActive, inspection.message)
 	}

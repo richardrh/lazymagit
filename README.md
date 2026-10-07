@@ -15,6 +15,18 @@ safety for Git operations.
 - **Complete workflow** — branches, remotes, worktrees, conflicts, history, and PRs.
 - **Comfortable editing** — Vim-style commit and PR buffers with drafts and undo.
 
+### Log tab
+
+`Alt-l` opens a Log tab on the inspected revision, and every `l` suffix — `l l`,
+`l a`, `l b`, `l u` — loads that query into the same tab. `Alt-g` opens it across
+all refs. The list shows Git's graph lanes, ref decorations, and the selected
+commit's patch beside it.
+
+`Alt-m` marks a commit and `Alt-c` compares the marked set: one mark compares
+against that commit's first parent, two marks compare from their merge base.
+At most two commits can be marked, so a comparison never widens past what you
+reviewed. `Esc` returns to the status view.
+
 ## Screenshots
 
 ![Status view with staged, unstaged, and untracked changes beside a selected diff](docs/images/lazymagit-status.png)

@@ -70,14 +70,14 @@ func TestFileMarksToggleAndPrune(t *testing.T) {
 }
 
 func TestActiveInspectionRevisionFeedsContextualActions(t *testing.T) {
-	m := &Model{graphActive: true, graphCursor: 4, graphEntries: map[int]gitbackend.LogEntry{4: {ID: "graph-id"}}}
-	if got := selectedHistoryRevision(m); got != "graph-id" {
+	m := &Model{logTab: true, logCursor: 2, logEntries: []gitbackend.LogEntry{{ID: "first"}, {ID: "second"}, {ID: "log-id"}}}
+	if got := selectedHistoryRevision(m); got != "log-id" {
 		t.Fatalf("history revision = %q", got)
 	}
-	if got := selectedInspectRevision(m); got != "graph-id" {
+	if got := selectedInspectRevision(m); got != "log-id" {
 		t.Fatalf("inspect revision = %q", got)
 	}
-	m.graphActive, m.revisionActive, m.revisionID = false, true, "revision-id"
+	m.logTab, m.revisionActive, m.revisionID = false, true, "revision-id"
 	if got := selectedHistoryRevision(m); got != "revision-id" {
 		t.Fatalf("revision detail selection = %q", got)
 	}

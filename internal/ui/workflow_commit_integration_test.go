@@ -124,8 +124,8 @@ func TestCommitFixupDefaultsToSelectedGraphRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := New(repo)
-	m.graphActive, m.graphCursor = true, 2
-	m.graphEntries = map[int]gitbackend.LogEntry{2: {ID: target}}
+	m.logTab, m.logCursor = true, 2
+	m.logEntries = []gitbackend.LogEntry{{ID: "first"}, {ID: "second"}, {ID: target}}
 	id, _ := commitCommandID("magit-commit-fixup")
 	load, handled := m.performWorkflow(WorkflowCommand{ID: id})
 	if !handled || load == nil {

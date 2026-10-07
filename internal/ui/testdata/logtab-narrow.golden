@@ -1,0 +1,16 @@
+ LAZYMAGIT  repo  branch main no upstream                   
+Status  |  Log  2 commits                                   
+╭──────────────────────────────────────────────────────────╮
+│  * [OID] (HEAD -> main) UI E2E Test inspection second  │
+│  * [OID]                UI E2E Test inspection first   │
+╰──────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────╮
+│commit [OID] [OID]…│
+│Author:     UI E2E Test <ui-e2e@example.invalid>          │
+│AuthorDate: [STAMP]                 │
+│Commit:     UI E2E Test <ui-e2e@example.invalid>          │
+╰──────────────────────────────────────────────────────────╯
+Log  j/k select  alt+m mark  alt+c compare  Esc status  alt…
+                                                            
+                                                            
+                                                            

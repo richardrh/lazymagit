@@ -416,6 +416,30 @@ func (r *Repository) ResolveRevision(ctx context.Context, value string) (Revisio
 	return Revision{ID: e.ID, ShortID: e.ShortID, ParentIDs: e.ParentIDs, Subject: e.Subject, AuthorName: e.AuthorName, AuthorEmail: e.AuthorEmail, AuthorDate: e.AuthorDate, CommitDate: e.CommitDate}, nil
 }
 
+// IsAncestor reports whether ancestor is reachable from descendant. Git answers
+// with merge-base --is-ancestor, whose exit status is the answer, so callers
+// never have to order revisions by commit timestamp.
+func (r *Repository) IsAncestor(ctx context.Context, ancestor, descendant string) (bool, error) {
+	a, err := r.resolveCommitOID(ctx, ancestor)
+	if err != nil {
+		return false, err
+	}
+	d, err := r.resolveCommitOID(ctx, descendant)
+	if err != nil {
+		return false, err
+	}
+	if _, err := r.output(ctx, "merge-base", "--is-ancestor", a, d); err != nil {
+		// A non-zero exit only means "not an ancestor"; anything else is a real
+		// failure and must not be reported as a negative answer.
+		var commandErr *CommandError
+		if errors.As(err, &commandErr) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // RevisionParent resolves a one-based parent index, matching Git's ^1 syntax
 // without ever concatenating caller input into a revision expression.
 func (r *Repository) RevisionParent(ctx context.Context, value string, parent int) (Revision, error) {
